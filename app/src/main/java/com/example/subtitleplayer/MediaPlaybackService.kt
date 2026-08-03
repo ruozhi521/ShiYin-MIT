@@ -327,21 +327,33 @@ class MediaPlaybackService : Service() {
     private fun loadLyric(song: Song) {
         lyricLines = emptyList()
         lyricName = null
-        val ref = LibraryScanner.findLyric(song, lyricMap) ?: return
-        try {
-            val bytes =
-                contentResolver.openInputStream(ref.uri)?.use { it.readBytes() } ?: return
-            val parsed = SubtitleParser.parse(decodeText(bytes))
-            if (parsed.isEmpty()) return
-            lyricLines = parsed
-            lyricName = ref.displayName
-        } catch (e: Exception) {
-            // 无歌词或读取失败：保持空
+        // 1. 外部 .lrc / .vtt 文件优先
+        val ref = LibraryScanner.findLyric(song, lyricMap)
+        if (ref != null) {
+            try {
+                val bytes =
+                    contentResolver.openInputStream(ref.uri)?.use { it.readBytes() } ?: return
+                val parsed = SubtitleParser.parse(decodeText(bytes))
+                if (parsed.isNotEmpty()) {
+                    lyricLines = parsed
+                    lyricName = ref.displayName
+                    return
+                }
+            } catch (e: Exception) {
+                // 外部歌词读取失败则尝试内嵌
+            }
+        }
+        // 2. 内嵌歌词兜底（USLT / SYLT）
+        val embedded = Id3LyricsParser.parse(this, song.uri)
+        if (embedded != null && embedded.isNotEmpty()) {
+            lyricLines = embedded
+            lyricName = "内嵌歌词"
         }
     }
 
     private fun lyricIndexAt(pos: Int): Int {
         if (lyricLines.isEmpty()) return -1
+        if (lyricLines[0].startMs < 0) return -1 // 静态歌词（无时间戳），不参与高亮
         var idx = -1
         for (i in lyricLines.indices) {
             if (lyricLines[i].startMs <= pos) {

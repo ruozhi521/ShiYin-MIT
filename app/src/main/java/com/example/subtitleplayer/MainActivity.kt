@@ -154,7 +154,20 @@ class MainActivity : AppCompatActivity() {
             txtPlayerTitle.text = song?.title ?: ""
             txtPlayerFolder.text = song?.folder ?: ""
             txtMiniTitle.text = song?.title ?: ""
-            miniPlayer.visibility = if (song != null) View.VISIBLE else View.GONE
+            if (song != null) {
+                if (miniPlayer.visibility != View.VISIBLE) {
+                    miniPlayer.visibility = View.VISIBLE
+                    miniPlayer.alpha = 0f
+                    miniPlayer.translationY = 40f
+                    miniPlayer.animate()
+                        .alpha(1f)
+                        .translationY(0f)
+                        .setDuration(250)
+                        .start()
+                }
+            } else {
+                miniPlayer.visibility = View.GONE
+            }
             lyricLines = lines
             currentLyricHighlight = -1
             lyricAdapter.submit(lines)
@@ -438,12 +451,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun showPage(p: Page) {
         page = p
-        viewDiscover.visibility = if (p == Page.DISCOVER) View.VISIBLE else View.GONE
-        viewLibrary.visibility = if (p == Page.LIBRARY) View.VISIBLE else View.GONE
-        viewPlaylist.visibility = if (p == Page.PLAYLIST) View.VISIBLE else View.GONE
-        viewSearch.visibility = if (p == Page.SEARCH) View.VISIBLE else View.GONE
-        viewPlayer.visibility = if (p == Page.PLAYER) View.VISIBLE else View.GONE
-        viewLyrics.visibility = if (p == Page.LYRICS) View.VISIBLE else View.GONE
+        val shows = listOf(
+            viewDiscover to (p == Page.DISCOVER),
+            viewLibrary to (p == Page.LIBRARY),
+            viewPlaylist to (p == Page.PLAYLIST),
+            viewSearch to (p == Page.SEARCH),
+            viewPlayer to (p == Page.PLAYER),
+            viewLyrics to (p == Page.LYRICS)
+        )
+        for ((v, show) in shows) {
+            if (show && v.visibility != View.VISIBLE) {
+                v.alpha = 0f
+                v.visibility = View.VISIBLE
+                v.animate().alpha(1f).setDuration(180).start()
+            } else if (!show && v.visibility == View.VISIBLE) {
+                v.visibility = View.GONE
+            }
+        }
     }
 
     private fun backFromPlayer() {
@@ -672,6 +696,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun onLyricClick(pos: Int) {
         val line = lyricLines.getOrNull(pos) ?: return
+        if (line.startMs < 0) {
+            toast(getString(R.string.lyric_no_time))
+            return
+        }
         playbackService?.seekToAndPlay(line.startMs)
         currentLyricHighlight = pos
         lyricAdapter.setCurrent(pos)
@@ -682,10 +710,18 @@ class MainActivity : AppCompatActivity() {
     // ---------- 播放页 CD / 歌词 ----------
 
     private fun updateNowLyric(lyricIndex: Int) {
-        txtNowLyric.text = if (lyricIndex >= 0 && lyricIndex < lyricLines.size) {
+        val newText = if (lyricIndex >= 0 && lyricIndex < lyricLines.size) {
             lyricLines[lyricIndex].text
+        } else if (lyricLines.isNotEmpty() && lyricLines[0].startMs < 0) {
+            // 静态歌词（无时间戳）：显示第一句，引导去全屏歌词页
+            lyricLines[0].text
         } else {
             getString(R.string.no_lyric_now)
+        }
+        if (txtNowLyric.text.toString() != newText) {
+            txtNowLyric.text = newText
+            txtNowLyric.alpha = 0f
+            txtNowLyric.animate().alpha(1f).setDuration(220).start()
         }
     }
 

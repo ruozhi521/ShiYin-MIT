@@ -38,6 +38,8 @@
     <string name="artist">歌手</string>
     <string name="cd_hole">唱片孔</string>
     <string name="no_lyric_now">♪ 暂无歌词，点击查看</string>
+    <string name="lyric_no_time">此歌词没有时间信息，无法跳转</string>
+    <string name="embedded_lyric">内嵌歌词</string>
     <string name="settings">设置</string>
     <string name="dark_mode">深色模式</string>
     <string name="lyric_size_label">歌词字号</string>
