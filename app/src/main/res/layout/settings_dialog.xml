@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="4dp">
+
+        <CheckBox
+            android:id="@+id/chkAutoScan"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/auto_scan"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp" />
+
+        <CheckBox
+            android:id="@+id/chkDark"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/dark_mode"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/lyric_size_label"
+            android:textColor="@color/text_hint"
+            android:textSize="13sp" />
+
+        <RadioGroup
+            android:id="@+id/rgLyricSize"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:orientation="horizontal">
+
+            <RadioButton
+                android:id="@+id/rbLyricSmall"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:tag="15"
+                android:text="@string/size_small"
+                android:textColor="@color/text_primary" />
+
+            <RadioButton
+                android:id="@+id/rbLyricMid"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:tag="18"
+                android:text="@string/size_medium"
+                android:textColor="@color/text_primary" />
+
+            <RadioButton
+                android:id="@+id/rbLyricLarge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:tag="22"
+                android:text="@string/size_large"
+                android:textColor="@color/text_primary" />
+        </RadioGroup>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/ui_size_label"
+            android:textColor="@color/text_hint"
+            android:textSize="13sp" />
+
+        <RadioGroup
+            android:id="@+id/rgUiSize"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:orientation="horizontal">
+
+            <RadioButton
+                android:id="@+id/rbUiSmall"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:tag="13"
+                android:text="@string/size_small"
+                android:textColor="@color/text_primary" />
+
+            <RadioButton
+                android:id="@+id/rbUiStd"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:tag="15"
+                android:text="@string/size_standard"
+                android:textColor="@color/text_primary" />
+
+            <RadioButton
+                android:id="@+id/rbUiLarge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:tag="17"
+                android:text="@string/size_large"
+                android:textColor="@color/text_primary" />
+        </RadioGroup>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/lyric_font_label"
+            android:textColor="@color/text_hint"
+            android:textSize="13sp" />
+
+        <RadioGroup
+            android:id="@+id/rgFont"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:orientation="horizontal">
+
+            <RadioButton
+                android:id="@+id/rbFontDefault"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:tag="0"
+                android:text="@string/font_default"
+                android:textColor="@color/text_primary" />
+
+            <RadioButton
+                android:id="@+id/rbFontSerif"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:tag="1"
+                android:text="@string/font_serif"
+                android:textColor="@color/text_primary" />
+
+            <RadioButton
+                android:id="@+id/rbFontMono"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:tag="2"
+                android:text="@string/font_mono"
+                android:textColor="@color/text_primary" />
+        </RadioGroup>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnRescanNow"
+                style="@style/BtnStyle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="6dp"
+                android:layout_weight="1"
+                android:text="@string/rescan" />
+
+            <Button
+                android:id="@+id/btnChangeFolder"
+                style="@style/BtnStyle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/change_folder" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btnAbout"
+            style="@style/BtnStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="@string/about" />
+
+    </LinearLayout>
+</ScrollView>

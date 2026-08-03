@@ -1,0 +1,530 @@
+package com.example.subtitleplayer
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.media.MediaMetadata
+import android.media.MediaPlayer
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
+import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.os.PowerManager
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.Charset
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
+
+/**
+ * 前台播放服务：持有 MediaPlayer，提供通知栏/锁屏控制，独立于 Activity 存活，
+ * 保证退到后台、锁屏也能稳定播放。
+ */
+class MediaPlaybackService : Service() {
+
+    interface Listener {
+        /** 歌曲切换：song 为 null 表示无歌曲；lines 为当前歌词（可能为空）。 */
+        fun onSongChanged(song: Song?, lines: List<SubtitleLine>, lyricName: String?)
+
+        /** 进度回调：lyricIndex 为当前应高亮的歌词行索引，-1 表示无。 */
+        fun onProgress(position: Int, duration: Int, lyricIndex: Int)
+
+        fun onPlayStateChanged(playing: Boolean)
+    }
+
+    companion object {
+        private const val CHANNEL_ID = "playback"
+        private const val NOTIFICATION_ID = 1
+        const val ACTION_PLAY_PAUSE = "com.example.subtitleplayer.PLAY_PAUSE"
+        const val ACTION_NEXT = "com.example.subtitleplayer.NEXT"
+        const val ACTION_PREV = "com.example.subtitleplayer.PREV"
+        const val KEY_LAST_URI = "last_uri"
+        const val KEY_LAST_POS = "last_pos"
+    }
+
+    private val binder = PlaybackBinder()
+    private val handler = Handler(Looper.getMainLooper())
+    private var listener: Listener? = null
+
+    private var mediaPlayer: MediaPlayer? = null
+    private var isPrepared = false
+    private var durationMs = 0
+
+    private var songs: List<Song> = emptyList()
+    private var index = -1
+    private var lyricMap: Map<String, LyricRef> = emptyMap()
+    private var lyricLines: List<SubtitleLine> = emptyList()
+    private var lyricName: String? = null
+
+    private var audioManager: AudioManager? = null
+    private var audioFocusRequest: AudioFocusRequest? = null
+    private var resumeAfterFocusLoss = false
+
+    private var mediaSession: MediaSession? = null
+    private var foregroundShown = false
+
+    private var sleepRunnable: Runnable? = null
+
+    private val statePrefs by lazy {
+        getSharedPreferences("play_state", Context.MODE_PRIVATE)
+    }
+    private var tick = 0
+    private var pendingResumeMs = 0
+
+    private val progressRunnable = object : Runnable {
+        override fun run() {
+            val mp = mediaPlayer
+            if (mp != null && isPrepared) {
+                val pos = mp.currentPosition
+                listener?.onProgress(pos, durationMs, lyricIndexAt(pos))
+                tick++
+                if (tick % 30 == 0) savePosition()
+                handler.postDelayed(this, 300)
+            }
+        }
+    }
+
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        when (change) {
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                resumeAfterFocusLoss = false
+                pause()
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                resumeAfterFocusLoss = isPlaying()
+                pause()
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                if (resumeAfterFocusLoss) {
+                    resumeAfterFocusLoss = false
+                    play()
+                }
+            }
+            else -> {
+                // AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK 等：保持播放
+            }
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        createChannel()
+        initMediaSession()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_PLAY_PAUSE -> togglePlay()
+            ACTION_PREV -> playPrev()
+            ACTION_NEXT -> playNext()
+        }
+        showForeground()
+        return START_NOT_STICKY
+    }
+
+    override fun onBind(intent: Intent?): IBinder = binder
+
+    override fun onDestroy() {
+        savePosition()
+        handler.removeCallbacks(progressRunnable)
+        abandonFocus()
+        mediaPlayer?.release()
+        mediaPlayer = null
+        mediaSession?.release()
+        mediaSession = null
+        super.onDestroy()
+    }
+
+    // ---------- 对外 API（通过 Binder） ----------
+
+    inner class PlaybackBinder : android.os.Binder() {
+        fun service(): MediaPlaybackService = this@MediaPlaybackService
+    }
+
+    fun setListener(l: Listener?) {
+        listener = l
+    }
+
+    fun startPlaylist(
+        songs: List<Song>,
+        index: Int,
+        lyricMap: Map<String, LyricRef>,
+        resumeMs: Int = 0
+    ) {
+        this.songs = songs
+        this.index = index
+        this.lyricMap = lyricMap
+        this.pendingResumeMs = resumeMs
+        playCurrent()
+    }
+
+    fun togglePlay() {
+        if (mediaPlayer?.isPlaying == true) pause() else play()
+    }
+
+    fun playPrev() {
+        if (songs.isEmpty()) return
+        index = (index - 1 + songs.size) % songs.size
+        playCurrent()
+    }
+
+    fun playNext() {
+        if (songs.isEmpty()) return
+        index = (index + 1) % songs.size
+        playCurrent()
+    }
+
+    fun seekTo(ms: Int) {
+        val mp = mediaPlayer ?: return
+        if (!isPrepared) return
+        try {
+            mp.seekTo(ms.coerceIn(0, durationMs))
+        } catch (e: Exception) {
+            // ignore
+        }
+    }
+
+    /** 跳到指定毫秒，若当前暂停则同时开始播放（歌词点击跳转用）。 */
+    fun seekToAndPlay(ms: Int) {
+        seekTo(ms)
+        if (!isPlaying()) play()
+    }
+
+    /** 持久化当前歌曲与进度，供下次启动断点续播。 */
+    private fun savePosition() {
+        val mp = mediaPlayer ?: return
+        if (!isPrepared) return
+        val song = currentSong() ?: return
+        statePrefs.edit()
+            .putString(KEY_LAST_URI, song.uri.toString())
+            .putInt(KEY_LAST_POS, mp.currentPosition)
+            .apply()
+    }
+
+    /** 定时关闭：minutes 分钟后自动暂停；minutes <= 0 表示取消。 */
+    fun setSleepTimer(minutes: Int) {
+        cancelSleepTimer()
+        if (minutes <= 0) return
+        sleepRunnable = Runnable {
+            sleepRunnable = null
+            pause()
+        }
+        handler.postDelayed(sleepRunnable!!, minutes * 60_000L)
+    }
+
+    fun cancelSleepTimer() {
+        sleepRunnable?.let { handler.removeCallbacks(it) }
+        sleepRunnable = null
+    }
+
+    /** 让新绑定的客户端立即拿到当前完整状态。 */
+    fun pushState() {
+        listener?.onSongChanged(currentSong(), lyricLines, lyricName)
+        val mp = mediaPlayer
+        if (mp != null && isPrepared) {
+            listener?.onProgress(mp.currentPosition, durationMs, lyricIndexAt(mp.currentPosition))
+        }
+        listener?.onPlayStateChanged(isPlaying())
+    }
+
+    // ---------- 播放 ----------
+
+    private fun currentSong(): Song? = songs.getOrNull(index)
+
+    private fun playCurrent() {
+        val song = currentSong() ?: return
+        releasePlayer()
+
+        loadLyric(song)
+        listener?.onSongChanged(song, lyricLines, lyricName)
+
+        val mp = MediaPlayer()
+        try {
+            mp.setDataSource(this, song.uri)
+            mp.setWakeMode(this, PowerManager.PARTIAL_WAKE_LOCK)
+            mp.setOnPreparedListener { player ->
+                isPrepared = true
+                durationMs = player.duration
+                val resume = pendingResumeMs
+                pendingResumeMs = 0
+                if (resume > 0 && resume < durationMs) {
+                    player.seekTo(resume)
+                    updateAll(false)
+                } else {
+                    play()
+                }
+            }
+            mp.setOnCompletionListener {
+                playNext()
+            }
+            mp.setOnErrorListener { _, what, extra ->
+                listener?.onSongChanged(null, emptyList(), null)
+                true
+            }
+            mp.prepareAsync()
+            mediaPlayer = mp
+        } catch (e: Exception) {
+            try {
+                mp.release()
+            } catch (_: Exception) {
+            }
+            mediaPlayer = null
+        }
+    }
+
+    private fun play() {
+        val mp = mediaPlayer ?: return
+        if (!isPrepared) return
+        if (!requestFocus()) return
+        if (durationMs > 0 && mp.currentPosition >= durationMs) {
+            mp.seekTo(0)
+        }
+        mp.start()
+        updateAll(true)
+    }
+
+    private fun pause() {
+        savePosition()
+        cancelSleepTimer()
+        mediaPlayer?.pause()
+        abandonFocus()
+        updateAll(false)
+    }
+
+    private fun isPlaying(): Boolean = mediaPlayer?.isPlaying ?: false
+
+    private fun updateAll(playing: Boolean) {
+        handler.removeCallbacks(progressRunnable)
+        if (playing) {
+            handler.post(progressRunnable)
+        }
+        showForeground()
+        updateMediaSession(playing)
+        listener?.onPlayStateChanged(playing)
+    }
+
+    private fun releasePlayer() {
+        handler.removeCallbacks(progressRunnable)
+        isPrepared = false
+        mediaPlayer?.release()
+        mediaPlayer = null
+        durationMs = 0
+    }
+
+    // ---------- 歌词 ----------
+
+    private fun loadLyric(song: Song) {
+        lyricLines = emptyList()
+        lyricName = null
+        val ref = LibraryScanner.findLyric(song, lyricMap) ?: return
+        try {
+            val bytes =
+                contentResolver.openInputStream(ref.uri)?.use { it.readBytes() } ?: return
+            val parsed = SubtitleParser.parse(decodeText(bytes))
+            if (parsed.isEmpty()) return
+            lyricLines = parsed
+            lyricName = ref.displayName
+        } catch (e: Exception) {
+            // 无歌词或读取失败：保持空
+        }
+    }
+
+    private fun lyricIndexAt(pos: Int): Int {
+        if (lyricLines.isEmpty()) return -1
+        var idx = -1
+        for (i in lyricLines.indices) {
+            if (lyricLines[i].startMs <= pos) {
+                idx = i
+            } else {
+                break
+            }
+        }
+        return idx
+    }
+
+    // ---------- 音频焦点 ----------
+
+    private fun requestFocus(): Boolean {
+        val am = audioManager ?: return true
+        val afr = audioFocusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
+            .setOnAudioFocusChangeListener(focusListener)
+            .build()
+            .also { audioFocusRequest = it }
+        return am.requestAudioFocus(afr) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }
+
+    private fun abandonFocus() {
+        val am = audioManager ?: return
+        audioFocusRequest?.let {
+            try {
+                am.abandonAudioFocusRequest(it)
+            } catch (e: Exception) {
+                // ignore
+            }
+        }
+    }
+
+    // ---------- 通知与媒体会话 ----------
+
+    private fun createChannel() {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            getString(R.string.playback_channel),
+            NotificationManager.IMPORTANCE_LOW
+        )
+        nm.createNotificationChannel(channel)
+    }
+
+    private fun initMediaSession() {
+        mediaSession = MediaSession(this, "SubtitlePlayer").apply {
+            setCallback(object : MediaSession.Callback() {
+                override fun onPlay() = play()
+                override fun onPause() = pause()
+                override fun onSkipToNext() = playNext()
+                override fun onSkipToPrevious() = playPrev()
+                override fun onSeekTo(pos: Long) = seekTo(pos.toInt())
+                override fun onStop() = pause()
+            })
+            isActive = true
+        }
+    }
+
+    private fun showForeground() {
+        if (foregroundShown) {
+            val playing = isPlaying()
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIFICATION_ID, buildNotification(playing))
+            return
+        }
+        foregroundShown = true
+        val notification = buildNotification(false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun buildNotification(playing: Boolean): Notification {
+        val song = currentSong()
+        val title = song?.title ?: getString(R.string.app_name)
+        val text = song?.folder ?: getString(R.string.no_song)
+
+        val openPi = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java).addFlags(
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            ),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val prevPi = servicePi(ACTION_PREV, 1)
+        val ppPi = servicePi(ACTION_PLAY_PAUSE, 2)
+        val nextPi = servicePi(ACTION_NEXT, 3)
+
+        val playIcon = if (playing) R.drawable.ic_pause else R.drawable.ic_play
+        val playLabel = getString(if (playing) R.string.pause else R.string.play)
+
+        return Notification.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_music)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setContentIntent(openPi)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .addAction(
+                Notification.Action.Builder(R.drawable.ic_prev, getString(R.string.prev), prevPi).build()
+            )
+            .addAction(
+                Notification.Action.Builder(playIcon, playLabel, ppPi).build()
+            )
+            .addAction(
+                Notification.Action.Builder(R.drawable.ic_next, getString(R.string.next), nextPi).build()
+            )
+            .setStyle(
+                Notification.MediaStyle()
+                    .setMediaSession(mediaSession?.sessionToken)
+                    .setShowActionsInCompactView(0, 1, 2)
+            )
+            .build()
+    }
+
+    private fun servicePi(action: String, requestCode: Int): PendingIntent {
+        val intent = Intent(this, MediaPlaybackService::class.java).setAction(action)
+        return PendingIntent.getService(
+            this, requestCode, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    private fun updateMediaSession(playing: Boolean) {
+        val state = if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
+        val ps = PlaybackState.Builder()
+            .setActions(
+                PlaybackState.ACTION_PLAY or
+                    PlaybackState.ACTION_PAUSE or
+                    PlaybackState.ACTION_PLAY_PAUSE or
+                    PlaybackState.ACTION_SKIP_TO_NEXT or
+                    PlaybackState.ACTION_SKIP_TO_PREVIOUS or
+                    PlaybackState.ACTION_SEEK_TO
+            )
+            .setState(state, (mediaPlayer?.currentPosition ?: 0).toLong(), if (playing) 1f else 0f)
+            .build()
+        mediaSession?.setPlaybackState(ps)
+
+        val song = currentSong()
+        val metadata = MediaMetadata.Builder()
+            .putString(MediaMetadata.METADATA_KEY_TITLE, song?.title ?: getString(R.string.app_name))
+            .putString(MediaMetadata.METADATA_KEY_ARTIST, song?.folder ?: "")
+            .build()
+        mediaSession?.setMetadata(metadata)
+    }
+
+    // ---------- 文本解码（与旧代码一致） ----------
+
+    private fun decodeText(bytes: ByteArray): String {
+        val data = if (bytes.size >= 3 &&
+            bytes[0] == 0xEF.toByte() &&
+            bytes[1] == 0xBB.toByte() &&
+            bytes[2] == 0xBF.toByte()
+        ) {
+            bytes.copyOfRange(3, bytes.size)
+        } else {
+            bytes
+        }
+        val decoder = StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+        return try {
+            decoder.decode(ByteBuffer.wrap(data)).toString()
+        } catch (e: CharacterCodingException) {
+            try {
+                String(data, Charset.forName("GBK"))
+            } catch (e2: Exception) {
+                String(data, StandardCharsets.UTF_8)
+            }
+        }
+    }
+}
