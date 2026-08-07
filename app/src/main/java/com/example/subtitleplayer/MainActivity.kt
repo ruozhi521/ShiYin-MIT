@@ -17,6 +17,8 @@ import android.os.IBinder
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.View
+import android.view.GestureDetector
+import android.view.MotionEvent
 import android.view.animation.LinearInterpolator
 import android.widget.Button
 import android.widget.CheckBox
@@ -52,6 +54,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tabDiscover: TextView
     private lateinit var tabLibrary: TextView
     private var currentTab = 0
+    private var hasSong = false
 
     // ---- 迷你播放条 ----
     private lateinit var miniPlayer: View
@@ -101,6 +104,13 @@ class MainActivity : AppCompatActivity() {
 
     // ---- 全屏歌词页 ----
     private lateinit var recyclerLyricFull: RecyclerView
+    private lateinit var btnTranslate: Button
+    private var lastSong: Song? = null
+    private var translating = false
+    private var transFailedLines: List<Pair<Int, String>> = emptyList()
+    private val translationCache by lazy {
+        LyricTranslationCache.load(this)
+    }
 
     private lateinit var songAdapter: SongAdapter
     private lateinit var lyricAdapter: LyricAdapter
@@ -154,6 +164,7 @@ class MainActivity : AppCompatActivity() {
             txtPlayerTitle.text = song?.title ?: ""
             txtPlayerFolder.text = song?.folder ?: ""
             txtMiniTitle.text = song?.title ?: ""
+            hasSong = song != null
             if (song != null) {
                 if (miniPlayer.visibility != View.VISIBLE) {
                     miniPlayer.visibility = View.VISIBLE
@@ -172,6 +183,14 @@ class MainActivity : AppCompatActivity() {
             currentLyricHighlight = -1
             lyricAdapter.submit(lines)
             updateNowLyric(-1)
+            lastSong = song
+            transFailedLines = emptyList()
+            translating = false
+            btnTranslate.isEnabled = true
+            btnTranslate.text = getString(R.string.translate)
+            val cachedTrans = song?.let { translationCache[it.uri.toString()] } ?: emptyMap()
+            lyricAdapter.setTranslations(cachedTrans)
+            maybeAutoTranslate(song, lines)
             imgCd.setImageResource(R.drawable.ic_music_tinted)
             currentCoverKey = song?.uri?.toString()
             if (song != null) {
@@ -230,6 +249,14 @@ class MainActivity : AppCompatActivity() {
         viewSearch = findViewById(R.id.pageSearch)
         viewPlayer = findViewById(R.id.pagePlayer)
         viewLyrics = findViewById(R.id.pageLyrics)
+        viewPlayer.setOnTouchListener { _, e ->
+            pageFlingDetector.onTouchEvent(e)
+            false
+        }
+        viewLyrics.setOnTouchListener { _, e ->
+            pageFlingDetector.onTouchEvent(e)
+            false
+        }
 
         tabDiscover = findViewById(R.id.tabDiscover)
         tabLibrary = findViewById(R.id.tabLibrary)
@@ -260,6 +287,7 @@ class MainActivity : AppCompatActivity() {
         txtTime = findViewById(R.id.txtTime)
         btnPlayPlayer = findViewById(R.id.btnPlayPlayer)
         recyclerLyricFull = findViewById(R.id.recyclerLyricFull)
+        btnTranslate = findViewById(R.id.btnTranslate)
 
         // ---- 发现页 ----
         discoverAdapter = DiscoverAdapter { pos ->
@@ -330,8 +358,11 @@ class MainActivity : AppCompatActivity() {
         // ---- 播放页控制 ----
         findViewById<Button>(R.id.btnBackSongs).setOnClickListener { backFromPlayer() }
         findViewById<Button>(R.id.btnLyrics).setOnClickListener { showPage(Page.LYRICS) }
-        findViewById<ImageButton>(R.id.btnLyricsIcon).setOnClickListener { showPage(Page.LYRICS) }
-        findViewById<Button>(R.id.btnBackLyrics).setOnClickListener { showPage(Page.PLAYER) }
+        findViewById<ImageButton>(R.id.btnQueue).setOnClickListener { showQueueDialog() }
+        findViewById<ImageButton>(R.id.btnLyricsIcon).setOnClickListener { showPage(Page.LYRICS) }        findViewById<Button>(R.id.btnBackLyrics).setOnClickListener { showPage(Page.PLAYER) }
+        findViewById<Button>(R.id.btnTranslate).setOnClickListener {
+            translateCurrentLyric()
+        }
         findViewById<ImageButton>(R.id.btnPrev).setOnClickListener {
             playbackService?.playPrev()
         }
@@ -468,10 +499,48 @@ class MainActivity : AppCompatActivity() {
                 v.visibility = View.GONE
             }
         }
+        // 播放页/歌词页不显示底部迷你条，避免双进度条
+        if (p == Page.PLAYER || p == Page.LYRICS) {
+            if (miniPlayer.visibility != View.GONE) {
+                miniPlayer.visibility = View.GONE
+            }
+        } else if (hasSong && miniPlayer.visibility != View.VISIBLE) {
+            miniPlayer.visibility = View.VISIBLE
+            miniPlayer.alpha = 0f
+            miniPlayer.translationY = 40f
+            miniPlayer.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setDuration(250)
+                .start()
+        }
     }
 
     private fun backFromPlayer() {
         showPage(if (currentTab == 0) Page.DISCOVER else Page.LIBRARY)
+    }
+
+    // ---------- 左右滑动切换播放页/歌词页 ----------
+
+    private val pageFlingDetector by lazy {
+        GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onFling(
+                e1: MotionEvent?,
+                e2: MotionEvent,
+                velocityX: Float,
+                velocityY: Float
+            ): Boolean {
+                if (Math.abs(velocityX) < Math.abs(velocityY) || Math.abs(velocityX) < 900) {
+                    return false
+                }
+                if (velocityX < 0) {
+                    if (page == Page.PLAYER) showPage(Page.LYRICS)
+                } else {
+                    if (page == Page.LYRICS) showPage(Page.PLAYER)
+                }
+                return true
+            }
+        })
     }
 
     override fun onBackPressed() {
@@ -784,15 +853,35 @@ class MainActivity : AppCompatActivity() {
         val view = layoutInflater.inflate(R.layout.settings_dialog, null)
         val chkAutoScan = view.findViewById<CheckBox>(R.id.chkAutoScan)
         val chkDark = view.findViewById<CheckBox>(R.id.chkDark)
+        val chkAutoTrans = view.findViewById<CheckBox>(R.id.chkAutoTrans)
         val rgLyric = view.findViewById<RadioGroup>(R.id.rgLyricSize)
         val rgUi = view.findViewById<RadioGroup>(R.id.rgUiSize)
         val rgFont = view.findViewById<RadioGroup>(R.id.rgFont)
 
         chkAutoScan.isChecked = prefs.getBoolean(KEY_AUTO_SCAN, true)
         chkDark.isChecked = prefs.getBoolean(KEY_DARK, false)
+        chkAutoTrans.isChecked = prefs.getBoolean(KEY_AUTO_TRANS, false)
         checkByTag(rgLyric, prefs.getInt(KEY_LYRIC_SIZE, 18))
         checkByTag(rgUi, prefs.getInt(KEY_UI_SIZE, 15))
         checkByTag(rgFont, prefs.getInt(KEY_LYRIC_FONT, 0))
+
+        chkAutoTrans.setOnCheckedChangeListener { _, checked ->
+            if (checked) {
+                AlertDialog.Builder(this)
+                    .setTitle(R.string.auto_trans_confirm_title)
+                    .setMessage(R.string.auto_trans_confirm_msg)
+                    .setPositiveButton(R.string.enable) { _, _ ->
+                        prefs.edit().putBoolean(KEY_AUTO_TRANS, true).apply()
+                        toast(getString(R.string.auto_trans_ok))
+                    }
+                    .setNegativeButton(R.string.cancel) { _, _ ->
+                        chkAutoTrans.isChecked = false
+                    }
+                    .show()
+            } else {
+                prefs.edit().putBoolean(KEY_AUTO_TRANS, false).apply()
+            }
+        }
 
         val dialog = AlertDialog.Builder(this)
             .setTitle(R.string.settings)
@@ -801,6 +890,7 @@ class MainActivity : AppCompatActivity() {
                 prefs.edit()
                     .putBoolean(KEY_AUTO_SCAN, chkAutoScan.isChecked)
                     .putBoolean(KEY_DARK, chkDark.isChecked)
+                    .putBoolean(KEY_AUTO_TRANS, chkAutoTrans.isChecked)
                     .putInt(KEY_LYRIC_SIZE, tagOf(rgLyric))
                     .putInt(KEY_UI_SIZE, tagOf(rgUi))
                     .putInt(KEY_LYRIC_FONT, tagOf(rgFont))
@@ -829,6 +919,167 @@ class MainActivity : AppCompatActivity() {
             dialog.dismiss()
             showAboutDialog()
         }
+        view.findViewById<Button>(R.id.btnTransSettings).setOnClickListener {
+            dialog.dismiss()
+            showTransSettingsDialog()
+        }
+    }
+
+    // ---------- 播放列表 ----------
+
+    private fun showQueueDialog() {
+        if (currentSongs.isEmpty()) {
+            toast(getString(R.string.queue_empty))
+            return
+        }
+        val rv = layoutInflater.inflate(R.layout.dialog_queue, null) as androidx.recyclerview.widget.RecyclerView
+        var queueAdapter: SongAdapter? = null
+        queueAdapter = SongAdapter(
+            hasLyric = { s -> library?.lyrics?.containsKey(s.uri.toString()) == true },
+            onClick = { pos ->
+                playSong(currentSongs, pos)
+                queueAdapter?.setCurrentIndex(pos)
+            }
+        )
+        queueAdapter!!.submit(currentSongs)
+        queueAdapter!!.setCurrentIndex(playbackService?.currentIndex() ?: -1)
+        rv.layoutManager = LinearLayoutManager(this)
+        rv.adapter = queueAdapter
+        AlertDialog.Builder(this)
+            .setTitle(R.string.queue)
+            .setView(rv)
+            .setPositiveButton(R.string.close, null)
+            .show()
+    }
+
+    // ---------- 歌词 AI 翻译 ----------
+
+    private fun showTransSettingsDialog() {
+        val view = layoutInflater.inflate(R.layout.trans_dialog, null)
+        val etBase = view.findViewById<android.widget.EditText>(R.id.etTransBase)
+        val etKey = view.findViewById<android.widget.EditText>(R.id.etTransKey)
+        val etModel = view.findViewById<android.widget.EditText>(R.id.etTransModel)
+        etBase.setText(prefs.getString(KEY_TRANS_BASE, DEFAULT_TRANS_BASE))
+        etKey.setText(prefs.getString(KEY_TRANS_KEY, ""))
+        etModel.setText(prefs.getString(KEY_TRANS_MODEL, DEFAULT_TRANS_MODEL))
+        AlertDialog.Builder(this)
+            .setTitle(R.string.trans_settings)
+            .setView(view)
+            .setPositiveButton(R.string.trans_save) { _, _ ->
+                prefs.edit()
+                    .putString(KEY_TRANS_BASE, etBase.text.toString().trim())
+                    .putString(KEY_TRANS_KEY, etKey.text.toString().trim())
+                    .putString(KEY_TRANS_MODEL, etModel.text.toString().trim())
+                    .apply()
+                toast(getString(R.string.trans_saved))
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun translationConfig(): LyricTranslator.Config? {
+        val key = prefs.getString(KEY_TRANS_KEY, "")?.trim()
+        if (key.isNullOrEmpty()) return null
+        return LyricTranslator.Config(
+            baseUrl = prefs.getString(KEY_TRANS_BASE, DEFAULT_TRANS_BASE)!!.trim(),
+            apiKey = key,
+            model = prefs.getString(KEY_TRANS_MODEL, DEFAULT_TRANS_MODEL)!!.trim()
+        )
+    }
+
+    private fun translateCurrentLyric() {
+        val lines = lyricLines
+        if (lines.isEmpty()) {
+            toast(getString(R.string.no_lyric))
+            return
+        }
+        val cfg = translationConfig()
+        if (cfg == null) {
+            toast(getString(R.string.trans_no_key))
+            showTransSettingsDialog()
+            return
+        }
+        if (translating) return
+        translating = true
+        btnTranslate.isEnabled = false
+        btnTranslate.text = getString(R.string.translating)
+
+        val uriKey = lastSong?.uri?.toString() ?: ""
+        val cache = translationCache.getOrPut(uriKey) { HashMap() }
+        val toTranslate = if (transFailedLines.isNotEmpty()) {
+            transFailedLines
+        } else {
+            lines.withIndex().filter { it.index !in cache }.map { it.index to it.value.text }
+        }
+        if (toTranslate.isEmpty()) {
+            translating = false
+            btnTranslate.isEnabled = true
+            btnTranslate.text = getString(R.string.translate)
+            toast(getString(R.string.trans_ok))
+            return
+        }
+
+        Thread {
+            val result = try {
+                LyricTranslator.translate(toTranslate, cfg)
+            } catch (e: Exception) {
+                emptyMap()
+            }
+            runOnUiThread {
+                translating = false
+                btnTranslate.isEnabled = true
+                btnTranslate.text = getString(R.string.translate)
+                cache.putAll(result)
+                LyricTranslationCache.save(applicationContext, translationCache)
+                transFailedLines = toTranslate.filter { it.first !in result }
+                lyricAdapter.setTranslations(
+                    translationCache[lastSong?.uri?.toString()] ?: emptyMap()
+                )
+                when {
+                    result.isEmpty() -> toast(getString(R.string.trans_all_fail))
+                    transFailedLines.isNotEmpty() ->
+                        toast(getString(R.string.trans_partial_fail, transFailedLines.size))
+                    else -> toast(getString(R.string.trans_ok))
+                }
+            }
+        }.start()
+    }
+
+    /**
+     * 自动翻译：开关开启时，播放非中文歌词且未翻译过的歌曲自动翻译。
+     * 约束：仅非中文歌词；每首歌只翻译一遍（缓存已存在或已尝试过则跳过）。
+     */
+    private fun maybeAutoTranslate(song: Song?, lines: List<SubtitleLine>) {
+        if (!prefs.getBoolean(KEY_AUTO_TRANS, false)) return
+        if (song == null || lines.isEmpty()) return
+        if (translating) return
+        if (translationConfig() == null) return
+        val uriKey = song.uri.toString()
+        if (translationCache.containsKey(uriKey)) return
+        if (isChineseLyric(lines)) return
+        translateCurrentLyric()
+    }
+
+    /** 判断歌词是否为中文为主：含明显假名（日文）判定非中文；否则汉字占比 ≥ 30% 视为中文，不自动翻译。 */
+    private fun isChineseLyric(lines: List<SubtitleLine>): Boolean {
+        var cjk = 0
+        var kana = 0
+        var total = 0
+        for (line in lines) {
+            for (ch in line.text) {
+                if (ch.isWhitespace()) continue
+                total++
+                if (ch in '\u3040'..'\u30ff') {
+                    kana++ // 平假名/片假名
+                } else if (ch in '\u4e00'..'\u9fff') {
+                    cjk++
+                }
+            }
+        }
+        if (total == 0) return true
+        // 假名占比 ≥ 5% → 判定为日语（日汉字再多也照常翻译；日语歌假名通常占 30%+）
+        if (kana.toFloat() / total >= 0.05f) return false
+        return cjk.toFloat() / total >= 0.3f
     }
 
     private fun showAboutDialog() {
@@ -937,6 +1188,12 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_LYRIC_SIZE = "lyric_size"
         private const val KEY_UI_SIZE = "ui_size"
         private const val KEY_LYRIC_FONT = "lyric_font"
+        private const val KEY_TRANS_BASE = "trans_base"
+        private const val KEY_TRANS_KEY = "trans_key"
+        private const val KEY_TRANS_MODEL = "trans_model"
+        private const val KEY_AUTO_TRANS = "auto_translate"
+        private const val DEFAULT_TRANS_BASE = "https://api.deepseek.com/v1"
+        private const val DEFAULT_TRANS_MODEL = "deepseek-chat"
         private const val SUPPORT_URL = "https://www.ifdian.net/a/ruozhi521"
     }
 

@@ -124,8 +124,8 @@
 
         <ImageButton
             android:id="@+id/btnTimer"
-            android:layout_width="56dp"
-            android:layout_height="56dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/timer"
             android:src="@drawable/ic_timer"
@@ -133,8 +133,8 @@
 
         <ImageButton
             android:id="@+id/btnPrev"
-            android:layout_width="56dp"
-            android:layout_height="56dp"
+            android:layout_width="50dp"
+            android:layout_height="50dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/prev"
             android:src="@drawable/ic_prev"
@@ -142,27 +142,36 @@
 
         <ImageButton
             android:id="@+id/btnPlayPlayer"
-            android:layout_width="72dp"
-            android:layout_height="72dp"
-            android:layout_marginStart="16dp"
-            android:layout_marginEnd="16dp"
+            android:layout_width="68dp"
+            android:layout_height="68dp"
+            android:layout_marginStart="10dp"
+            android:layout_marginEnd="10dp"
             android:background="@drawable/bg_play_circle"
             android:contentDescription="@string/play"
             android:src="@drawable/ic_play" />
 
         <ImageButton
             android:id="@+id/btnNext"
-            android:layout_width="56dp"
-            android:layout_height="56dp"
+            android:layout_width="50dp"
+            android:layout_height="50dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/next"
             android:src="@drawable/ic_next"
             android:tint="?attr/colorControlNormal" />
 
         <ImageButton
+            android:id="@+id/btnQueue"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/queue"
+            android:src="@drawable/ic_queue"
+            android:tint="?attr/colorControlNormal" />
+
+        <ImageButton
             android:id="@+id/btnLyricsIcon"
-            android:layout_width="56dp"
-            android:layout_height="56dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/lyrics_full"
             android:src="@drawable/ic_lyric"

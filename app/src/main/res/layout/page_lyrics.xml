@@ -34,6 +34,14 @@
             android:textColor="@color/text_primary"
             android:textSize="16sp"
             android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnTranslate"
+            style="@style/BtnStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="56dp"
+            android:text="@string/translate" />
     </LinearLayout>
 
     <androidx.recyclerview.widget.RecyclerView

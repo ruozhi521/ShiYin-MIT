@@ -29,6 +29,23 @@
             android:textColor="@color/text_primary"
             android:textSize="15sp" />
 
+        <CheckBox
+            android:id="@+id/chkAutoTrans"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/auto_trans"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="30dp"
+            android:text="@string/auto_trans_hint"
+            android:textColor="@color/text_hint"
+            android:textSize="12sp" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -189,6 +206,14 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
             android:text="@string/about" />
+
+        <Button
+            android:id="@+id/btnTransSettings"
+            style="@style/BtnStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="@string/trans_settings" />
 
     </LinearLayout>
 </ScrollView>

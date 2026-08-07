@@ -67,9 +67,15 @@ class SongAdapter(
 
     private var items: List<Song> = emptyList()
     private var uiSizeSp = 15f
+    private var currentIndex = -1
 
     fun submit(list: List<Song>) {
         items = list
+        notifyDataSetChanged()
+    }
+
+    fun setCurrentIndex(index: Int) {
+        currentIndex = index
         notifyDataSetChanged()
     }
 
@@ -89,6 +95,17 @@ class SongAdapter(
         holder.index.text = (position + 1).toString()
         holder.title.text = song.title
         holder.title.setTextSize(uiSizeSp)
+        if (position == currentIndex) {
+            holder.title.setTextColor(
+                ContextCompat.getColor(holder.itemView.context, R.color.accent)
+            )
+            holder.title.typeface = Typeface.DEFAULT_BOLD
+        } else {
+            holder.title.setTextColor(
+                ContextCompat.getColor(holder.itemView.context, R.color.text_primary)
+            )
+            holder.title.typeface = Typeface.DEFAULT
+        }
         holder.lyricMark.visibility =
             if (hasLyric(song)) View.VISIBLE else View.GONE
         holder.cover.setImageResource(R.drawable.ic_music_tinted)
@@ -120,10 +137,16 @@ class LyricAdapter(
         private set
     private var lyricSizeSp = 18f
     private var fontMode = 0
+    private var translations: Map<Int, String> = emptyMap()
 
     fun submit(list: List<SubtitleLine>) {
         items = list
         current = -1
+        notifyDataSetChanged()
+    }
+
+    fun setTranslations(map: Map<Int, String>) {
+        translations = map
         notifyDataSetChanged()
     }
 
@@ -154,6 +177,13 @@ class LyricAdapter(
             2 -> Typeface.MONOSPACE
             else -> Typeface.DEFAULT
         }
+        val trans = translations[position]
+        if (trans != null) {
+            holder.trans.text = trans
+            holder.trans.visibility = View.VISIBLE
+        } else {
+            holder.trans.visibility = View.GONE
+        }
         if (position == current) {
             holder.itemView.setBackgroundResource(R.drawable.bg_current_line)
             holder.text.setTextColor(
@@ -172,5 +202,6 @@ class LyricAdapter(
 
     class Holder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         val text: TextView = itemView.findViewById(R.id.tvLine)
+        val trans: TextView = itemView.findViewById(R.id.tvLineTrans)
     }
 }

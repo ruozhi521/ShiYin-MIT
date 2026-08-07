@@ -169,6 +169,8 @@ class MediaPlaybackService : Service() {
         playCurrent()
     }
 
+    fun currentIndex(): Int = index
+
     fun togglePlay() {
         if (mediaPlayer?.isPlaying == true) pause() else play()
     }

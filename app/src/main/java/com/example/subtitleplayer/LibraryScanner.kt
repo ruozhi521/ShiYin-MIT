@@ -8,14 +8,14 @@ import java.util.Locale
 /**
  * 通过 SAF（系统文件选择器授权）递归扫描一个文件夹树：
  * - 每个子文件夹成为一个歌单（根目录散落的音频归入 [DEFAULT_FOLDER]）
- * - 自动记录所有 .lrc/.vtt 歌词，供按文件名匹配
+ * - 自动记录所有 .lrc/.vtt/.txt 歌词，供按文件名匹配
  */
 class LibraryScanner(private val resolver: ContentResolver) {
 
     private val audioExts = setOf(
         "mp3", "m4a", "wav", "flac", "aac", "ogg", "opus", "amr", "wma", "mid", "midi"
     )
-    private val lyricExts = setOf("lrc", "vtt")
+    private val lyricExts = setOf("lrc", "vtt", "txt")
 
     fun scan(treeUri: Uri): MusicLibrary {
         val rootId = DocumentsContract.getTreeDocumentId(treeUri)

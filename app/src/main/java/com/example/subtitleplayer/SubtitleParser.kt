@@ -15,7 +15,8 @@ object SubtitleParser {
     private val htmlTagRe = Regex("<[^>]*>")
 
     /**
-     * 自动判断格式：包含 WEBVTT 头或 VTT 时间行 -> VTT，否则按 LRC 解析。
+     * 自动判断格式：包含 WEBVTT 头或 VTT 时间行 -> VTT，否则按 LRC 解析；
+     * 若完全无时间戳（如纯文本 .txt 歌词），按行拆分并以固定间隔展示。
      */
     fun parse(text: String): List<SubtitleLine> {
         val normalized = text.replace("\r\n", "\n").replace('\r', '\n')
@@ -24,7 +25,24 @@ object SubtitleParser {
             Kind.VTT -> parseVtt(normalized)
             Kind.LRC -> parseLrc(normalized)
         }
+        if (parsed.isEmpty()) {
+            return parsePlainText(normalized)
+        }
         return parsed.sortedBy { it.startMs }
+    }
+
+    /** 无时间戳的纯文本歌词（.txt）：每行一个条目，固定间隔展示，可滚动查看全文。 */
+    private fun parsePlainText(text: String): List<SubtitleLine> {
+        val out = mutableListOf<SubtitleLine>()
+        var idx = 0
+        for (line in text.lines()) {
+            val t = line.trim()
+            if (t.isEmpty()) continue
+            val start = idx * 4000
+            out.add(SubtitleLine(start, start + 4000, t))
+            idx++
+        }
+        return out
     }
 
     private fun detectKind(text: String): Kind {
