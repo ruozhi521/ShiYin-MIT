@@ -2,24 +2,59 @@ package com.example.subtitleplayer
 
 import android.content.Context
 import android.util.AttributeSet
-import android.view.GestureDetector
 import android.view.MotionEvent
 import android.widget.LinearLayout
 
 /**
- * 在 dispatchTouchEvent 层把触摸事件转发给 GestureDetector：
- * 无论子控件（CD 封面、RecyclerView 等）是否消费了触摸，
- * 从页面任意位置发起的滑动切换都始终有效。
+ * 在 dispatchTouchEvent 层自行识别水平滑动（不依赖系统手势检测器）：
+ * 无论子控件（CD 封面、RecyclerView 等）是否消费触摸，从页面任意位置
+ * 发起的滑动切换都有效；坐标全部使用相对本布局的本地坐标，避免全面屏
+ * 状态栏/刘海导致的屏幕坐标换算偏差。
  */
 class SwipeFrameLayout @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : LinearLayout(context, attrs) {
 
-    var gestureDetector: GestureDetector? = null
+    /**
+     * 水平滑动回调。
+     * @param direction > 0 表示左滑，< 0 表示右滑
+     * @param downYLocal 手指按下点相对本布局顶部的 Y 坐标（本地坐标系）
+     */
+    var onHorizontalSwipe: ((direction: Int, downYLocal: Float) -> Unit)? = null
+
+    private var lastX = 0f
+    private var accX = 0f
+    private var accY = 0f
+    private var downYLocal = 0f
+    private var active = false
+    private var swiped = false
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        gestureDetector?.onTouchEvent(ev)
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                lastX = ev.x
+                downYLocal = ev.y
+                accX = 0f
+                accY = 0f
+                active = true
+                swiped = false
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (active && !swiped) {
+                    val dx = ev.x - lastX
+                    lastX = ev.x
+                    accX += dx
+                    accY += Math.abs(ev.y - downYLocal)
+                    // 水平位移 ≥ 60px 且明显水平主导（2 倍于垂直）即判定为横滑
+                    if (Math.abs(accX) >= 60 && Math.abs(accX) >= accY * 2) {
+                        onHorizontalSwipe?.invoke(if (accX > 0) 1 else -1, downYLocal)
+                        swiped = true
+                    }
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> active = false
+        }
         return super.dispatchTouchEvent(ev)
     }
 }

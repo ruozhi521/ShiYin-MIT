@@ -17,8 +17,6 @@ import android.os.IBinder
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.View
-import android.view.GestureDetector
-import android.view.MotionEvent
 import android.view.animation.LinearInterpolator
 import android.widget.Button
 import android.widget.CheckBox
@@ -249,8 +247,8 @@ class MainActivity : AppCompatActivity() {
         viewSearch = findViewById(R.id.pageSearch)
         viewPlayer = findViewById(R.id.pagePlayer)
         viewLyrics = findViewById(R.id.pageLyrics)
-        (viewPlayer as SwipeFrameLayout).gestureDetector = pageFlingDetector
-        (viewLyrics as SwipeFrameLayout).gestureDetector = pageFlingDetector
+        (viewPlayer as SwipeFrameLayout).onHorizontalSwipe = { dir, downY -> handleSwipe(dir, downY) }
+        (viewLyrics as SwipeFrameLayout).onHorizontalSwipe = { dir, downY -> handleSwipe(dir, downY) }
 
         tabDiscover = findViewById(R.id.tabDiscover)
         tabLibrary = findViewById(R.id.tabLibrary)
@@ -531,70 +529,23 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- 左右滑动切换播放页/歌词页 ----------
 
-    private val pageFlingDetector by lazy {
-        GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            private var downY = 0f
-            private var totalDx = 0f
-            private var totalDy = 0f
-
-            override fun onDown(e: MotionEvent): Boolean {
-                downY = e.rawY
-                totalDx = 0f
-                totalDy = 0f
-                return true
+    /**
+     * 处理 SwipeFrameLayout 识别到的水平滑动。
+     * @param dir > 0 左滑；< 0 右滑
+     * @param downYLocal 按下点相对页面根布局的 Y 坐标（与 seekBar.top 同一坐标系，零换算误差）
+     */
+    private fun handleSwipe(dir: Int, downYLocal: Float) {
+        if (dir > 0) {
+            // 左滑：播放页 → 歌词页；排除底部进度条/控制区（本地坐标对比）
+            if (page == Page.PLAYER &&
+                downYLocal < seekBar.top - 24 * resources.displayMetrics.density
+            ) {
+                showPage(Page.LYRICS, 1)
             }
-
-            // 主要触发方式：累计水平位移超过阈值即切换，不依赖甩动速度
-            override fun onScroll(
-                e1: MotionEvent?,
-                e2: MotionEvent,
-                distanceX: Float,
-                distanceY: Float
-            ): Boolean {
-                totalDx += distanceX
-                totalDy += distanceY
-                if (Math.abs(totalDx) < 80 || Math.abs(totalDx) < Math.abs(totalDy) * 2) {
-                    return false
-                }
-                // 排除从底部进度条/控制区发起的滑动，避免与拖动进度条冲突
-                if (page == Page.PLAYER) {
-                    val loc = IntArray(2)
-                    seekBar.getLocationOnScreen(loc)
-                    if (downY >= loc[1] - 20 * resources.displayMetrics.density) {
-                        totalDx = 0f
-                        totalDy = 0f
-                        return false
-                    }
-                }
-                // distanceX > 0 表示手指左移
-                if (totalDx > 0) {
-                    if (page == Page.PLAYER) showPage(Page.LYRICS, 1)
-                } else {
-                    if (page == Page.LYRICS) showPage(Page.PLAYER, -1)
-                }
-                totalDx = 0f
-                totalDy = 0f
-                return true
-            }
-
-            // 快速甩动兜底
-            override fun onFling(
-                e1: MotionEvent?,
-                e2: MotionEvent,
-                velocityX: Float,
-                velocityY: Float
-            ): Boolean {
-                if (Math.abs(velocityX) < Math.abs(velocityY) || Math.abs(velocityX) < 900) {
-                    return false
-                }
-                if (velocityX < 0) {
-                    if (page == Page.PLAYER) showPage(Page.LYRICS, 1)
-                } else {
-                    if (page == Page.LYRICS) showPage(Page.PLAYER, -1)
-                }
-                return true
-            }
-        })
+        } else {
+            // 右滑：歌词页 → 播放页
+            if (page == Page.LYRICS) showPage(Page.PLAYER, -1)
+        }
     }
 
     override fun onBackPressed() {
