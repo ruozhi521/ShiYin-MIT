@@ -965,9 +965,9 @@ class MainActivity : AppCompatActivity() {
         val etBase = view.findViewById<android.widget.EditText>(R.id.etTransBase)
         val etKey = view.findViewById<android.widget.EditText>(R.id.etTransKey)
         val etModel = view.findViewById<android.widget.EditText>(R.id.etTransModel)
-        etBase.setText(prefs.getString(KEY_TRANS_BASE, DEFAULT_TRANS_BASE))
+        etBase.setText(prefs.getString(KEY_TRANS_BASE, ""))
         etKey.setText(prefs.getString(KEY_TRANS_KEY, ""))
-        etModel.setText(prefs.getString(KEY_TRANS_MODEL, DEFAULT_TRANS_MODEL))
+        etModel.setText(prefs.getString(KEY_TRANS_MODEL, ""))
         AlertDialog.Builder(this)
             .setTitle(R.string.trans_settings)
             .setView(view)
@@ -986,10 +986,12 @@ class MainActivity : AppCompatActivity() {
     private fun translationConfig(): LyricTranslator.Config? {
         val key = prefs.getString(KEY_TRANS_KEY, "")?.trim()
         if (key.isNullOrEmpty()) return null
+        val base = prefs.getString(KEY_TRANS_BASE, "")?.trim().orEmpty()
+        val model = prefs.getString(KEY_TRANS_MODEL, "")?.trim().orEmpty()
         return LyricTranslator.Config(
-            baseUrl = prefs.getString(KEY_TRANS_BASE, DEFAULT_TRANS_BASE)!!.trim(),
+            baseUrl = base.ifEmpty { DEFAULT_TRANS_BASE },
             apiKey = key,
-            model = prefs.getString(KEY_TRANS_MODEL, DEFAULT_TRANS_MODEL)!!.trim()
+            model = model.ifEmpty { DEFAULT_TRANS_MODEL }
         )
     }
 

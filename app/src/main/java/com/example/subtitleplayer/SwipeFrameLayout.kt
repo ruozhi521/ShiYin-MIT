@@ -39,6 +39,11 @@ class SwipeFrameLayout @JvmOverloads constructor(
                 accY = 0f
                 active = true
                 swiped = false
+                // 关键：强制消费 DOWN，让父级持续把 MOVE/UP 分发给本布局。
+                // 否则按下点落在不消费触摸的区域（CD 封面等）时，DOWN 无 target，
+                // 父级会拦截后续 MOVE，手势检测将永远收不到事件。
+                super.dispatchTouchEvent(ev)
+                return true
             }
             MotionEvent.ACTION_MOVE -> {
                 if (active && !swiped) {
@@ -53,9 +58,13 @@ class SwipeFrameLayout @JvmOverloads constructor(
                         swiped = true
                     }
                 }
+                return super.dispatchTouchEvent(ev)
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> active = false
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                active = false
+                return super.dispatchTouchEvent(ev)
+            }
+            else -> return super.dispatchTouchEvent(ev)
         }
-        return super.dispatchTouchEvent(ev)
     }
 }
