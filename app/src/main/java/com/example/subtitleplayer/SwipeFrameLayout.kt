@@ -48,7 +48,8 @@ class SwipeFrameLayout @JvmOverloads constructor(
                     accY += Math.abs(ev.y - downYLocal)
                     // 水平位移 ≥ 60px 且明显水平主导（2 倍于垂直）即判定为横滑
                     if (Math.abs(accX) >= 60 && Math.abs(accX) >= accY * 2) {
-                        onHorizontalSwipe?.invoke(if (accX > 0) 1 else -1, downYLocal)
+                        // accX > 0 = 手指右移（右滑），accX < 0 = 手指左移（左滑）
+                        onHorizontalSwipe?.invoke(if (accX > 0) -1 else 1, downYLocal)
                         swiped = true
                     }
                 }

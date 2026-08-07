@@ -163,7 +163,8 @@ class MainActivity : AppCompatActivity() {
             txtPlayerFolder.text = song?.folder ?: ""
             txtMiniTitle.text = song?.title ?: ""
             hasSong = song != null
-            if (song != null) {
+            // 播放页/歌词页显示时不拉起底部迷你条（避免双进度条），换歌也不复现
+            if (song != null && page != Page.PLAYER && page != Page.LYRICS) {
                 if (miniPlayer.visibility != View.VISIBLE) {
                     miniPlayer.visibility = View.VISIBLE
                     miniPlayer.alpha = 0f
@@ -174,7 +175,7 @@ class MainActivity : AppCompatActivity() {
                         .setDuration(250)
                         .start()
                 }
-            } else {
+            } else if (song == null) {
                 miniPlayer.visibility = View.GONE
             }
             lyricLines = lines
@@ -426,7 +427,7 @@ class MainActivity : AppCompatActivity() {
         if (saved != null) {
             val uri = Uri.parse(saved)
             if (hasPersistRead(uri)) {
-                if (prefs.getBoolean(KEY_AUTO_SCAN, true)) {
+                if (prefs.getBoolean(KEY_AUTO_SCAN, false)) {
                     scanLibrary(uri)
                 } else {
                     loadCachedLibrary()
@@ -863,7 +864,7 @@ class MainActivity : AppCompatActivity() {
         val rgUi = view.findViewById<RadioGroup>(R.id.rgUiSize)
         val rgFont = view.findViewById<RadioGroup>(R.id.rgFont)
 
-        chkAutoScan.isChecked = prefs.getBoolean(KEY_AUTO_SCAN, true)
+        chkAutoScan.isChecked = prefs.getBoolean(KEY_AUTO_SCAN, false)
         chkDark.isChecked = prefs.getBoolean(KEY_DARK, false)
         chkAutoTrans.isChecked = prefs.getBoolean(KEY_AUTO_TRANS, false)
         checkByTag(rgLyric, prefs.getInt(KEY_LYRIC_SIZE, 18))
