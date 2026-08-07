@@ -359,7 +359,8 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnBackSongs).setOnClickListener { backFromPlayer() }
         findViewById<Button>(R.id.btnLyrics).setOnClickListener { showPage(Page.LYRICS) }
         findViewById<ImageButton>(R.id.btnQueue).setOnClickListener { showQueueDialog() }
-        findViewById<ImageButton>(R.id.btnLyricsIcon).setOnClickListener { showPage(Page.LYRICS) }        findViewById<Button>(R.id.btnBackLyrics).setOnClickListener { showPage(Page.PLAYER) }
+        findViewById<ImageButton>(R.id.btnLyricsIcon).setOnClickListener { showPage(Page.LYRICS) }
+        findViewById<Button>(R.id.btnBackLyrics).setOnClickListener { showPage(Page.PLAYER) }
         findViewById<Button>(R.id.btnTranslate).setOnClickListener {
             translateCurrentLyric()
         }
