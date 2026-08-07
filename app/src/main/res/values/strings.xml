@@ -8,7 +8,7 @@
     <string name="trans_settings">翻译设置</string>
     <string name="trans_base_hint">接口地址（默认 https://api.deepseek.com/v1）</string>
     <string name="trans_key_hint">API Key（DeepSeek/通义/GLM 等）</string>
-    <string name="trans_model_hint">模型名（默认 deepseek-chat）</string>
+    <string name="trans_model_hint">模型名（默认 deepseek-v4-flash）</string>
     <string name="trans_save">保存</string>
     <string name="queue">播放列表</string>
     <string name="queue_empty">当前没有播放列表</string>

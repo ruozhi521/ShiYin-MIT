@@ -88,11 +88,14 @@ object LyricTranslator {
                     val expected = batch.map { it.first }.toSet()
                     val parsed = parseAny(respText, expected)
                     if (parsed.isEmpty()) {
-                        // 请求成功但没解析出译文：把响应片段带出来，便于定位
-                        val snippet = respText.replace(Regex("\\s+"), " ").take(500)
+                        // 请求成功但没解析出译文：把模型输出片段带出来，便于定位
+                        val content = extractContent(respText)
+                        val snippet = (content ?: respText)
+                            .replace(Regex("\\s+"), " ")
+                            .take(300)
                         return TransResult(
                             emptyMap(),
-                            "接口已响应但未解析出译文（可能未按格式输出或触发审核），响应：$snippet"
+                            "接口已响应但未解析出译文，模型输出：$snippet"
                         )
                     }
                     return TransResult(parsed, null)
@@ -131,12 +134,14 @@ object LyricTranslator {
     }
 
     /**
-     * 宽松解析：优先尝试 JSON 数组 / JSON 对象中的数组；
-     * 失败则按 "行号|译文" 逐行解析（大模型遵循率最高的格式）。
+     * 解析模型输出：先按 OpenAI 兼容标准从 choices[0].message.content 取出模型输出，
+     * 再尝试 JSON 数组 / 宽松 "行号|译文" 格式（大模型遵循率最高的格式）。
      */
     private fun parseAny(respText: String, expected: Set<Int>): Map<Int, String> {
+        val content = extractContent(respText)
+        val target = content ?: respText
         val jsonResult = try {
-            val json = extractJsonArray(respText) ?: return parseLoose(respText, expected)
+            val json = extractJsonArray(target) ?: return parseLoose(target, expected)
             val arr = JSONArray(json)
             val result = mutableMapOf<Int, String>()
             for (i in 0 until arr.length()) {
@@ -152,7 +157,19 @@ object LyricTranslator {
             emptyMap()
         }
         if (jsonResult.isNotEmpty()) return jsonResult
-        return parseLoose(respText, expected)
+        return parseLoose(target, expected)
+    }
+
+    /** 从标准 OpenAI 兼容响应中提取模型输出文本。 */
+    private fun extractContent(respText: String): String? {
+        return try {
+            val root = JSONObject(respText)
+            val choices = root.optJSONArray("choices") ?: return null
+            val first = choices.optJSONObject(0) ?: return null
+            first.optJSONObject("message")?.optString("content")
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private val looseLineRe = Regex("""^\s*(\d{1,3})\s*[|.、:：)）]\s*(.+?)\s*$""")

@@ -1045,17 +1045,26 @@ class MainActivity : AppCompatActivity() {
                 )
                 when {
                     result.translations.isEmpty() && result.error != null ->
-                        toast("翻译失败：${result.error}")
+                        showTransError("翻译失败：${result.error}")
                     result.translations.isEmpty() ->
                         toast(getString(R.string.trans_all_fail))
                     transFailedLines.isNotEmpty() && result.error != null ->
-                        toast("部分翻译失败：${result.error}")
+                        showTransError("部分翻译失败：${result.error}")
                     transFailedLines.isNotEmpty() ->
                         toast(getString(R.string.trans_partial_fail, transFailedLines.size))
                     else -> toast(getString(R.string.trans_ok))
                 }
             }
         }.start()
+    }
+
+    /** 用可滚动对话框显示翻译错误（完整内容，不受 toast 两行限制）。 */
+    private fun showTransError(msg: String) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.translate)
+            .setMessage(msg)
+            .setPositiveButton(R.string.close, null)
+            .show()
     }
 
     /**
@@ -1206,7 +1215,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_TRANS_MODEL = "trans_model"
         private const val KEY_AUTO_TRANS = "auto_translate"
         private const val DEFAULT_TRANS_BASE = "https://api.deepseek.com/v1"
-        private const val DEFAULT_TRANS_MODEL = "deepseek-chat"
+        private const val DEFAULT_TRANS_MODEL = "deepseek-v4-flash"
         private const val SUPPORT_URL = "https://www.ifdian.net/a/ruozhi521"
     }
 
