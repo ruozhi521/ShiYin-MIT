@@ -249,14 +249,8 @@ class MainActivity : AppCompatActivity() {
         viewSearch = findViewById(R.id.pageSearch)
         viewPlayer = findViewById(R.id.pagePlayer)
         viewLyrics = findViewById(R.id.pageLyrics)
-        viewPlayer.setOnTouchListener { _, e ->
-            pageFlingDetector.onTouchEvent(e)
-            false
-        }
-        viewLyrics.setOnTouchListener { _, e ->
-            pageFlingDetector.onTouchEvent(e)
-            false
-        }
+        (viewPlayer as SwipeFrameLayout).gestureDetector = pageFlingDetector
+        (viewLyrics as SwipeFrameLayout).gestureDetector = pageFlingDetector
 
         tabDiscover = findViewById(R.id.tabDiscover)
         tabLibrary = findViewById(R.id.tabLibrary)
@@ -357,10 +351,10 @@ class MainActivity : AppCompatActivity() {
 
         // ---- 播放页控制 ----
         findViewById<Button>(R.id.btnBackSongs).setOnClickListener { backFromPlayer() }
-        findViewById<Button>(R.id.btnLyrics).setOnClickListener { showPage(Page.LYRICS) }
+        findViewById<Button>(R.id.btnLyrics).setOnClickListener { showPage(Page.LYRICS, 1) }
         findViewById<ImageButton>(R.id.btnQueue).setOnClickListener { showQueueDialog() }
-        findViewById<ImageButton>(R.id.btnLyricsIcon).setOnClickListener { showPage(Page.LYRICS) }
-        findViewById<Button>(R.id.btnBackLyrics).setOnClickListener { showPage(Page.PLAYER) }
+        findViewById<ImageButton>(R.id.btnLyricsIcon).setOnClickListener { showPage(Page.LYRICS, 1) }
+        findViewById<Button>(R.id.btnBackLyrics).setOnClickListener { showPage(Page.PLAYER, -1) }
         findViewById<Button>(R.id.btnTranslate).setOnClickListener {
             translateCurrentLyric()
         }
@@ -481,7 +475,10 @@ class MainActivity : AppCompatActivity() {
         showPage(if (tab == 0) Page.DISCOVER else Page.LIBRARY)
     }
 
-    private fun showPage(p: Page) {
+    /**
+     * @param slide 切换动画方向：1 = 从右侧滑入（左滑翻页效果），-1 = 从左侧滑入，0 = 淡入
+     */
+    private fun showPage(p: Page, slide: Int = 0) {
         page = p
         val shows = listOf(
             viewDiscover to (p == Page.DISCOVER),
@@ -493,9 +490,20 @@ class MainActivity : AppCompatActivity() {
         )
         for ((v, show) in shows) {
             if (show && v.visibility != View.VISIBLE) {
-                v.alpha = 0f
-                v.visibility = View.VISIBLE
-                v.animate().alpha(1f).setDuration(180).start()
+                if (slide > 0 || slide < 0) {
+                    v.alpha = 1f
+                    v.translationX = if (slide > 0) {
+                        resources.displayMetrics.widthPixels.toFloat()
+                    } else {
+                        -resources.displayMetrics.widthPixels.toFloat()
+                    }
+                    v.visibility = View.VISIBLE
+                    v.animate().translationX(0f).setDuration(220).start()
+                } else {
+                    v.alpha = 0f
+                    v.visibility = View.VISIBLE
+                    v.animate().alpha(1f).setDuration(180).start()
+                }
             } else if (!show && v.visibility == View.VISIBLE) {
                 v.visibility = View.GONE
             }
@@ -525,6 +533,51 @@ class MainActivity : AppCompatActivity() {
 
     private val pageFlingDetector by lazy {
         GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            private var downY = 0f
+            private var totalDx = 0f
+            private var totalDy = 0f
+
+            override fun onDown(e: MotionEvent): Boolean {
+                downY = e.rawY
+                totalDx = 0f
+                totalDy = 0f
+                return true
+            }
+
+            // 主要触发方式：累计水平位移超过阈值即切换，不依赖甩动速度
+            override fun onScroll(
+                e1: MotionEvent?,
+                e2: MotionEvent,
+                distanceX: Float,
+                distanceY: Float
+            ): Boolean {
+                totalDx += distanceX
+                totalDy += distanceY
+                if (Math.abs(totalDx) < 80 || Math.abs(totalDx) < Math.abs(totalDy) * 2) {
+                    return false
+                }
+                // 排除从底部进度条/控制区发起的滑动，避免与拖动进度条冲突
+                if (page == Page.PLAYER) {
+                    val loc = IntArray(2)
+                    seekBar.getLocationOnScreen(loc)
+                    if (downY >= loc[1] - 20 * resources.displayMetrics.density) {
+                        totalDx = 0f
+                        totalDy = 0f
+                        return false
+                    }
+                }
+                // distanceX > 0 表示手指左移
+                if (totalDx > 0) {
+                    if (page == Page.PLAYER) showPage(Page.LYRICS, 1)
+                } else {
+                    if (page == Page.LYRICS) showPage(Page.PLAYER, -1)
+                }
+                totalDx = 0f
+                totalDy = 0f
+                return true
+            }
+
+            // 快速甩动兜底
             override fun onFling(
                 e1: MotionEvent?,
                 e2: MotionEvent,
@@ -535,9 +588,9 @@ class MainActivity : AppCompatActivity() {
                     return false
                 }
                 if (velocityX < 0) {
-                    if (page == Page.PLAYER) showPage(Page.LYRICS)
+                    if (page == Page.PLAYER) showPage(Page.LYRICS, 1)
                 } else {
-                    if (page == Page.LYRICS) showPage(Page.PLAYER)
+                    if (page == Page.LYRICS) showPage(Page.PLAYER, -1)
                 }
                 return true
             }
@@ -546,7 +599,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onBackPressed() {
         when (page) {
-            Page.LYRICS -> showPage(Page.PLAYER)
+            Page.LYRICS -> showPage(Page.PLAYER, -1)
             Page.PLAYER -> backFromPlayer()
             Page.PLAYLIST, Page.SEARCH -> showPage(Page.LIBRARY)
             else -> super.onBackPressed()
