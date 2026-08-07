@@ -1031,20 +1031,25 @@ class MainActivity : AppCompatActivity() {
             val result = try {
                 LyricTranslator.translate(toTranslate, cfg)
             } catch (e: Exception) {
-                emptyMap()
+                LyricTranslator.TransResult(emptyMap(), "请求异常：${e.message}")
             }
             runOnUiThread {
                 translating = false
                 btnTranslate.isEnabled = true
                 btnTranslate.text = getString(R.string.translate)
-                cache.putAll(result)
+                cache.putAll(result.translations)
                 LyricTranslationCache.save(applicationContext, translationCache)
-                transFailedLines = toTranslate.filter { it.first !in result }
+                transFailedLines = toTranslate.filter { it.first !in result.translations }
                 lyricAdapter.setTranslations(
                     translationCache[lastSong?.uri?.toString()] ?: emptyMap()
                 )
                 when {
-                    result.isEmpty() -> toast(getString(R.string.trans_all_fail))
+                    result.translations.isEmpty() && result.error != null ->
+                        toast("翻译失败：${result.error}")
+                    result.translations.isEmpty() ->
+                        toast(getString(R.string.trans_all_fail))
+                    transFailedLines.isNotEmpty() && result.error != null ->
+                        toast("部分翻译失败：${result.error}")
                     transFailedLines.isNotEmpty() ->
                         toast(getString(R.string.trans_partial_fail, transFailedLines.size))
                     else -> toast(getString(R.string.trans_ok))
