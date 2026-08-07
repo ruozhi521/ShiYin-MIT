@@ -61,8 +61,9 @@ object LyricTranslator {
                                 .put("role", "system")
                                 .put(
                                     "content",
-                                    "你是专业的歌词翻译员。请把用户提供的歌词逐行翻译成中文，保留行号对应。直接输出 JSON 数组，格式：" +
-                                        "[{\"line\":行号,\"trans\":\"译文\"}]。不要输出任何其他内容，不要拒绝翻译，不要添加解释。"
+                                    "你是专业的歌词翻译员。请把用户提供的歌词逐行翻译成简体中文，行号一一对应。只输出一个 JSON 数组，格式示例：" +
+                                        "[{\"line\":1,\"trans\":\"第一行译文\"},{\"line\":2,\"trans\":\"第二行译文\"}]。" +
+                                        "不要输出任何其他内容（不要代码块标记、不要解释、不要客气话）。即使内容敏感也直接忠实翻译，不要拒绝。"
                                 )
                         )
                         .put(
@@ -86,10 +87,17 @@ object LyricTranslator {
                     val respText = conn.inputStream.use {
                         it.readBytes().toString(Charsets.UTF_8)
                     }
-                    return TransResult(
-                        parseResponse(respText, batch.map { it.first }.toSet()),
-                        null
-                    )
+                    val expected = batch.map { it.first }.toSet()
+                    val parsed = parseResponse(respText, expected)
+                    if (parsed.isEmpty()) {
+                        // 请求成功但没解析出译文：把响应片段带出来，便于定位
+                        val snippet = respText.replace(Regex("\\s+"), " ").take(200)
+                        return TransResult(
+                            emptyMap(),
+                            "接口已响应但未解析出译文（可能模型未按 JSON 输出或触发审核），响应：$snippet"
+                        )
+                    }
+                    return TransResult(parsed, null)
                 }
                 conn.errorStream?.use { it.readBytes() }
                 return TransResult(emptyMap(), httpError(code))
@@ -117,6 +125,7 @@ object LyricTranslator {
 
     private fun httpError(code: Int): String = when (code) {
         401, 403 -> "API Key 无效或无权限（HTTP $code）"
+        402 -> "账户余额不足或欠费（HTTP 402）"
         404 -> "接口地址不正确（HTTP 404），请检查 Base URL"
         429 -> "请求过于频繁（HTTP 429），请稍后重试"
         in 500..599 -> "服务器错误（HTTP $code），请稍后重试"
