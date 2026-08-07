@@ -61,9 +61,7 @@ object LyricTranslator {
                                 .put("role", "system")
                                 .put(
                                     "content",
-                                    "你是专业的歌词翻译员。请把用户提供的歌词逐行翻译成简体中文，行号一一对应。只输出一个 JSON 数组，格式示例：" +
-                                        "[{\"line\":1,\"trans\":\"第一行译文\"},{\"line\":2,\"trans\":\"第二行译文\"}]。" +
-                                        "不要输出任何其他内容（不要代码块标记、不要解释、不要客气话）。即使内容敏感也直接忠实翻译，不要拒绝。"
+                                    "你是专业的歌词翻译员。用户会提供带行号的歌词（每行格式：行号|原文）。请把每行翻译成简体中文，并保持行号对应，逐行输出，每行格式：行号|译文。不要输出任何其他内容（不要代码块、不要解释、不要空行分隔）。即使内容敏感也直接忠实翻译，不要拒绝。"
                                 )
                         )
                         .put(
@@ -88,13 +86,13 @@ object LyricTranslator {
                         it.readBytes().toString(Charsets.UTF_8)
                     }
                     val expected = batch.map { it.first }.toSet()
-                    val parsed = parseResponse(respText, expected)
+                    val parsed = parseAny(respText, expected)
                     if (parsed.isEmpty()) {
                         // 请求成功但没解析出译文：把响应片段带出来，便于定位
-                        val snippet = respText.replace(Regex("\\s+"), " ").take(200)
+                        val snippet = respText.replace(Regex("\\s+"), " ").take(500)
                         return TransResult(
                             emptyMap(),
-                            "接口已响应但未解析出译文（可能模型未按 JSON 输出或触发审核），响应：$snippet"
+                            "接口已响应但未解析出译文（可能未按格式输出或触发审核），响应：$snippet"
                         )
                     }
                     return TransResult(parsed, null)
@@ -132,9 +130,13 @@ object LyricTranslator {
         else -> "请求失败（HTTP $code）"
     }
 
-    private fun parseResponse(respText: String, expected: Set<Int>): Map<Int, String> {
-        return try {
-            val json = extractJsonArray(respText) ?: return emptyMap()
+    /**
+     * 宽松解析：优先尝试 JSON 数组 / JSON 对象中的数组；
+     * 失败则按 "行号|译文" 逐行解析（大模型遵循率最高的格式）。
+     */
+    private fun parseAny(respText: String, expected: Set<Int>): Map<Int, String> {
+        val jsonResult = try {
+            val json = extractJsonArray(respText) ?: return parseLoose(respText, expected)
             val arr = JSONArray(json)
             val result = mutableMapOf<Int, String>()
             for (i in 0 until arr.length()) {
@@ -149,9 +151,27 @@ object LyricTranslator {
         } catch (e: Exception) {
             emptyMap()
         }
+        if (jsonResult.isNotEmpty()) return jsonResult
+        return parseLoose(respText, expected)
     }
 
-    /** 从模型输出中提取 JSON 数组（容忍 ```json 包裹或前后杂文本）。 */
+    private val looseLineRe = Regex("""^\s*(\d{1,3})\s*[|.、:：)）]\s*(.+?)\s*$""")
+
+    /** 解析形如 `1|译文`、`1. 译文`、`1：译文` 的逐行输出。 */
+    private fun parseLoose(respText: String, expected: Set<Int>): Map<Int, String> {
+        val result = mutableMapOf<Int, String>()
+        for (line in respText.lines()) {
+            val m = looseLineRe.find(line) ?: continue
+            val idx = m.groupValues[1].toIntOrNull() ?: continue
+            val trans = m.groupValues[2].trim()
+            if (idx in expected && trans.isNotEmpty()) {
+                result[idx] = trans
+            }
+        }
+        return result
+    }
+
+    /** 从模型输出中提取 JSON 数组（容忍 ```json 包裹或前后杂文本、或包在对象里）。 */
     private fun extractJsonArray(text: String): String? {
         val start = text.indexOf('[')
         val end = text.lastIndexOf(']')
