@@ -3,8 +3,34 @@ name: Build APK
 on:
   push:
   workflow_dispatch:
+    inputs:
+      gen_keystore:
+        description: 'Generate a stable debug keystore (run once, then save artifact to Secrets)'
+        type: boolean
+        default: false
 
 jobs:
+  # 一次性 job：生成固定 debug 签名（仅手动运行且勾选 gen_keystore 时执行）。
+  # 产出 keystore.b64，保存到 GitHub Secrets（DEBUG_KEYSTORE_B64）后，
+  # 所有后续构建都用同一签名，覆盖安装不再丢数据。
+  gen-keystore:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.gen_keystore == 'true'
+    steps:
+      - name: Generate stable debug keystore
+        run: |
+          mkdir -p ~/.android
+          keytool -genkeypair -v -keystore ~/.android/debug.keystore \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US"
+          base64 -w0 ~/.android/debug.keystore > keystore.b64
+      - name: Upload keystore base64
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-keystore-b64
+          path: keystore.b64
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -21,6 +47,16 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.2'
+
+      - name: Restore stable debug keystore (if configured)
+        run: |
+          if [ -n "${{ secrets.DEBUG_KEYSTORE_B64 }}" ]; then
+            mkdir -p ~/.android
+            echo "${{ secrets.DEBUG_KEYSTORE_B64 }}" | base64 -d > ~/.android/debug.keystore
+            echo "Stable keystore restored — signature will be consistent."
+          else
+            echo "DEBUG_KEYSTORE_B64 not set: APK signature changes every build, installs will ask to uninstall the old version. Set it once to enable in-place updates."
+          fi
 
       - name: Show versions
         run: gradle --version
