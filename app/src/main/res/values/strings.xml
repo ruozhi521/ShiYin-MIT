@@ -25,6 +25,8 @@
     <string name="desktop_lyrics_alpha_0">不透明</string>
     <string name="desktop_lyrics_alpha_1">半透明</string>
     <string name="desktop_lyrics_alpha_2">更透明</string>
+    <string name="mix_audio_label">与其他音频同时播放</string>
+    <string name="mix_audio_hint">开启后不会因其他应用（视频/广告等）播放而暂停，适合边听歌边刷视频</string>
     <string name="translate">翻译</string>
     <string name="retry_translate">重试翻译</string>
     <string name="translating">翻译中…</string>

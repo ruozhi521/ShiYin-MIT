@@ -878,6 +878,8 @@ class MainActivity : AppCompatActivity() {
         val rgDesktopSize = view.findViewById<RadioGroup>(R.id.rgDesktopSize)
         val rgDesktopAlpha = view.findViewById<RadioGroup>(R.id.rgDesktopAlpha)
         val chkLyricsLocked = view.findViewById<CheckBox>(R.id.chkLyricsLocked)
+        val chkMixAudio = view.findViewById<CheckBox>(R.id.chkMixAudio)
+        chkMixAudio.isChecked = prefs.getBoolean(KEY_MIX_AUDIO, false)
         chkDesktopLyrics.isChecked = prefs.getBoolean(KEY_DESKTOP_ON, false)
         lyricsGroup.visibility =
             if (chkDesktopLyrics.isChecked) View.VISIBLE else View.GONE
@@ -931,6 +933,7 @@ class MainActivity : AppCompatActivity() {
                     .putInt(KEY_DESKTOP_SIZE, tagOf(rgDesktopSize))
                     .putInt(KEY_DESKTOP_ALPHA, tagOf(rgDesktopAlpha))
                     .putBoolean(KEY_DESKTOP_LOCKED, chkLyricsLocked.isChecked)
+                    .putBoolean(KEY_MIX_AUDIO, chkMixAudio.isChecked)
                     .apply()
                 applyAppearance()
                 applyDarkMode(chkDark.isChecked)
@@ -1251,6 +1254,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_DESKTOP_SIZE = "desktop_lyrics_size"
         private const val KEY_DESKTOP_ALPHA = "desktop_lyrics_alpha"
         private const val KEY_DESKTOP_LOCKED = "desktop_lyrics_locked"
+        private const val KEY_MIX_AUDIO = "mix_audio"
         private const val DEFAULT_TRANS_BASE = "https://api.deepseek.com/v1"
         private const val DEFAULT_TRANS_MODEL = "deepseek-v4-flash"
         private const val SUPPORT_URL = "https://www.ifdian.net/a/ruozhi521"

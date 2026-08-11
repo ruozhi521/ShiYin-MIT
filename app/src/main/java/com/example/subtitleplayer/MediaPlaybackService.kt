@@ -54,6 +54,7 @@ class MediaPlaybackService : Service() {
         const val KEY_LAST_URI = "last_uri"
         const val KEY_LAST_POS = "last_pos"
         const val KEY_DESKTOP_ON = "desktop_lyrics_on"
+        const val KEY_MIX_AUDIO = "mix_audio"
     }
 
     private val binder = PlaybackBinder()
@@ -103,6 +104,8 @@ class MediaPlaybackService : Service() {
     }
 
     private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        // 混合播放模式：不响应任何焦点变化（与其他音频同时出声，互不打断）
+        if (isMixAudioOn()) return@OnAudioFocusChangeListener
         when (change) {
             AudioManager.AUDIOFOCUS_LOSS -> {
                 resumeAfterFocusLoss = false
@@ -459,6 +462,8 @@ class MediaPlaybackService : Service() {
     // ---------- 音频焦点 ----------
 
     private fun requestFocus(): Boolean {
+        // 混合播放模式：不请求音频焦点，也不响应焦点变化
+        if (isMixAudioOn()) return true
         val am = audioManager ?: return true
         val afr = audioFocusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
             .setAudioAttributes(
@@ -472,6 +477,10 @@ class MediaPlaybackService : Service() {
             .also { audioFocusRequest = it }
         return am.requestAudioFocus(afr) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
     }
+
+    /** 混合播放开关：开启后不请求/不响应音频焦点，可与其他音频同时播放。 */
+    private fun isMixAudioOn(): Boolean =
+        getSharedPreferences("player", Context.MODE_PRIVATE).getBoolean(KEY_MIX_AUDIO, false)
 
     private fun abandonFocus() {
         val am = audioManager ?: return

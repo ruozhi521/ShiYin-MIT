@@ -157,6 +157,23 @@
                 android:textSize="14sp" />
         </LinearLayout>
 
+        <CheckBox
+            android:id="@+id/chkMixAudio"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/mix_audio_label"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="30dp"
+            android:text="@string/mix_audio_hint"
+            android:textColor="@color/text_hint"
+            android:textSize="12sp" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
