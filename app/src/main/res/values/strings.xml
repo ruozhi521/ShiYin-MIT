@@ -17,6 +17,7 @@
     <string name="desktop_lyrics_off">关闭歌词</string>
     <string name="desktop_lyrics_ready">拾音 · 桌面歌词</string>
     <string name="desktop_lyrics_perm_needed">需要「显示在其他应用上层」权限才能使用桌面歌词</string>
+    <string name="desktop_lyrics_later">播放歌曲后会自动显示桌面歌词（首次需在系统设置中允许悬浮窗权限）</string>
     <string name="desktop_lyrics_label">桌面歌词</string>
     <string name="desktop_lyrics_size_label">歌词字号</string>
     <string name="desktop_lyrics_alpha_label">背景透明度</string>

@@ -394,10 +394,12 @@ class MediaPlaybackService : Service() {
         setDesktopLyrics(!isDesktopLyricsOn())
     }
 
-    /** 开启/关闭桌面歌词；未授权悬浮窗权限时跳转系统设置引导授权。 */
-    fun setDesktopLyrics(on: Boolean) {        val sp = getSharedPreferences("player", Context.MODE_PRIVATE)
+    /** 开启/关闭桌面歌词；未授权悬浮窗权限时提示并跳转系统设置引导授权。 */
+    fun setDesktopLyrics(on: Boolean) {
+        val sp = getSharedPreferences("player", Context.MODE_PRIVATE)
         if (on) {
             if (!Settings.canDrawOverlays(this)) {
+                toast(getString(R.string.desktop_lyrics_perm_needed))
                 try {
                     val intent = Intent(
                         Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -405,7 +407,7 @@ class MediaPlaybackService : Service() {
                     ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     startActivity(intent)
                 } catch (e: Exception) {
-                    // 部分 ROM 不支持该页面，忽略
+                    // 部分 ROM 不支持该页面；上面的 Toast 已提示用户去设置里手动开启
                 }
                 return
             }
@@ -418,6 +420,10 @@ class MediaPlaybackService : Service() {
             sp.edit().putBoolean(KEY_DESKTOP_ON, false).apply()
         }
         showForeground()
+    }
+
+    private fun toast(msg: String) {
+        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
     }
 
     /** 字号/透明度/锁定设置变更后，让已显示的悬浮窗立即刷新样式。 */

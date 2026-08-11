@@ -888,10 +888,15 @@ class MainActivity : AppCompatActivity() {
         chkDesktopLyrics.setOnCheckedChangeListener { _, checked ->
             lyricsGroup.visibility = if (checked) View.VISIBLE else View.GONE
             prefs.edit().putBoolean(KEY_DESKTOP_ON, checked).apply()
-            if (checked && !Settings.canDrawOverlays(this)) {
-                toast(getString(R.string.desktop_lyrics_perm_needed))
+            if (checked) {
+                if (playbackService == null) {
+                    toast(getString(R.string.desktop_lyrics_later))
+                } else {
+                    playbackService?.setDesktopLyrics(true)
+                }
+            } else {
+                playbackService?.setDesktopLyrics(false)
             }
-            playbackService?.setDesktopLyrics(checked)
         }
 
         chkAutoTrans.setOnCheckedChangeListener { _, checked ->
