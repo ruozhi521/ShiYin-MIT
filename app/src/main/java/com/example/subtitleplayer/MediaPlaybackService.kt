@@ -69,6 +69,7 @@ class MediaPlaybackService : Service() {
     private var lyricMap: Map<String, LyricRef> = emptyMap()
     private var lyricLines: List<SubtitleLine> = emptyList()
     private var lyricName: String? = null
+    private var lyricTrans: Map<Int, String> = emptyMap()
 
     private var audioManager: AudioManager? = null
     private var audioFocusRequest: AudioFocusRequest? = null
@@ -340,6 +341,12 @@ class MediaPlaybackService : Service() {
     private fun loadLyric(song: Song) {
         lyricLines = emptyList()
         lyricName = null
+        // 载入该歌的本地译文缓存（桌面歌词双行显示用）
+        lyricTrans = try {
+            LyricTranslationCache.load(this)[song.uri.toString()] ?: emptyMap()
+        } catch (e: Exception) {
+            emptyMap()
+        }
         // 1. 外部 .lrc / .vtt 文件优先
         val ref = LibraryScanner.findLyric(song, lyricMap)
         if (ref != null) {
@@ -378,10 +385,28 @@ class MediaPlaybackService : Service() {
         return idx
     }
 
-    /** 当前进度对应的歌词文本（桌面歌词用）。 */
+    /** 当前进度对应的歌词文本（桌面歌词用）；有译文时显示 原文+译文 双行。 */
     private fun lyricTextAt(pos: Int): String {
         val idx = lyricIndexAt(pos)
-        return if (idx >= 0) lyricLines[idx].text else ""
+        if (idx < 0) return ""
+        val text = lyricLines[idx].text
+        val trans = lyricTrans[idx]
+        return if (trans != null && trans.isNotEmpty() && trans != text) {
+            "$text\n$trans"
+        } else {
+            text
+        }
+    }
+
+    /** 翻译完成后由 Activity 调用：重新载入当前歌的译文缓存，刷新桌面歌词。 */
+    fun reloadLyricTranslations() {
+        val song = currentSong() ?: return
+        lyricTrans = try {
+            LyricTranslationCache.load(this)[song.uri.toString()] ?: emptyMap()
+        } catch (e: Exception) {
+            emptyMap()
+        }
+        desktopLyrics?.updateText(lyricTextAt(mediaPlayer?.currentPosition ?: 0))
     }
 
     // ---------- 桌面歌词 ----------

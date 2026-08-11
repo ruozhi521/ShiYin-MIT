@@ -1075,6 +1075,7 @@ class MainActivity : AppCompatActivity() {
                 lyricAdapter.setTranslations(
                     translationCache[lastSong?.uri?.toString()] ?: emptyMap()
                 )
+                playbackService?.reloadLyricTranslations()
                 when {
                     result.translations.isEmpty() && result.error != null ->
                         showTransError("翻译失败：${result.error}")
