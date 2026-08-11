@@ -76,6 +76,17 @@ gradle assembleDebug
 
 仓库已配置 [GitHub Actions](.github/workflows/build-apk.yml)，推送后自动编译并上传 APK 产物，无需本地环境。
 
+### 🔑 稳定签名（重要：覆盖安装不丢数据）
+
+默认 debug 构建每次云端编译会用**临时签名**，导致手机要求"删除旧版"再安装（数据会丢）。配置一次固定签名后，以后更新都是**覆盖安装、数据保留**：
+
+1. 仓库 Actions 页 → 手动运行 workflow → 勾选 **Generate a stable debug keystore** → 运行
+2. 下载产物 `debug-keystore-b64` 里的 `keystore.b64`，打开复制全部内容
+3. 仓库 Settings → Secrets and variables → Actions → New repository secret：
+   - Name：`DEBUG_KEYSTORE_B64`
+   - Value：粘贴刚才的内容
+4. 之后每次构建都会用同一签名；**唯一一次例外**：从旧签名换到新签名的这次更新，仍需先卸载旧版（旧数据会丢，之后不再需要）
+
 ## 🧱 技术栈
 
 - 语言：Kotlin

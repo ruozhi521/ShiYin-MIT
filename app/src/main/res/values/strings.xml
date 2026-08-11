@@ -13,6 +13,17 @@
     <string name="queue">播放列表</string>
     <string name="queue_empty">当前没有播放列表</string>
     <string name="close">关闭</string>
+    <string name="desktop_lyrics_on">桌面歌词</string>
+    <string name="desktop_lyrics_off">关闭歌词</string>
+    <string name="desktop_lyrics_ready">拾音 · 桌面歌词</string>
+    <string name="desktop_lyrics_perm_needed">需要「显示在其他应用上层」权限才能使用桌面歌词</string>
+    <string name="desktop_lyrics_label">桌面歌词</string>
+    <string name="desktop_lyrics_size_label">歌词字号</string>
+    <string name="desktop_lyrics_alpha_label">背景透明度</string>
+    <string name="desktop_lyrics_locked">锁定位置（不可拖动）</string>
+    <string name="desktop_lyrics_alpha_0">不透明</string>
+    <string name="desktop_lyrics_alpha_1">半透明</string>
+    <string name="desktop_lyrics_alpha_2">更透明</string>
     <string name="translate">翻译</string>
     <string name="retry_translate">重试翻译</string>
     <string name="translating">翻译中…</string>

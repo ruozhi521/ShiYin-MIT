@@ -20,6 +20,8 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.provider.Settings
+import android.net.Uri
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.Charset
@@ -48,8 +50,10 @@ class MediaPlaybackService : Service() {
         const val ACTION_PLAY_PAUSE = "com.example.subtitleplayer.PLAY_PAUSE"
         const val ACTION_NEXT = "com.example.subtitleplayer.NEXT"
         const val ACTION_PREV = "com.example.subtitleplayer.PREV"
+        const val ACTION_TOGGLE_LYRICS = "com.example.subtitleplayer.TOGGLE_LYRICS"
         const val KEY_LAST_URI = "last_uri"
         const val KEY_LAST_POS = "last_pos"
+        const val KEY_DESKTOP_ON = "desktop_lyrics_on"
     }
 
     private val binder = PlaybackBinder()
@@ -75,6 +79,8 @@ class MediaPlaybackService : Service() {
 
     private var sleepRunnable: Runnable? = null
 
+    private var desktopLyrics: DesktopLyricsOverlay? = null
+
     private val statePrefs by lazy {
         getSharedPreferences("play_state", Context.MODE_PRIVATE)
     }
@@ -87,6 +93,7 @@ class MediaPlaybackService : Service() {
             if (mp != null && isPrepared) {
                 val pos = mp.currentPosition
                 listener?.onProgress(pos, durationMs, lyricIndexAt(pos))
+                desktopLyrics?.updateText(lyricTextAt(pos))
                 tick++
                 if (tick % 30 == 0) savePosition()
                 handler.postDelayed(this, 300)
@@ -128,7 +135,10 @@ class MediaPlaybackService : Service() {
             ACTION_PLAY_PAUSE -> togglePlay()
             ACTION_PREV -> playPrev()
             ACTION_NEXT -> playNext()
+            ACTION_TOGGLE_LYRICS -> toggleDesktopLyrics()
         }
+        // 服务每次启动（含后台重建）时恢复桌面歌词开关状态
+        if (isDesktopLyricsOn()) setDesktopLyrics(true)
         showForeground()
         return START_NOT_STICKY
     }
@@ -138,6 +148,7 @@ class MediaPlaybackService : Service() {
     override fun onDestroy() {
         savePosition()
         handler.removeCallbacks(progressRunnable)
+        desktopLyrics?.hide()
         abandonFocus()
         mediaPlayer?.release()
         mediaPlayer = null
@@ -367,6 +378,53 @@ class MediaPlaybackService : Service() {
         return idx
     }
 
+    /** 当前进度对应的歌词文本（桌面歌词用）。 */
+    private fun lyricTextAt(pos: Int): String {
+        val idx = lyricIndexAt(pos)
+        return if (idx >= 0) lyricLines[idx].text else ""
+    }
+
+    // ---------- 桌面歌词 ----------
+
+    fun isDesktopLyricsOn(): Boolean = getSharedPreferences("player", Context.MODE_PRIVATE)
+        .getBoolean(KEY_DESKTOP_ON, false)
+
+    /** 通知栏按钮触发：切换桌面歌词开/关。 */
+    fun toggleDesktopLyrics() {
+        setDesktopLyrics(!isDesktopLyricsOn())
+    }
+
+    /** 开启/关闭桌面歌词；未授权悬浮窗权限时跳转系统设置引导授权。 */
+    fun setDesktopLyrics(on: Boolean) {        val sp = getSharedPreferences("player", Context.MODE_PRIVATE)
+        if (on) {
+            if (!Settings.canDrawOverlays(this)) {
+                try {
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    // 部分 ROM 不支持该页面，忽略
+                }
+                return
+            }
+            val overlay = desktopLyrics ?: DesktopLyricsOverlay(this).also { desktopLyrics = it }
+            overlay.show()
+            overlay.updateText(lyricTextAt(mediaPlayer?.currentPosition ?: 0))
+            sp.edit().putBoolean(KEY_DESKTOP_ON, true).apply()
+        } else {
+            desktopLyrics?.hide()
+            sp.edit().putBoolean(KEY_DESKTOP_ON, false).apply()
+        }
+        showForeground()
+    }
+
+    /** 字号/透明度/锁定设置变更后，让已显示的悬浮窗立即刷新样式。 */
+    fun refreshDesktopLyricsStyle() {
+        desktopLyrics?.refreshStyle()
+    }
+
     // ---------- 音频焦点 ----------
 
     private fun requestFocus(): Boolean {
@@ -456,9 +514,12 @@ class MediaPlaybackService : Service() {
         val prevPi = servicePi(ACTION_PREV, 1)
         val ppPi = servicePi(ACTION_PLAY_PAUSE, 2)
         val nextPi = servicePi(ACTION_NEXT, 3)
+        val lyricsPi = servicePi(ACTION_TOGGLE_LYRICS, 4)
 
         val playIcon = if (playing) R.drawable.ic_pause else R.drawable.ic_play
         val playLabel = getString(if (playing) R.string.pause else R.string.play)
+        val lyricsLabel =
+            getString(if (isDesktopLyricsOn()) R.string.desktop_lyrics_off else R.string.desktop_lyrics_on)
 
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_music)
@@ -476,6 +537,9 @@ class MediaPlaybackService : Service() {
             )
             .addAction(
                 Notification.Action.Builder(R.drawable.ic_next, getString(R.string.next), nextPi).build()
+            )
+            .addAction(
+                Notification.Action.Builder(R.drawable.ic_lyric, lyricsLabel, lyricsPi).build()
             )
             .setStyle(
                 Notification.MediaStyle()

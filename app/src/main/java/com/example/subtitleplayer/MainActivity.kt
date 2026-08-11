@@ -13,6 +13,7 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.os.IBinder
 import android.text.Editable
 import android.text.TextWatcher
@@ -871,6 +872,28 @@ class MainActivity : AppCompatActivity() {
         checkByTag(rgUi, prefs.getInt(KEY_UI_SIZE, 15))
         checkByTag(rgFont, prefs.getInt(KEY_LYRIC_FONT, 0))
 
+        // ---- 桌面歌词 ----
+        val chkDesktopLyrics = view.findViewById<CheckBox>(R.id.chkDesktopLyrics)
+        val lyricsGroup = view.findViewById<View>(R.id.lyricsGroup)
+        val rgDesktopSize = view.findViewById<RadioGroup>(R.id.rgDesktopSize)
+        val rgDesktopAlpha = view.findViewById<RadioGroup>(R.id.rgDesktopAlpha)
+        val chkLyricsLocked = view.findViewById<CheckBox>(R.id.chkLyricsLocked)
+        chkDesktopLyrics.isChecked = prefs.getBoolean(KEY_DESKTOP_ON, false)
+        lyricsGroup.visibility =
+            if (chkDesktopLyrics.isChecked) View.VISIBLE else View.GONE
+        checkByTag(rgDesktopSize, prefs.getInt(KEY_DESKTOP_SIZE, 1))
+        checkByTag(rgDesktopAlpha, prefs.getInt(KEY_DESKTOP_ALPHA, 1))
+        chkLyricsLocked.isChecked = prefs.getBoolean(KEY_DESKTOP_LOCKED, false)
+        // 勾选/取消即时生效（含悬浮窗权限引导），避免用户忘了点确定
+        chkDesktopLyrics.setOnCheckedChangeListener { _, checked ->
+            lyricsGroup.visibility = if (checked) View.VISIBLE else View.GONE
+            prefs.edit().putBoolean(KEY_DESKTOP_ON, checked).apply()
+            if (checked && !Settings.canDrawOverlays(this)) {
+                toast(getString(R.string.desktop_lyrics_perm_needed))
+            }
+            playbackService?.setDesktopLyrics(checked)
+        }
+
         chkAutoTrans.setOnCheckedChangeListener { _, checked ->
             if (checked) {
                 AlertDialog.Builder(this)
@@ -900,9 +923,13 @@ class MainActivity : AppCompatActivity() {
                     .putInt(KEY_LYRIC_SIZE, tagOf(rgLyric))
                     .putInt(KEY_UI_SIZE, tagOf(rgUi))
                     .putInt(KEY_LYRIC_FONT, tagOf(rgFont))
+                    .putInt(KEY_DESKTOP_SIZE, tagOf(rgDesktopSize))
+                    .putInt(KEY_DESKTOP_ALPHA, tagOf(rgDesktopAlpha))
+                    .putBoolean(KEY_DESKTOP_LOCKED, chkLyricsLocked.isChecked)
                     .apply()
                 applyAppearance()
                 applyDarkMode(chkDark.isChecked)
+                playbackService?.refreshDesktopLyricsStyle()
             }
             .setNegativeButton(R.string.cancel, null)
             .create()
@@ -1214,6 +1241,10 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_TRANS_KEY = "trans_key"
         private const val KEY_TRANS_MODEL = "trans_model"
         private const val KEY_AUTO_TRANS = "auto_translate"
+        private const val KEY_DESKTOP_ON = "desktop_lyrics_on"
+        private const val KEY_DESKTOP_SIZE = "desktop_lyrics_size"
+        private const val KEY_DESKTOP_ALPHA = "desktop_lyrics_alpha"
+        private const val KEY_DESKTOP_LOCKED = "desktop_lyrics_locked"
         private const val DEFAULT_TRANS_BASE = "https://api.deepseek.com/v1"
         private const val DEFAULT_TRANS_MODEL = "deepseek-v4-flash"
         private const val SUPPORT_URL = "https://www.ifdian.net/a/ruozhi521"
