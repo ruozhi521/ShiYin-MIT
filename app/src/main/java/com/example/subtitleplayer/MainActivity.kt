@@ -5,6 +5,9 @@ import android.animation.ObjectAnimator
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ComponentName
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.app.TimePickerDialog
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
@@ -880,6 +883,9 @@ class MainActivity : AppCompatActivity() {
         val chkLyricsLocked = view.findViewById<CheckBox>(R.id.chkLyricsLocked)
         val chkMixAudio = view.findViewById<CheckBox>(R.id.chkMixAudio)
         chkMixAudio.isChecked = prefs.getBoolean(KEY_MIX_AUDIO, false)
+        val chkAlarmPlay = view.findViewById<CheckBox>(R.id.chkAlarmPlay)
+        chkAlarmPlay.isChecked = prefs.getBoolean(KEY_ALARM_ON, false)
+        chkAlarmPlay.setOnClickListener { showAlarmPicker(chkAlarmPlay) }
         chkDesktopLyrics.isChecked = prefs.getBoolean(KEY_DESKTOP_ON, false)
         lyricsGroup.visibility =
             if (chkDesktopLyrics.isChecked) View.VISIBLE else View.GONE
@@ -991,6 +997,61 @@ class MainActivity : AppCompatActivity() {
             .setView(rv)
             .setPositiveButton(R.string.close, null)
             .show()
+    }
+
+    // ---------- 定时开始播放 ----------
+
+    private fun showAlarmPicker(chk: CheckBox) {
+        // 取消勾选 → 关闭定时
+        if (!chk.isChecked) {
+            cancelAlarmPlay()
+            toast(getString(R.string.alarm_play_off))
+            return
+        }
+        val hour = prefs.getInt(KEY_ALARM_HOUR, 7)
+        val minute = prefs.getInt(KEY_ALARM_MINUTE, 30)
+        val dialog = TimePickerDialog(this, { _, h, m ->
+            scheduleAlarmPlay(h, m)
+            toast(getString(R.string.alarm_play_set, h, m))
+        }, hour, minute, true)
+        dialog.setOnCancelListener { chk.isChecked = false }
+        dialog.show()
+    }
+
+    private fun scheduleAlarmPlay(hour: Int, minute: Int) {
+        prefs.edit()
+            .putBoolean(KEY_ALARM_ON, true)
+            .putInt(KEY_ALARM_HOUR, hour)
+            .putInt(KEY_ALARM_MINUTE, minute)
+            .apply()
+        val cal = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, hour)
+            set(java.util.Calendar.MINUTE, minute)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+            if (timeInMillis <= System.currentTimeMillis()) {
+                add(java.util.Calendar.DAY_OF_YEAR, 1)
+            }
+        }
+        val pi = PendingIntent.getBroadcast(
+            this, 100,
+            Intent(this, AlarmPlayReceiver::class.java)
+                .setAction(MediaPlaybackService.ACTION_ALARM_PLAY),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, cal.timeInMillis, pi)
+    }
+
+    private fun cancelAlarmPlay() {
+        prefs.edit().putBoolean(KEY_ALARM_ON, false).apply()
+        val pi = PendingIntent.getBroadcast(
+            this, 100,
+            Intent(this, AlarmPlayReceiver::class.java)
+                .setAction(MediaPlaybackService.ACTION_ALARM_PLAY),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        (getSystemService(Context.ALARM_SERVICE) as AlarmManager).cancel(pi)
     }
 
     // ---------- 歌词 AI 翻译 ----------
@@ -1255,6 +1316,9 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_DESKTOP_ALPHA = "desktop_lyrics_alpha"
         private const val KEY_DESKTOP_LOCKED = "desktop_lyrics_locked"
         private const val KEY_MIX_AUDIO = "mix_audio"
+        private const val KEY_ALARM_ON = "alarm_play_on"
+        private const val KEY_ALARM_HOUR = "alarm_play_hour"
+        private const val KEY_ALARM_MINUTE = "alarm_play_minute"
         private const val DEFAULT_TRANS_BASE = "https://api.deepseek.com/v1"
         private const val DEFAULT_TRANS_MODEL = "deepseek-v4-flash"
         private const val SUPPORT_URL = "https://www.ifdian.net/a/ruozhi521"

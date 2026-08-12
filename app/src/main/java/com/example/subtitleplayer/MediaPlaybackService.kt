@@ -51,6 +51,7 @@ class MediaPlaybackService : Service() {
         const val ACTION_NEXT = "com.example.subtitleplayer.NEXT"
         const val ACTION_PREV = "com.example.subtitleplayer.PREV"
         const val ACTION_TOGGLE_LYRICS = "com.example.subtitleplayer.TOGGLE_LYRICS"
+        const val ACTION_ALARM_PLAY = "com.example.subtitleplayer.ALARM_PLAY"
         const val KEY_LAST_URI = "last_uri"
         const val KEY_LAST_POS = "last_pos"
         const val KEY_DESKTOP_ON = "desktop_lyrics_on"
@@ -140,6 +141,7 @@ class MediaPlaybackService : Service() {
             ACTION_PREV -> playPrev()
             ACTION_NEXT -> playNext()
             ACTION_TOGGLE_LYRICS -> toggleDesktopLyrics()
+            ACTION_ALARM_PLAY -> playLast()
         }
         // 服务每次启动（含后台重建）时恢复桌面歌词开关状态
         if (isDesktopLyricsOn()) setDesktopLyrics(true)
@@ -216,6 +218,40 @@ class MediaPlaybackService : Service() {
     fun seekToAndPlay(ms: Int) {
         seekTo(ms)
         if (!isPlaying()) play()
+    }
+
+    /** 定时开始播放：恢复上次播放的歌曲与进度。 */
+    private fun playLast() {
+        val lastUri = statePrefs.getString(KEY_LAST_URI, null)
+        if (lastUri.isNullOrEmpty()) return
+        val pos = statePrefs.getInt(KEY_LAST_POS, 0)
+        try {
+            val uri = android.net.Uri.parse(lastUri)
+            val title = queryDisplayName(uri) ?: "音乐"
+            val folder = queryFolder(uri)
+            startPlaylist(listOf(Song(title, uri, folder)), 0, emptyMap(), pos)
+        } catch (e: Exception) {
+            // uri 失效等：忽略
+        }
+    }
+
+    private fun queryDisplayName(uri: android.net.Uri): String? = try {
+        contentResolver.query(uri, null, null, null, null)?.use { c ->
+            if (c.moveToFirst()) {
+                val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0) c.getString(idx) else null
+            } else null
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun queryFolder(uri: android.net.Uri): String = try {
+        val path = uri.lastPathSegment ?: ""
+        val parts = path.split("/").filter { it.isNotEmpty() }
+        parts.getOrNull(parts.size - 2) ?: ""
+    } catch (e: Exception) {
+        ""
     }
 
     /** 持久化当前歌曲与进度，供下次启动断点续播。 */

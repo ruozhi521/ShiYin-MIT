@@ -96,8 +96,9 @@
         android:gravity="center"
         android:singleLine="true"
         android:text="@string/no_lyric_now"
-        android:textColor="@color/text_normal"
-        android:textSize="16sp" />
+        android:textColor="@color/accent"
+        android:textSize="18sp"
+        android:textStyle="bold" />
 
     <SeekBar
         android:id="@+id/seekBar"

@@ -172,11 +172,16 @@ class LyricAdapter(
     override fun onBindViewHolder(holder: Holder, position: Int) {
         val line = items[position]
         holder.text.text = line.text
-        holder.text.setTextSize(lyricSizeSp)
-        holder.text.typeface = when (fontMode) {
-            1 -> Typeface.SERIF
-            2 -> Typeface.MONOSPACE
-            else -> Typeface.DEFAULT
+        val isCurrent = position == current
+        holder.text.setTextSize(if (isCurrent) lyricSizeSp + 4f else lyricSizeSp)
+        holder.text.typeface = if (isCurrent) {
+            Typeface.DEFAULT_BOLD
+        } else {
+            when (fontMode) {
+                1 -> Typeface.SERIF
+                2 -> Typeface.MONOSPACE
+                else -> Typeface.DEFAULT
+            }
         }
         val trans = translations[position]
         if (trans != null) {
@@ -185,16 +190,19 @@ class LyricAdapter(
         } else {
             holder.trans.visibility = View.GONE
         }
-        if (position == current) {
+        if (isCurrent) {
             holder.itemView.setBackgroundResource(R.drawable.bg_current_line)
-            holder.text.setTextColor(
-                holder.text.context.getColor(R.color.text_primary)
-            )
+            holder.text.setTextColor(holder.text.context.getColor(R.color.accent))
+            holder.trans.setTextColor(holder.text.context.getColor(R.color.accent_dark))
         } else {
             holder.itemView.setBackgroundResource(0)
-            holder.text.setTextColor(
-                holder.text.context.getColor(R.color.text_normal)
-            )
+            holder.text.setTextColor(holder.text.context.getColor(R.color.text_normal))
+            holder.trans.setTextColor(holder.text.context.getColor(R.color.text_hint))
+        }
+        // 当前行淡入，更沉浸
+        if (isCurrent) {
+            holder.itemView.alpha = 0.4f
+            holder.itemView.animate().alpha(1f).setDuration(220).start()
         }
         holder.itemView.setOnClickListener { onClick(position) }
     }
