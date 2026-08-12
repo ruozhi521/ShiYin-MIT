@@ -7,6 +7,7 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.core.content.ContextCompat
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.RecyclerView
 
 /** 歌单列表适配器。 */
@@ -73,6 +74,16 @@ class SongAdapter(
     fun submit(list: List<Song>) {
         items = list
         notifyDataSetChanged()
+    }
+
+    /** 歌单拖拽排序：移动指定项并刷新。 */
+    fun move(from: Int, to: Int) {
+        if (from !in items.indices || to !in items.indices) return
+        val list = items.toMutableList()
+        val item = list.removeAt(from)
+        list.add(to, item)
+        items = list
+        notifyItemMoved(from, to)
     }
 
     fun setCurrentIndex(index: Int) {

@@ -36,6 +36,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import java.util.Locale
@@ -325,6 +326,7 @@ class MainActivity : AppCompatActivity() {
         )
         recyclerSongs.layoutManager = LinearLayoutManager(this)
         recyclerSongs.adapter = songAdapter
+        playlistTouchHelper.attachToRecyclerView(recyclerSongs)
 
         // ---- 全屏歌词 ----
         lyricAdapter = LyricAdapter { pos -> onLyricClick(pos) }
@@ -357,6 +359,18 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnLyrics).setOnClickListener { showPage(Page.LYRICS, 1) }
         findViewById<ImageButton>(R.id.btnQueue).setOnClickListener { showQueueDialog() }
         findViewById<ImageButton>(R.id.btnLyricsIcon).setOnClickListener { showPage(Page.LYRICS, 1) }
+        findViewById<ImageButton>(R.id.btnPlayMode).setOnClickListener {
+            val mode = playbackService?.cyclePlayMode() ?: 0
+            updatePlayModeButton(mode)
+            toast(
+                when (mode) {
+                    MediaPlaybackService.MODE_SHUFFLE -> getString(R.string.play_mode_shuffle)
+                    MediaPlaybackService.MODE_REPEAT_ONE -> getString(R.string.play_mode_repeat_one)
+                    else -> getString(R.string.play_mode_sequence)
+                }
+            )
+        }
+        updatePlayModeButton(playbackService?.getPlayMode() ?: 0)
         findViewById<Button>(R.id.btnBackLyrics).setOnClickListener { showPage(Page.PLAYER, -1) }
         findViewById<Button>(R.id.btnTranslate).setOnClickListener {
             translateCurrentLyric()
@@ -532,6 +546,17 @@ class MainActivity : AppCompatActivity() {
         showPage(if (currentTab == 0) Page.DISCOVER else Page.LIBRARY)
     }
 
+    private fun updatePlayModeButton(mode: Int) {
+        val btn = findViewById<ImageButton>(R.id.btnPlayMode)
+        val (icon, label) = when (mode) {
+            MediaPlaybackService.MODE_SHUFFLE -> R.drawable.ic_shuffle to R.string.play_mode_shuffle
+            MediaPlaybackService.MODE_REPEAT_ONE -> R.drawable.ic_repeat_one to R.string.play_mode_repeat_one
+            else -> R.drawable.ic_repeat to R.string.play_mode_sequence
+        }
+        btn.setImageResource(icon)
+        btn.contentDescription = getString(label)
+    }
+
     // ---------- 左右滑动切换播放页/歌词页 ----------
 
     /**
@@ -676,6 +701,7 @@ class MainActivity : AppCompatActivity() {
     private fun openArtistSongs(position: Int) {
         val (name, songs) = artistGroups.getOrNull(position) ?: return
         txtPlaylistTitle.text = name
+        dragEnabled = false
         currentSongs = songs
         songAdapter.submit(songs)
         showPage(Page.PLAYLIST)
@@ -685,9 +711,73 @@ class MainActivity : AppCompatActivity() {
 
     private fun openPlaylist(playlist: Playlist) {
         txtPlaylistTitle.text = playlist.name
-        currentSongs = playlist.songs
-        songAdapter.submit(playlist.songs)
+        dragEnabled = true
+        currentSongs = applyPlaylistOrder(playlist.songs, playlist.name)
+        songAdapter.submit(currentSongs)
         showPage(Page.PLAYLIST)
+    }
+
+    // ---------- 歌单手动排序 ----------
+
+    /** 是否允许歌单页长按拖拽排序（普通歌单 true，歌手页/搜索结果 false）。 */
+    private var dragEnabled = false
+
+    private val playlistTouchHelper by lazy {
+        ItemTouchHelper(object : ItemTouchHelper.Callback() {
+            override fun isLongPressDragEnabled() = dragEnabled
+            override fun isItemViewSwipeEnabled() = false
+            override fun getMovementFlags(
+                recyclerView: androidx.recyclerview.widget.RecyclerView,
+                viewHolder: androidx.recyclerview.widget.RecyclerView.ViewHolder
+            ): Int = makeMovementFlags(
+                if (dragEnabled) ItemTouchHelper.UP or ItemTouchHelper.DOWN else 0,
+                0
+            )
+            override fun onMove(
+                recyclerView: androidx.recyclerview.widget.RecyclerView,
+                viewHolder: androidx.recyclerview.widget.RecyclerView.ViewHolder,
+                target: androidx.recyclerview.widget.RecyclerView.ViewHolder
+            ): Boolean {
+                val from = viewHolder.bindingAdapterPosition
+                val to = target.bindingAdapterPosition
+                if (from >= 0 && to >= 0) {
+                    songAdapter.move(from, to)
+                }
+                return true
+            }
+            override fun onSwiped(
+                viewHolder: androidx.recyclerview.widget.RecyclerView.ViewHolder,
+                direction: Int
+            ) {
+            }
+            override fun clearView(
+                recyclerView: androidx.recyclerview.widget.RecyclerView,
+                viewHolder: androidx.recyclerview.widget.RecyclerView.ViewHolder
+            ) {
+                super.clearView(recyclerView, viewHolder)
+                saveCurrentPlaylistOrder()
+            }
+        })
+    }
+
+    /** 保存当前歌单（按标题名）的自定义顺序到本地。 */
+    private fun saveCurrentPlaylistOrder() {
+        val name = txtPlaylistTitle.text.toString()
+        if (name.isEmpty() || !dragEnabled) return
+        val uris = currentSongs.map { it.uri.toString() }
+        prefs.edit()
+            .putString("playlist_order_$name", uris.joinToString("\n"))
+            .apply()
+    }
+
+    /** 有自定义顺序则按顺序重排，否则原样返回。 */
+    private fun applyPlaylistOrder(songs: List<Song>, name: String): List<Song> {
+        val saved = prefs.getString("playlist_order_$name", null) ?: return songs
+        val uriOrder = saved.split("\n").filter { it.isNotEmpty() }
+        if (uriOrder.size != songs.size) return songs // 歌单内容变了，顺序失效
+        val byUri = songs.associateBy { it.uri.toString() }
+        val reordered = uriOrder.mapNotNull { byUri[it] }
+        return if (reordered.size == songs.size) reordered else songs
     }
 
     private fun showSearchPage() {

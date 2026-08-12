@@ -56,6 +56,10 @@ class MediaPlaybackService : Service() {
         const val KEY_LAST_POS = "last_pos"
         const val KEY_DESKTOP_ON = "desktop_lyrics_on"
         const val KEY_MIX_AUDIO = "mix_audio"
+        const val KEY_PLAY_MODE = "play_mode"
+        const val MODE_SEQUENCE = 0
+        const val MODE_SHUFFLE = 1
+        const val MODE_REPEAT_ONE = 2
     }
 
     private val binder = PlaybackBinder()
@@ -194,14 +198,40 @@ class MediaPlaybackService : Service() {
 
     fun playPrev() {
         if (songs.isEmpty()) return
-        index = (index - 1 + songs.size) % songs.size
+        index = when (getPlayMode()) {
+            MODE_SHUFFLE -> randomIndex()
+            else -> (index - 1 + songs.size) % songs.size
+        }
         playCurrent()
     }
 
     fun playNext() {
         if (songs.isEmpty()) return
-        index = (index + 1) % songs.size
+        index = when (getPlayMode()) {
+            MODE_SHUFFLE -> randomIndex()
+            else -> (index + 1) % songs.size
+        }
         playCurrent()
+    }
+
+    /** 随机选一首（避免与当前相同）。 */
+    private fun randomIndex(): Int {
+        if (songs.size <= 1) return index
+        var r = index
+        while (r == index) r = kotlin.random.Random.nextInt(songs.size)
+        return r
+    }
+
+    /** 播放模式：0 顺序 / 1 随机 / 2 单曲循环。 */
+    fun getPlayMode(): Int =
+        getSharedPreferences("player", Context.MODE_PRIVATE).getInt(KEY_PLAY_MODE, MODE_SEQUENCE)
+
+    /** 点击循环切换模式，返回新模式。 */
+    fun cyclePlayMode(): Int {
+        val next = (getPlayMode() + 1) % 3
+        getSharedPreferences("player", Context.MODE_PRIVATE)
+            .edit().putInt(KEY_PLAY_MODE, next).apply()
+        return next
     }
 
     fun seekTo(ms: Int) {
@@ -319,7 +349,20 @@ class MediaPlaybackService : Service() {
                 }
             }
             mp.setOnCompletionListener {
-                playNext()
+                // 播放完成：按播放模式决定下一首（单曲循环重播当前）
+                when (getPlayMode()) {
+                    MODE_REPEAT_ONE -> {
+                        seekTo(0)
+                        play()
+                    }
+                    MODE_SHUFFLE -> {
+                        if (songs.size > 1) {
+                            index = randomIndex()
+                            playCurrent()
+                        }
+                    }
+                    else -> playNext()
+                }
             }
             mp.setOnErrorListener { _, what, extra ->
                 listener?.onSongChanged(null, emptyList(), null)
