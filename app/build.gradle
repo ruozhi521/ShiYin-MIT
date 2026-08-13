@@ -22,8 +22,8 @@ android {
         applicationId "com.example.subtitleplayer"
         minSdk 26
         targetSdk 34
-        versionCode 4
-        versionName "1.12"
+        versionCode 5
+        versionName "1.13"
     }
 
     buildTypes {
