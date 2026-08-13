@@ -1222,26 +1222,26 @@ class MainActivity : AppCompatActivity() {
         fun dp(v: Float): Int = (v * d).toInt()
         val box = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
-            setPadding(dp(18), dp(8), dp(18), dp(8))
+            setPadding(dp(18f), dp(8f), dp(18f), dp(8f))
         }
 
         // 主题色行（带当前色圆点）
         val accentRow = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.HORIZONTAL
             gravity = android.view.Gravity.CENTER_VERTICAL
-            setPadding(0, dp(14), 0, dp(14))
+            setPadding(0, dp(14f), 0, dp(14f))
             setOnClickListener { showAccentDialog() }
         }
         val dot = View(this).apply {
             setBackgroundColor(ThemeManager.accent(this@MainActivity))
-            layoutParams = android.widget.LinearLayout.LayoutParams(dp(18), dp(18))
+            layoutParams = android.widget.LinearLayout.LayoutParams(dp(18f), dp(18f))
         }
         accentRow.addView(dot)
         accentRow.addView(android.widget.TextView(this).apply {
             text = getString(R.string.accent_title)
             textSize = 16f
             setTextColor(getColor(R.color.text_primary))
-            setPadding(dp(12), 0, 0, 0)
+            setPadding(dp(12f), 0, 0, 0)
         })
         box.addView(accentRow)
 
@@ -1250,7 +1250,7 @@ class MainActivity : AppCompatActivity() {
             text = getString(R.string.bg_title)
             textSize = 16f
             setTextColor(getColor(R.color.text_primary))
-            setPadding(0, dp(14), 0, dp(14))
+            setPadding(0, dp(14f), 0, dp(14f))
             setOnClickListener { showBgDialog() }
         })
 
@@ -1260,7 +1260,7 @@ class MainActivity : AppCompatActivity() {
             text = getString(R.string.dark_mode)
             textSize = 16f
             setTextColor(getColor(R.color.text_primary))
-            setPadding(0, dp(14), 0, dp(14))
+            setPadding(0, dp(14f), 0, dp(14f))
             setOnCheckedChangeListener { _, checked ->
                 prefs.edit().putBoolean(KEY_DARK, checked).apply()
                 applyDarkMode(checked)
