@@ -243,6 +243,39 @@ class MainActivity : AppCompatActivity() {
             scanLibrary(uri)
         }
 
+    /** 自定义封面选图（复制到内部存储，无需持久授权）。 */
+    private var pendingCoverTarget: String? = null
+    private val coverPicker =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            val target = pendingCoverTarget
+            pendingCoverTarget = null
+            if (uri == null || target == null) return@registerForActivityResult
+            val ok = if (target.startsWith("pl:")) {
+                CoverManager.setPlaylistCover(this, target.removePrefix("pl:"), uri) != null
+            } else {
+                CoverManager.setSongCover(this, target.removePrefix("song:"), uri) != null
+            }
+            if (ok) {
+                toast(getString(R.string.cover_saved))
+                gridAdapter.notifyDataSetChanged()
+                refreshCdCover()
+            } else {
+                toast(getString(R.string.cover_failed))
+            }
+        }
+
+    /** 背景图选择（复制到内部存储）。 */
+    private val bgPicker =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri == null) return@registerForActivityResult
+            if (BgManager.setBg(this, uri)) {
+                applyPageBackground()
+                toast(getString(R.string.bg_saved))
+            } else {
+                toast(getString(R.string.bg_failed))
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // 在 Activity 创建前应用保存的深色模式（进程级设置，不调用会回系统默认导致深色失效）
         applyDarkMode(prefs.getBoolean(KEY_DARK, false))
@@ -282,6 +315,11 @@ class MainActivity : AppCompatActivity() {
         txtPlayerTitle = findViewById(R.id.txtPlayerTitle)
         txtPlayerFolder = findViewById(R.id.txtPlayerFolder)
         imgCd = findViewById(R.id.imgCd)
+        imgCd.setOnLongClickListener {
+            val idx = playbackService?.currentIndex() ?: -1
+            currentSongs.getOrNull(idx)?.let { showSongCoverMenu(it) }
+            true
+        }
         txtNowLyric = findViewById(R.id.txtNowLyric)
         seekBar = findViewById(R.id.seekBar)
         txtTime = findViewById(R.id.txtTime)
@@ -300,9 +338,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnRefreshDiscover).setOnClickListener { loadDiscover() }
 
         // ---- 音乐库页：歌单网格 ----
-        gridAdapter = PlaylistGridAdapter { pos ->
-            playlistList().getOrNull(pos)?.let { openPlaylist(it) }
-        }
+        gridAdapter = PlaylistGridAdapter(
+            { pos -> playlistList().getOrNull(pos)?.let { openPlaylist(it) } },
+            { pos -> playlistList().getOrNull(pos)?.let { showPlaylistCoverMenu(it.name) } }
+        )
         recyclerPlaylists.layoutManager = GridLayoutManager(this, 2)
         recyclerPlaylists.adapter = gridAdapter
 
@@ -394,6 +433,11 @@ class MainActivity : AppCompatActivity() {
         }
         miniPlayer.setOnClickListener { showPage(Page.PLAYER) }
         txtNowLyric.setOnClickListener { showPage(Page.LYRICS) }
+
+        // 应用保存的主题色
+        applyAccent()
+        // 应用保存的背景图
+        applyPageBackground()
 
         // ---- 列表页返回 ----
         findViewById<Button>(R.id.btnBackLib).setOnClickListener { showPage(Page.LIBRARY) }
@@ -487,11 +531,99 @@ class MainActivity : AppCompatActivity() {
 
     private fun selectTab(tab: Int) {
         currentTab = tab
-        tabDiscover.setTextColor(getColor(if (tab == 0) R.color.accent else R.color.text_hint))
+        val accent = ThemeManager.accent(this)
+        tabDiscover.setTextColor(if (tab == 0) accent else getColor(R.color.text_hint))
         tabDiscover.typeface = if (tab == 0) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-        tabLibrary.setTextColor(getColor(if (tab == 1) R.color.accent else R.color.text_hint))
+        tabLibrary.setTextColor(if (tab == 1) accent else getColor(R.color.text_hint))
         tabLibrary.typeface = if (tab == 1) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         showPage(if (tab == 0) Page.DISCOVER else Page.LIBRARY)
+    }
+
+    /** 应用主题色：进度条、播放按钮、tab、列表/歌词高亮。 */
+    private fun applyAccent() {
+        val a = ThemeManager.accent(this)
+        val list = android.content.res.ColorStateList.valueOf(a)
+        seekBar.progressTintList = list
+        seekBar.thumbTintList = list
+        miniSeekBar.progressTintList = list
+        miniSeekBar.thumbTintList = list
+        btnPlayPlayer.imageTintList = list
+        btnMiniPlay.imageTintList = list
+        selectTab(currentTab)
+        songAdapter.notifyDataSetChanged()
+        lyricAdapter.notifyDataSetChanged()
+        discoverAdapter.notifyDataSetChanged()
+        gridAdapter.notifyDataSetChanged()
+        artistAdapter.notifyDataSetChanged()
+        searchAdapter.notifyDataSetChanged()
+    }
+
+    /** 主题色选择弹窗：预设色板。 */
+    private fun showAccentDialog() {
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val cell = (64 * resources.displayMetrics.density).toInt()
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(pad, pad, pad, pad)
+        }
+        var row = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+        }
+        box.addView(row)
+        val cur = ThemeManager.accent(this)
+        for ((i, color) in ThemeManager.PRESETS.withIndex()) {
+            if (i > 0 && i % 4 == 0) {
+                val newRow = android.widget.LinearLayout(this).apply {
+                    orientation = android.widget.LinearLayout.HORIZONTAL
+                }
+                box.addView(newRow)
+                row = newRow
+            }
+            val v = android.widget.View(this).apply {
+                setBackgroundColor(color)
+                layoutParams = android.widget.LinearLayout.LayoutParams(cell, cell).apply {
+                    marginEnd = (12 * resources.displayMetrics.density).toInt()
+                    marginBottom = (12 * resources.displayMetrics.density).toInt()
+                }
+                setOnClickListener {
+                    ThemeManager.save(this@MainActivity, color)
+                    applyAccent()
+                    toast(getString(R.string.accent_saved))
+                }
+            }
+            row.addView(v)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.accent_title)
+            .setView(box)
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** 应用背景图到播放页/歌词页。 */
+    private fun applyPageBackground() {
+        val uri = BgManager.bgUri(this)
+        BgManager.apply(viewPlayer, uri)
+        BgManager.apply(viewLyrics, uri)
+    }
+
+    /** 背景图设置弹窗。 */
+    private fun showBgDialog() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.bg_title)
+            .setItems(
+                arrayOf(getString(R.string.bg_set), getString(R.string.bg_clear))
+            ) { _, which ->
+                when (which) {
+                    0 -> bgPicker.launch(arrayOf("image/*"))
+                    1 -> {
+                        BgManager.clearBg(this)
+                        applyPageBackground()
+                        toast(getString(R.string.bg_cleared))
+                    }
+                }
+            }
+            .show()
     }
 
     /**
@@ -1066,6 +1198,14 @@ class MainActivity : AppCompatActivity() {
             dialog.dismiss()
             showEqualizerDialog()
         }
+        view.findViewById<Button>(R.id.btnAccentSettings).setOnClickListener {
+            dialog.dismiss()
+            showAccentDialog()
+        }
+        view.findViewById<Button>(R.id.btnBgSettings).setOnClickListener {
+            dialog.dismiss()
+            showBgDialog()
+        }
     }
 
     // ---------- 播放列表 ----------
@@ -1264,6 +1404,66 @@ class MainActivity : AppCompatActivity() {
             .setView(view)
             .setNegativeButton(R.string.cancel, null)
             .show()
+    }
+
+    // ---------- 自定义封面 ----------
+
+    private fun showPlaylistCoverMenu(name: String) {
+        AlertDialog.Builder(this)
+            .setTitle(name)
+            .setItems(
+                arrayOf(getString(R.string.cover_set), getString(R.string.cover_clear))
+            ) { _, which ->
+                when (which) {
+                    0 -> {
+                        pendingCoverTarget = "pl:$name"
+                        coverPicker.launch(arrayOf("image/*"))
+                    }
+                    1 -> {
+                        CoverManager.clearPlaylistCover(this, name)
+                        CoverLoader.invalidate("pl:$name")
+                        gridAdapter.notifyDataSetChanged()
+                        toast(getString(R.string.cover_cleared))
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun showSongCoverMenu(song: Song) {
+        AlertDialog.Builder(this)
+            .setTitle(song.title)
+            .setItems(
+                arrayOf(getString(R.string.cover_set), getString(R.string.cover_clear))
+            ) { _, which ->
+                when (which) {
+                    0 -> {
+                        pendingCoverTarget = "song:${song.uri}"
+                        coverPicker.launch(arrayOf("image/*"))
+                    }
+                    1 -> {
+                        CoverManager.clearSongCover(this, song.uri.toString())
+                        CoverLoader.invalidate(song.uri.toString())
+                        refreshCdCover()
+                        gridAdapter.notifyDataSetChanged()
+                        toast(getString(R.string.cover_cleared))
+                    }
+                }
+            }
+            .show()
+    }
+
+    /** 刷新播放页 CD 封面（设置/清除单曲封面后）。 */
+    private fun refreshCdCover() {
+        val idx = playbackService?.currentIndex() ?: -1
+        val song = currentSongs.getOrNull(idx) ?: return
+        CoverLoader.invalidate(song.uri.toString())
+        imgCd.setImageResource(R.drawable.ic_music_tinted)
+        CoverLoader.load(this, song.uri, 400) { bmp ->
+            if (bmp != null && song.uri.toString() == currentCoverKey) {
+                imgCd.setImageBitmap(bmp)
+            }
+        }
     }
 
     private fun translationConfig(): LyricTranslator.Config? {

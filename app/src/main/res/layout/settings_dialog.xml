@@ -368,5 +368,21 @@
             android:layout_marginTop="10dp"
             android:text="@string/eq_entry" />
 
+        <Button
+            android:id="@+id/btnAccentSettings"
+            style="@style/BtnStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="@string/accent_title" />
+
+        <Button
+            android:id="@+id/btnBgSettings"
+            style="@style/BtnStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="@string/bg_title" />
+
     </LinearLayout>
 </ScrollView>

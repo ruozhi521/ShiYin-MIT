@@ -56,9 +56,10 @@ class DiscoverAdapter(
     }
 }
 
-/** 音乐库歌单网格卡片：封面 + 名称 + 歌曲数。 */
+/** 音乐库歌单网格卡片：封面 + 名称 + 歌曲数。支持自定义封面与长按。 */
 class PlaylistGridAdapter(
-    private val onClick: (Int) -> Unit
+    private val onClick: (Int) -> Unit,
+    private val onLongClick: (Int) -> Unit
 ) : RecyclerView.Adapter<PlaylistGridAdapter.Holder>() {
 
     private var items: List<Playlist> = emptyList()
@@ -88,7 +89,14 @@ class PlaylistGridAdapter(
             .getString(R.string.songs_count, playlist.songs.size)
         holder.cover.setImageResource(R.drawable.ic_folder_tinted)
         val song = playlist.songs.firstOrNull()
-        if (song != null) {
+        val custom = CoverManager.playlistCover(holder.itemView.context, playlist.name)
+        if (custom != null) {
+            CoverLoader.loadFile(holder.itemView.context, custom, "pl:" + playlist.name, 200) { bmp ->
+                if (bmp != null && holder.bindingAdapterPosition == position) {
+                    holder.cover.setImageBitmap(bmp)
+                }
+            }
+        } else if (song != null) {
             CoverLoader.load(holder.itemView.context, song.uri, 200) { bmp ->
                 if (bmp != null && holder.bindingAdapterPosition == position) {
                     holder.cover.setImageBitmap(bmp)
@@ -96,6 +104,10 @@ class PlaylistGridAdapter(
             }
         }
         holder.itemView.setOnClickListener { onClick(position) }
+        holder.itemView.setOnLongClickListener {
+            onLongClick(position)
+            true
+        }
     }
 
     override fun getItemCount(): Int = items.size

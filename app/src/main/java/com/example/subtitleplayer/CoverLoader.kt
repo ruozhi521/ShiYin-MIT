@@ -21,6 +21,12 @@ object CoverLoader {
 
     fun load(context: Context, uri: Uri, targetSize: Int, callback: (Bitmap?) -> Unit) {
         val key = uri.toString()
+        // 自定义单曲封面优先
+        val custom = CoverManager.songCover(context, key)
+        if (custom != null) {
+            loadFile(context, custom, key, targetSize, callback)
+            return
+        }
         cache[key]?.let {
             callback(it)
             return
@@ -41,6 +47,39 @@ object CoverLoader {
             }
             mainHandler.post { callback(bmp) }
         }
+    }
+
+    /** 加载本地图片文件（自定义封面用），带缓存。 */
+    fun loadFile(
+        context: Context,
+        fileUri: Uri,
+        cacheKey: String,
+        targetSize: Int,
+        callback: (Bitmap?) -> Unit
+    ) {
+        cache[cacheKey]?.let {
+            callback(it)
+            return
+        }
+        val appContext = context.applicationContext
+        pool.execute {
+            val bmp = try {
+                val input = appContext.contentResolver.openInputStream(fileUri)
+                val bytes = input?.use { it.readBytes() }
+                if (bytes != null) decodeScaled(bytes, targetSize) else null
+            } catch (e: Exception) {
+                null
+            }
+            if (bmp != null) {
+                synchronized(cache) { cache[cacheKey] = bmp }
+            }
+            mainHandler.post { callback(bmp) }
+        }
+    }
+
+    /** 清除自定义封面的缓存（设置/清除封面后调用）。 */
+    fun invalidate(cacheKey: String) {
+        synchronized(cache) { cache.remove(cacheKey) }
     }
 
     private fun decodeScaled(data: ByteArray, target: Int): Bitmap? {

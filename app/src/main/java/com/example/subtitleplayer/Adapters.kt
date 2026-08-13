@@ -108,9 +108,7 @@ class SongAdapter(
         holder.title.text = song.title
         holder.title.setTextSize(uiSizeSp)
         if (position == currentIndex) {
-            holder.title.setTextColor(
-                ContextCompat.getColor(holder.itemView.context, R.color.accent)
-            )
+            holder.title.setTextColor(ThemeManager.accent(holder.itemView.context))
             holder.title.typeface = Typeface.DEFAULT_BOLD
         } else {
             holder.title.setTextColor(
@@ -203,8 +201,9 @@ class LyricAdapter(
         }
         if (isCurrent) {
             holder.itemView.setBackgroundResource(R.drawable.bg_current_line)
-            holder.text.setTextColor(holder.text.context.getColor(R.color.accent))
-            holder.trans.setTextColor(holder.text.context.getColor(R.color.accent_dark))
+            val accent = ThemeManager.accent(holder.text.context)
+            holder.text.setTextColor(accent)
+            holder.trans.setTextColor(ThemeManager.accentDark(accent))
         } else {
             holder.itemView.setBackgroundResource(0)
             holder.text.setTextColor(holder.text.context.getColor(R.color.text_normal))
