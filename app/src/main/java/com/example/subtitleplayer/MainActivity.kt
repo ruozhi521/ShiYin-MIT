@@ -32,6 +32,7 @@ import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContract
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.ContextCompat
@@ -548,7 +549,6 @@ class MainActivity : AppCompatActivity() {
         miniSeekBar.progressTintList = list
         miniSeekBar.thumbTintList = list
         btnPlayPlayer.imageTintList = list
-        btnMiniPlay.imageTintList = list
         selectTab(currentTab)
         songAdapter.notifyDataSetChanged()
         lyricAdapter.notifyDataSetChanged()
@@ -579,7 +579,7 @@ class MainActivity : AppCompatActivity() {
                 box.addView(newRow)
                 row = newRow
             }
-            val v = android.widget.View(this).apply {
+            val v = View(this).apply {
                 setBackgroundColor(color)
                 layoutParams = android.widget.LinearLayout.LayoutParams(cell, cell).apply {
                     marginEnd = (12 * resources.displayMetrics.density).toInt()
