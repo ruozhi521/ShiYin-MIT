@@ -548,7 +548,7 @@ class MainActivity : AppCompatActivity() {
         seekBar.thumbTintList = list
         miniSeekBar.progressTintList = list
         miniSeekBar.thumbTintList = list
-        btnPlayPlayer.imageTintList = list
+        // 播放键图标保持白色（背景由全局遍历 tint，图标 tint 会与背景同色消失）
         // CD 圆形底（bg_play_circle）与全局按钮跟随主题色
         imgCd.backgroundTintList = list
         txtNowLyric.setTextColor(a)
@@ -1101,6 +1101,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSettingsDialog() {
         val view = layoutInflater.inflate(R.layout.settings_dialog, null)
+        // 弹窗不在 Activity view tree 内，单独应用主题色（BtnStyle 按钮背景）
+        tintAccentViews(view, android.content.res.ColorStateList.valueOf(ThemeManager.accent(this)))
         val chkAutoScan = view.findViewById<CheckBox>(R.id.chkAutoScan)
         val chkAutoTrans = view.findViewById<CheckBox>(R.id.chkAutoTrans)
         val rgLyric = view.findViewById<RadioGroup>(R.id.rgLyricSize)
