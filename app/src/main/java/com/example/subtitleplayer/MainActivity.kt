@@ -540,7 +540,7 @@ class MainActivity : AppCompatActivity() {
         showPage(if (tab == 0) Page.DISCOVER else Page.LIBRARY)
     }
 
-    /** 应用主题色：进度条、播放按钮、tab、列表/歌词高亮。 */
+    /** 应用主题色：进度条、播放按钮、tab、列表/歌词高亮、全局蓝色按钮。 */
     private fun applyAccent() {
         val a = ThemeManager.accent(this)
         val list = android.content.res.ColorStateList.valueOf(a)
@@ -549,6 +549,10 @@ class MainActivity : AppCompatActivity() {
         miniSeekBar.progressTintList = list
         miniSeekBar.thumbTintList = list
         btnPlayPlayer.imageTintList = list
+        // CD 圆形底（bg_play_circle）与全局按钮跟随主题色
+        imgCd.backgroundTintList = list
+        txtNowLyric.setTextColor(a)
+        tintAccentViews(findViewById<View>(android.R.id.content), list)
         selectTab(currentTab)
         songAdapter.notifyDataSetChanged()
         lyricAdapter.notifyDataSetChanged()
@@ -556,6 +560,18 @@ class MainActivity : AppCompatActivity() {
         gridAdapter.notifyDataSetChanged()
         artistAdapter.notifyDataSetChanged()
         searchAdapter.notifyDataSetChanged()
+    }
+
+    /** 递归遍历：所有 Button/ImageButton 的背景统一 tint 为主题色（覆盖 BtnStyle/bg_play_circle）。 */
+    private fun tintAccentViews(view: View, list: android.content.res.ColorStateList) {
+        if (view is Button || view is ImageButton) {
+            view.backgroundTintList = list
+        }
+        if (view is android.view.ViewGroup) {
+            for (i in 0 until view.childCount) {
+                tintAccentViews(view.getChildAt(i), list)
+            }
+        }
     }
 
     /** 主题色选择弹窗：预设色板。 */
@@ -1086,14 +1102,12 @@ class MainActivity : AppCompatActivity() {
     private fun showSettingsDialog() {
         val view = layoutInflater.inflate(R.layout.settings_dialog, null)
         val chkAutoScan = view.findViewById<CheckBox>(R.id.chkAutoScan)
-        val chkDark = view.findViewById<CheckBox>(R.id.chkDark)
         val chkAutoTrans = view.findViewById<CheckBox>(R.id.chkAutoTrans)
         val rgLyric = view.findViewById<RadioGroup>(R.id.rgLyricSize)
         val rgUi = view.findViewById<RadioGroup>(R.id.rgUiSize)
         val rgFont = view.findViewById<RadioGroup>(R.id.rgFont)
 
         chkAutoScan.isChecked = prefs.getBoolean(KEY_AUTO_SCAN, false)
-        chkDark.isChecked = prefs.getBoolean(KEY_DARK, false)
         chkAutoTrans.isChecked = prefs.getBoolean(KEY_AUTO_TRANS, false)
         checkByTag(rgLyric, prefs.getInt(KEY_LYRIC_SIZE, 18))
         checkByTag(rgUi, prefs.getInt(KEY_UI_SIZE, 15))
@@ -1155,7 +1169,6 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton(R.string.ok) { _, _ ->
                 prefs.edit()
                     .putBoolean(KEY_AUTO_SCAN, chkAutoScan.isChecked)
-                    .putBoolean(KEY_DARK, chkDark.isChecked)
                     .putBoolean(KEY_AUTO_TRANS, chkAutoTrans.isChecked)
                     .putInt(KEY_LYRIC_SIZE, tagOf(rgLyric))
                     .putInt(KEY_UI_SIZE, tagOf(rgUi))
@@ -1166,7 +1179,6 @@ class MainActivity : AppCompatActivity() {
                     .putBoolean(KEY_MIX_AUDIO, chkMixAudio.isChecked)
                     .apply()
                 applyAppearance()
-                applyDarkMode(chkDark.isChecked)
                 playbackService?.refreshDesktopLyricsStyle()
             }
             .setNegativeButton(R.string.cancel, null)
@@ -1198,14 +1210,68 @@ class MainActivity : AppCompatActivity() {
             dialog.dismiss()
             showEqualizerDialog()
         }
-        view.findViewById<Button>(R.id.btnAccentSettings).setOnClickListener {
+        view.findViewById<Button>(R.id.btnTheme).setOnClickListener {
             dialog.dismiss()
-            showAccentDialog()
+            showThemeDialog()
         }
-        view.findViewById<Button>(R.id.btnBgSettings).setOnClickListener {
-            dialog.dismiss()
-            showBgDialog()
+    }
+
+    /** 主题设置弹窗：主题色 + 背景图 + 深色模式三合一。 */
+    private fun showThemeDialog() {
+        val d = resources.displayMetrics.density
+        fun dp(v: Float): Int = (v * d).toInt()
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), dp(8))
         }
+
+        // 主题色行（带当前色圆点）
+        val accentRow = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(0, dp(14), 0, dp(14))
+            setOnClickListener { showAccentDialog() }
+        }
+        val dot = View(this).apply {
+            setBackgroundColor(ThemeManager.accent(this@MainActivity))
+            layoutParams = android.widget.LinearLayout.LayoutParams(dp(18), dp(18))
+        }
+        accentRow.addView(dot)
+        accentRow.addView(android.widget.TextView(this).apply {
+            text = getString(R.string.accent_title)
+            textSize = 16f
+            setTextColor(getColor(R.color.text_primary))
+            setPadding(dp(12), 0, 0, 0)
+        })
+        box.addView(accentRow)
+
+        // 背景图行
+        box.addView(android.widget.TextView(this).apply {
+            text = getString(R.string.bg_title)
+            textSize = 16f
+            setTextColor(getColor(R.color.text_primary))
+            setPadding(0, dp(14), 0, dp(14))
+            setOnClickListener { showBgDialog() }
+        })
+
+        // 深色模式开关（即时应用）
+        box.addView(android.widget.Switch(this).apply {
+            isChecked = prefs.getBoolean(KEY_DARK, false)
+            text = getString(R.string.dark_mode)
+            textSize = 16f
+            setTextColor(getColor(R.color.text_primary))
+            setPadding(0, dp(14), 0, dp(14))
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(KEY_DARK, checked).apply()
+                applyDarkMode(checked)
+            }
+        })
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.theme_entry)
+            .setView(box)
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     // ---------- 播放列表 ----------

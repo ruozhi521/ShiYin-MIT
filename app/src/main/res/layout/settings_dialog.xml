@@ -21,15 +21,6 @@
             android:textSize="15sp" />
 
         <CheckBox
-            android:id="@+id/chkDark"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="@string/dark_mode"
-            android:textColor="@color/text_primary"
-            android:textSize="15sp" />
-
-        <CheckBox
             android:id="@+id/chkAutoTrans"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -369,20 +360,12 @@
             android:text="@string/eq_entry" />
 
         <Button
-            android:id="@+id/btnAccentSettings"
+            android:id="@+id/btnTheme"
             style="@style/BtnStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
-            android:text="@string/accent_title" />
-
-        <Button
-            android:id="@+id/btnBgSettings"
-            style="@style/BtnStyle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:text="@string/bg_title" />
+            android:text="@string/theme_entry" />
 
     </LinearLayout>
 </ScrollView>

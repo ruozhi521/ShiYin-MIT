@@ -118,6 +118,7 @@ class SongAdapter(
         }
         holder.lyricMark.visibility =
             if (hasLyric(song)) View.VISIBLE else View.GONE
+        holder.lyricMark.setTextColor(ThemeManager.accent(holder.itemView.context))
         holder.cover.setImageResource(R.drawable.ic_music_tinted)
         CoverLoader.load(holder.itemView.context, song.uri, 64) { bmp ->
             if (bmp != null && holder.bindingAdapterPosition == position) {

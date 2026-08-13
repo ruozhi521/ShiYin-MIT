@@ -20,6 +20,7 @@
     <string name="cover_failed">封面设置失败</string>
     <string name="accent_title">主题色</string>
     <string name="accent_saved">主题色已更换</string>
+    <string name="theme_entry">主题</string>
     <string name="bg_title">背景图</string>
     <string name="bg_set">选择背景图</string>
     <string name="bg_clear">清除背景图</string>

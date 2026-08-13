@@ -142,6 +142,9 @@ class ArtistAdapter(
         holder.name.text = name
         holder.count.text = holder.itemView.context
             .getString(R.string.songs_count, count)
+        holder.avatar.backgroundTintList = android.content.res.ColorStateList.valueOf(
+            ThemeManager.accent(holder.itemView.context)
+        )
         holder.itemView.setOnClickListener { onClick(position) }
     }
 
