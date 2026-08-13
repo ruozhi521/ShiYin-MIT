@@ -1100,17 +1100,26 @@ class MainActivity : AppCompatActivity() {
             toast(getString(R.string.alarm_play_off))
             return
         }
-        val hour = prefs.getInt(KEY_ALARM_HOUR, 7)
-        val minute = prefs.getInt(KEY_ALARM_MINUTE, 30)
+        // 默认时间 = 当前时间 + 2 分钟（避免误设成上次的旧时间）
+        val cal = java.util.Calendar.getInstance()
+        cal.add(java.util.Calendar.MINUTE, 2)
+        val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
+        val minute = cal.get(java.util.Calendar.MINUTE)
         val dialog = TimePickerDialog(this, { _, h, m ->
-            scheduleAlarmPlay(h, m)
-            toast(getString(R.string.alarm_play_set, h, m))
+            val trigger = scheduleAlarmPlay(h, m)
+            val todayEnd = java.util.Calendar.getInstance().apply {
+                set(java.util.Calendar.HOUR_OF_DAY, 23)
+                set(java.util.Calendar.MINUTE, 59)
+                set(java.util.Calendar.SECOND, 59)
+            }.timeInMillis
+            val dayLabel = if (trigger > todayEnd) "明天 " else ""
+            toast(String.format("已设定 %s%02d:%02d 自动播放", dayLabel, h, m))
         }, hour, minute, true)
         dialog.setOnCancelListener { chk.isChecked = false }
         dialog.show()
     }
 
-    private fun scheduleAlarmPlay(hour: Int, minute: Int) {
+    private fun scheduleAlarmPlay(hour: Int, minute: Int): Long {
         prefs.edit()
             .putBoolean(KEY_ALARM_ON, true)
             .putInt(KEY_ALARM_HOUR, hour)
@@ -1140,6 +1149,7 @@ class MainActivity : AppCompatActivity() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         am.setAlarmClock(AlarmManager.AlarmClockInfo(cal.timeInMillis, showPi), pi)
+        return cal.timeInMillis
     }
 
     private fun cancelAlarmPlay() {
