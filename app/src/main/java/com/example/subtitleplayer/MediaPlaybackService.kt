@@ -93,6 +93,7 @@ class MediaPlaybackService : Service() {
     }
     private var tick = 0
     private var pendingResumeMs = 0
+    private var forcePlayAfterSeek = false
 
     private val progressRunnable = object : Runnable {
         override fun run() {
@@ -184,12 +185,14 @@ class MediaPlaybackService : Service() {
         songs: List<Song>,
         index: Int,
         lyricMap: Map<String, LyricRef>,
-        resumeMs: Int = 0
+        resumeMs: Int = 0,
+        forcePlay: Boolean = false
     ) {
         this.songs = songs
         this.index = index
         this.lyricMap = lyricMap
         this.pendingResumeMs = resumeMs
+        this.forcePlayAfterSeek = forcePlay
         playCurrent()
     }
 
@@ -267,7 +270,7 @@ class MediaPlaybackService : Service() {
                 val folder = queryFolder(uri)
                 val pos = statePrefs.getInt(KEY_LAST_POS, 0)
                 android.util.Log.d("ShiYinAlarm", "playLast: restore uri=$lastUri pos=$pos")
-                startPlaylist(listOf(Song(title, uri, folder)), 0, emptyMap(), pos)
+                startPlaylist(listOf(Song(title, uri, folder)), 0, emptyMap(), pos, forcePlay = true)
                 return
             } catch (e: Exception) {
                 android.util.Log.d("ShiYinAlarm", "playLast: restore failed ${e.message}")
@@ -278,7 +281,7 @@ class MediaPlaybackService : Service() {
             val lib = LibraryCache.load(this) ?: return
             val pl = lib.playlists.firstOrNull() ?: return
             android.util.Log.d("ShiYinAlarm", "playLast: fallback playlist=${pl.name} songs=${pl.songs.size}")
-            startPlaylist(pl.songs, 0, lib.lyrics, 0)
+            startPlaylist(pl.songs, 0, lib.lyrics, 0, forcePlay = true)
         } catch (e: Exception) {
             android.util.Log.d("ShiYinAlarm", "playLast: fallback failed ${e.message}")
         }
@@ -362,8 +365,15 @@ class MediaPlaybackService : Service() {
                 pendingResumeMs = 0
                 if (resume > 0 && resume < durationMs) {
                     player.seekTo(resume)
-                    updateAll(false)
+                    if (forcePlayAfterSeek) {
+                        // 定时开始播放（闹钟）：恢复进度后直接响，不等用户点播放
+                        forcePlayAfterSeek = false
+                        play()
+                    } else {
+                        updateAll(false)
+                    }
                 } else {
+                    forcePlayAfterSeek = false
                     play()
                 }
             }
@@ -401,11 +411,15 @@ class MediaPlaybackService : Service() {
     private fun play() {
         val mp = mediaPlayer ?: return
         if (!isPrepared) return
-        if (!requestFocus()) return
+        if (!requestFocus()) {
+            android.util.Log.d("ShiYinAlarm", "play: audio focus denied")
+            return
+        }
         if (durationMs > 0 && mp.currentPosition >= durationMs) {
             mp.seekTo(0)
         }
         mp.start()
+        android.util.Log.d("ShiYinAlarm", "play: started")
         updateAll(true)
     }
 
