@@ -1125,14 +1125,14 @@ class MainActivity : AppCompatActivity() {
                 add(java.util.Calendar.DAY_OF_YEAR, 1)
             }
         }
-        val pi = PendingIntent.getBroadcast(
+        // 闹钟直达服务（去掉广播跳转，减少失败点）；setAlarmClock 触发时系统允许后台启动前台服务
+        val pi = PendingIntent.getService(
             this, 100,
-            Intent(this, AlarmPlayReceiver::class.java)
+            Intent(this, MediaPlaybackService::class.java)
                 .setAction(MediaPlaybackService.ACTION_ALARM_PLAY),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        // 用 setAlarmClock（闹钟型）：无需精确闹钟权限，且到点时允许从后台启动前台服务
         // showIntent：点击状态栏闹钟图标时打开 App
         val showPi = PendingIntent.getActivity(
             this, 101,
@@ -1144,9 +1144,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun cancelAlarmPlay() {
         prefs.edit().putBoolean(KEY_ALARM_ON, false).apply()
-        val pi = PendingIntent.getBroadcast(
+        val pi = PendingIntent.getService(
             this, 100,
-            Intent(this, AlarmPlayReceiver::class.java)
+            Intent(this, MediaPlaybackService::class.java)
                 .setAction(MediaPlaybackService.ACTION_ALARM_PLAY),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )

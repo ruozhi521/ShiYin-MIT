@@ -145,7 +145,10 @@ class MediaPlaybackService : Service() {
             ACTION_PREV -> playPrev()
             ACTION_NEXT -> playNext()
             ACTION_TOGGLE_LYRICS -> toggleDesktopLyrics()
-            ACTION_ALARM_PLAY -> playLast()
+            ACTION_ALARM_PLAY -> {
+                android.util.Log.d("ShiYinAlarm", "onStartCommand: ACTION_ALARM_PLAY")
+                playLast()
+            }
         }
         // 服务每次启动（含后台重建）时恢复桌面歌词开关状态
         if (isDesktopLyricsOn()) setDesktopLyrics(true)
@@ -252,6 +255,10 @@ class MediaPlaybackService : Service() {
 
     /** 定时开始播放：恢复上次播放的歌曲与进度；无记录时兜底播放第一个歌单。 */
     private fun playLast() {
+        android.util.Log.d(
+            "ShiYinAlarm",
+            "playLast: lastUri=${statePrefs.getString(KEY_LAST_URI, null)}"
+        )
         val lastUri = statePrefs.getString(KEY_LAST_URI, null)
         if (!lastUri.isNullOrEmpty()) {
             try {
@@ -259,19 +266,21 @@ class MediaPlaybackService : Service() {
                 val title = queryDisplayName(uri) ?: "音乐"
                 val folder = queryFolder(uri)
                 val pos = statePrefs.getInt(KEY_LAST_POS, 0)
+                android.util.Log.d("ShiYinAlarm", "playLast: restore uri=$lastUri pos=$pos")
                 startPlaylist(listOf(Song(title, uri, folder)), 0, emptyMap(), pos)
                 return
             } catch (e: Exception) {
-                // uri 失效等：走兜底
+                android.util.Log.d("ShiYinAlarm", "playLast: restore failed ${e.message}")
             }
         }
         // 兜底：播放第一个歌单（连续播放），保证到点一定有声音
         try {
             val lib = LibraryCache.load(this) ?: return
             val pl = lib.playlists.firstOrNull() ?: return
+            android.util.Log.d("ShiYinAlarm", "playLast: fallback playlist=${pl.name} songs=${pl.songs.size}")
             startPlaylist(pl.songs, 0, lib.lyrics, 0)
         } catch (e: Exception) {
-            // 无音乐库：静默（下次闹钟还会触发）
+            android.util.Log.d("ShiYinAlarm", "playLast: fallback failed ${e.message}")
         }
     }
 
