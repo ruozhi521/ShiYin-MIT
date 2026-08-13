@@ -1133,7 +1133,13 @@ class MainActivity : AppCompatActivity() {
         )
         val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
         // 用 setAlarmClock（闹钟型）：无需精确闹钟权限，且到点时允许从后台启动前台服务
-        am.setAlarmClock(AlarmManager.AlarmClockInfo(cal.timeInMillis, null), pi)
+        // showIntent：点击状态栏闹钟图标时打开 App
+        val showPi = PendingIntent.getActivity(
+            this, 101,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        am.setAlarmClock(AlarmManager.AlarmClockInfo(cal.timeInMillis, showPi), pi)
     }
 
     private fun cancelAlarmPlay() {

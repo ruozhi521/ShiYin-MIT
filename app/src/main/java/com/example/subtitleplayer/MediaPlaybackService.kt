@@ -250,18 +250,28 @@ class MediaPlaybackService : Service() {
         if (!isPlaying()) play()
     }
 
-    /** 定时开始播放：恢复上次播放的歌曲与进度。 */
+    /** 定时开始播放：恢复上次播放的歌曲与进度；无记录时兜底播放第一个歌单。 */
     private fun playLast() {
         val lastUri = statePrefs.getString(KEY_LAST_URI, null)
-        if (lastUri.isNullOrEmpty()) return
-        val pos = statePrefs.getInt(KEY_LAST_POS, 0)
+        if (!lastUri.isNullOrEmpty()) {
+            try {
+                val uri = android.net.Uri.parse(lastUri)
+                val title = queryDisplayName(uri) ?: "音乐"
+                val folder = queryFolder(uri)
+                val pos = statePrefs.getInt(KEY_LAST_POS, 0)
+                startPlaylist(listOf(Song(title, uri, folder)), 0, emptyMap(), pos)
+                return
+            } catch (e: Exception) {
+                // uri 失效等：走兜底
+            }
+        }
+        // 兜底：播放第一个歌单（连续播放），保证到点一定有声音
         try {
-            val uri = android.net.Uri.parse(lastUri)
-            val title = queryDisplayName(uri) ?: "音乐"
-            val folder = queryFolder(uri)
-            startPlaylist(listOf(Song(title, uri, folder)), 0, emptyMap(), pos)
+            val lib = LibraryCache.load(this) ?: return
+            val pl = lib.playlists.firstOrNull() ?: return
+            startPlaylist(pl.songs, 0, lib.lyrics, 0)
         } catch (e: Exception) {
-            // uri 失效等：忽略
+            // 无音乐库：静默（下次闹钟还会触发）
         }
     }
 
