@@ -59,14 +59,14 @@ object AudioFxManager {
     val isAttached: Boolean get() = eq != null
 
     fun numberOfBands(): Int = try {
-        eq?.numberOfBands ?: 0
+        (eq?.numberOfBands ?: 0).toInt()
     } catch (e: Exception) {
         0
     }
 
     /** 频段中心频率（Hz）。 */
     fun centerFreqHz(band: Int): Int = try {
-        val mhz = eq?.getCenterFreq(band.toShort()) ?: 0L
+        val mhz = (eq?.getCenterFreq(band) ?: 0).toLong()
         (mhz / 1000L).toInt()
     } catch (e: Exception) {
         0
@@ -85,13 +85,13 @@ object AudioFxManager {
         try {
             val range = bandRange()
             val g = gainDb.coerceIn(range.first, range.second)
-            eq?.setBandLevel(band.toShort(), (g * 100).toInt())
+            eq?.setBandLevel(band, (g * 100).toInt())
         } catch (_: Exception) {
         }
     }
 
     fun getBand(band: Int): Float = try {
-        ((eq?.getBandLevel(band.toShort()) ?: 0) / 100f)
+        ((eq?.getBandLevel(band) ?: 0) / 100f)
     } catch (e: Exception) {
         0f
     }
