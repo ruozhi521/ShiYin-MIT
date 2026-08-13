@@ -583,7 +583,7 @@ class MainActivity : AppCompatActivity() {
                 setBackgroundColor(color)
                 layoutParams = android.widget.LinearLayout.LayoutParams(cell, cell).apply {
                     marginEnd = (12 * resources.displayMetrics.density).toInt()
-                    marginBottom = (12 * resources.displayMetrics.density).toInt()
+                    bottomMargin = (12 * resources.displayMetrics.density).toInt()
                 }
                 setOnClickListener {
                     ThemeManager.save(this@MainActivity, color)
