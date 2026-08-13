@@ -10,12 +10,17 @@ import android.content.Intent
 class AlarmPlayReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action != MediaPlaybackService.ACTION_ALARM_PLAY) return
+        val start = Intent(context, MediaPlaybackService::class.java)
+            .setAction(MediaPlaybackService.ACTION_ALARM_PLAY)
         try {
-            val start = Intent(context, MediaPlaybackService::class.java)
-                .setAction(MediaPlaybackService.ACTION_ALARM_PLAY)
             context.startForegroundService(start)
         } catch (e: Exception) {
-            // 后台启动限制等异常：忽略（下次闹钟还会触发）
+            // 个别 ROM 仍限制后台启动前台服务：退化为普通启动，服务内部会自行转前台
+            try {
+                context.startService(start)
+            } catch (e2: Exception) {
+                // 都失败则静默（下次闹钟还会触发）
+            }
         }
     }
 }

@@ -244,6 +244,8 @@ class MainActivity : AppCompatActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 在 Activity 创建前应用保存的深色模式（进程级设置，不调用会回系统默认导致深色失效）
+        applyDarkMode(prefs.getBoolean(KEY_DARK, false))
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
@@ -1130,7 +1132,8 @@ class MainActivity : AppCompatActivity() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, cal.timeInMillis, pi)
+        // 用 setAlarmClock（闹钟型）：无需精确闹钟权限，且到点时允许从后台启动前台服务
+        am.setAlarmClock(AlarmManager.AlarmClockInfo(cal.timeInMillis, null), pi)
     }
 
     private fun cancelAlarmPlay() {
