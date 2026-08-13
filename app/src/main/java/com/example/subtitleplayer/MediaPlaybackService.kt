@@ -399,6 +399,13 @@ class MediaPlaybackService : Service() {
             }
             mp.prepareAsync()
             mediaPlayer = mp
+            // 挂载均衡器（每次新建播放器都需重新挂载）并恢复上次曲线
+            try {
+                if (AudioFxManager.attach(mp.audioSessionId)) {
+                    AudioFxManager.restoreSaved(this)
+                }
+            } catch (_: Exception) {
+            }
         } catch (e: Exception) {
             try {
                 mp.release()

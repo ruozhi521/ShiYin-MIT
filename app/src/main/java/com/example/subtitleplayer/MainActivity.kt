@@ -1062,6 +1062,10 @@ class MainActivity : AppCompatActivity() {
             dialog.dismiss()
             showTransSettingsDialog()
         }
+        view.findViewById<Button>(R.id.btnEqSettings).setOnClickListener {
+            dialog.dismiss()
+            showEqualizerDialog()
+        }
     }
 
     // ---------- 播放列表 ----------
@@ -1184,6 +1188,80 @@ class MainActivity : AppCompatActivity() {
                     .apply()
                 toast(getString(R.string.trans_saved))
             }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    // ---------- 均衡器（调音） ----------
+
+    private fun showEqualizerDialog() {
+        if (!AudioFxManager.isAttached) {
+            toast(getString(R.string.eq_need_play))
+            return
+        }
+        val view = layoutInflater.inflate(R.layout.dialog_equalizer, null)
+        val eqView = view.findViewById<EqualizerView>(R.id.equalizerView)
+        val btnPreset = view.findViewById<android.widget.TextView>(R.id.btnEqPreset)
+        val btnCustom = view.findViewById<android.widget.TextView>(R.id.btnEqCustom)
+        val btnRestore = view.findViewById<android.widget.TextView>(R.id.btnEqRestore)
+
+        fun styleTab(btn: android.widget.TextView, sel: Boolean) {
+            btn.isSelected = sel
+            btn.setTextColor(
+                if (sel) android.graphics.Color.WHITE
+                else androidx.core.content.ContextCompat.getColor(this@MainActivity, R.color.text_normal)
+            )
+        }
+
+        fun refresh() {
+            val gains = AudioFxManager.currentCurve(this@MainActivity)
+            val n = gains.size
+            if (n == 0) return
+            eqView.gains = gains
+            eqView.freqs = IntArray(n) { AudioFxManager.centerFreqHz(it) }
+            val r = AudioFxManager.bandRange()
+            eqView.minDb = r.first
+            eqView.maxDb = r.second
+            val custom = AudioFxManager.currentPreset(this@MainActivity).isEmpty()
+            styleTab(btnPreset, !custom)
+            styleTab(btnCustom, custom)
+            eqView.editable = custom
+        }
+
+        eqView.onBandChanged = { band, db ->
+            AudioFxManager.applyCustomBand(this@MainActivity, band, db)
+        }
+
+        btnPreset.setOnClickListener {
+            val names = AudioFxManager.PRESETS.keys.toTypedArray()
+            val cur = AudioFxManager.currentPreset(this@MainActivity)
+            val idx = names.indexOf(cur).coerceAtLeast(0)
+            AlertDialog.Builder(this)
+                .setTitle(R.string.eq_pick_preset)
+                .setSingleChoiceItems(names, idx) { d, which ->
+                    AudioFxManager.applyPreset(this@MainActivity, names[which])
+                    refresh()
+                    d.dismiss()
+                }
+                .show()
+        }
+
+        btnCustom.setOnClickListener {
+            // 切自定义：以当前曲线为起点继续微调
+            styleTab(btnPreset, false)
+            styleTab(btnCustom, true)
+            eqView.editable = true
+        }
+
+        btnRestore.setOnClickListener {
+            AudioFxManager.restorePreset(this@MainActivity)
+            refresh()
+        }
+
+        refresh()
+        AlertDialog.Builder(this)
+            .setTitle(null)
+            .setView(view)
             .setNegativeButton(R.string.cancel, null)
             .show()
     }

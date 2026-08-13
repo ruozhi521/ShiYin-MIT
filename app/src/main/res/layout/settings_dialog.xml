@@ -360,5 +360,13 @@
             android:layout_marginTop="10dp"
             android:text="@string/trans_settings" />
 
+        <Button
+            android:id="@+id/btnEqSettings"
+            style="@style/BtnStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="@string/eq_entry" />
+
     </LinearLayout>
 </ScrollView>

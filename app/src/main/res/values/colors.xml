@@ -11,4 +11,10 @@
     <color name="text_hint">#9AA0B4</color>
     <color name="current_bg">#144A6CF7</color>
     <color name="ic_launcher_background">#4A6CF7</color>
+    <!-- 调音面板（按截图：蓝色系） -->
+    <color name="eq_blue">#1976D2</color>
+    <color name="eq_tab_gray">#E6E6E6</color>
+    <color name="eq_panel_bg">#FFFFFF</color>
+    <color name="eq_restore_bg">#E3F2FD</color>
+    <color name="eq_restore_text">#1565C0</color>
 </resources>
