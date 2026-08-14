@@ -17,7 +17,6 @@ class LyriconBridge(private val context: Context) {
 
     /** 开关：关闭时所有推送静默跳过。 */
     var enabled: Boolean = true
-        private set
 
     private fun ensure(): LyriconProvider? {
         if (!enabled) return null
