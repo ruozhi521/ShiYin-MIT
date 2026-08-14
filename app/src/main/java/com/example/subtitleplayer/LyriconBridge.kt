@@ -34,7 +34,7 @@ class LyriconBridge(private val context: Context) {
     }
 
     /** 开关变更：开启时注册并等待同步，关闭时注销。 */
-    fun setEnabled(on: Boolean) {
+    fun applyEnabled(on: Boolean) {
         enabled = on
         if (on) ensure() else destroy()
     }

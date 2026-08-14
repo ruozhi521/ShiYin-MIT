@@ -141,16 +141,16 @@ class MediaPlaybackService : Service() {
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         createChannel()
         initMediaSession()
-        // 词幕开关（设置里可关）
+        // 词幕开关（设置里可关，默认关闭）
         lyriconBridge.enabled = getSharedPreferences("player", Context.MODE_PRIVATE)
-            .getBoolean(KEY_LYRICON, true)
+            .getBoolean(KEY_LYRICON, false)
     }
 
     /** 设置页开关：开启/关闭状态栏歌词推送（词幕）。 */
     fun setLyriconEnabled(on: Boolean) {
         getSharedPreferences("player", Context.MODE_PRIVATE)
             .edit().putBoolean(KEY_LYRICON, on).apply()
-        lyriconBridge.setEnabled(on)
+        lyriconBridge.applyEnabled(on)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

@@ -1117,7 +1117,7 @@ class MainActivity : AppCompatActivity() {
 
         // ---- 词幕（状态栏歌词）开关 ----
         val chkLyricon = view.findViewById<CheckBox>(R.id.chkLyricon)
-        chkLyricon.isChecked = prefs.getBoolean(MediaPlaybackService.KEY_LYRICON, true)
+        chkLyricon.isChecked = prefs.getBoolean(MediaPlaybackService.KEY_LYRICON, false)
         chkLyricon.setOnCheckedChangeListener { _, checked ->
             prefs.edit().putBoolean(MediaPlaybackService.KEY_LYRICON, checked).apply()
             playbackService?.setLyriconEnabled(checked)
