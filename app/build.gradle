@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace 'com.example.subtitleplayer'
-    compileSdk 34
+    compileSdk 36
 
     // 稳定签名：使用 CI 上恢复的固定 debug keystore（~/.android/debug.keystore）。
     // 显式指定可确保每次构建签名一致，覆盖安装不丢数据。
