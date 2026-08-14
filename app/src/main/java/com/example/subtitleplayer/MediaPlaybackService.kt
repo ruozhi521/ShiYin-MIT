@@ -94,6 +94,7 @@ class MediaPlaybackService : Service() {
     private var tick = 0
     private var pendingResumeMs = 0
     private var forcePlayAfterSeek = false
+    private val lyriconBridge by lazy { LyriconBridge(this) }
 
     private val progressRunnable = object : Runnable {
         override fun run() {
@@ -103,6 +104,7 @@ class MediaPlaybackService : Service() {
                 listener?.onProgress(pos, durationMs, lyricIndexAt(pos))
                 desktopLyrics?.updateText(lyricTextAt(pos))
                 tick++
+                if (tick % 4 == 0) lyriconBridge.syncPosition(pos)
                 if (tick % 30 == 0) savePosition()
                 handler.postDelayed(this, 300)
             }
@@ -160,6 +162,7 @@ class MediaPlaybackService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
+        lyriconBridge.destroy()
         savePosition()
         handler.removeCallbacks(progressRunnable)
         desktopLyrics?.hide()
@@ -352,6 +355,7 @@ class MediaPlaybackService : Service() {
         releasePlayer()
 
         loadLyric(song)
+        lyriconBridge.syncSong(song, lyricLines, lyricTrans, 0)
         listener?.onSongChanged(song, lyricLines, lyricName)
 
         val mp = MediaPlayer()
@@ -361,6 +365,7 @@ class MediaPlaybackService : Service() {
             mp.setOnPreparedListener { player ->
                 isPrepared = true
                 durationMs = player.duration
+                lyriconBridge.syncSong(currentSong(), lyricLines, lyricTrans, durationMs)
                 val resume = pendingResumeMs
                 pendingResumeMs = 0
                 if (resume > 0 && resume < durationMs) {
@@ -427,6 +432,7 @@ class MediaPlaybackService : Service() {
         }
         mp.start()
         android.util.Log.d("ShiYinAlarm", "play: started")
+        lyriconBridge.syncPlaybackState(true)
         updateAll(true)
     }
 
@@ -435,6 +441,7 @@ class MediaPlaybackService : Service() {
         cancelSleepTimer()
         mediaPlayer?.pause()
         abandonFocus()
+        lyriconBridge.syncPlaybackState(false)
         updateAll(false)
     }
 

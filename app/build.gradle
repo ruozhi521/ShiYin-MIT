@@ -22,8 +22,8 @@ android {
         applicationId "com.example.subtitleplayer"
         minSdk 26
         targetSdk 34
-        versionCode 9
-        versionName "1.2"
+        versionCode 10
+        versionName "1.21"
     }
 
     buildTypes {
@@ -55,4 +55,6 @@ dependencies {
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'androidx.recyclerview:recyclerview:1.3.2'
+    // 词幕（LyricOn）状态栏歌词 Provider SDK（Apache-2.0）
+    implementation 'io.github.proify.lyricon:provider:0.1.70'
 }

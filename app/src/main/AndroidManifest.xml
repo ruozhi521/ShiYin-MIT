@@ -18,6 +18,17 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.SubtitlePlayer">
 
+        <!-- 词幕（LyricOn）歌词提供端声明 -->
+        <meta-data
+            android:name="lyricon_module"
+            android:value="true" />
+        <meta-data
+            android:name="lyricon_module_author"
+            android:value="弱志" />
+        <meta-data
+            android:name="lyricon_module_description"
+            android:value="拾音 - 本地音乐播放器歌词提供端" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true">

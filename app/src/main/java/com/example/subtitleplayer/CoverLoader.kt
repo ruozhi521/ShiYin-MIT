@@ -49,7 +49,7 @@ object CoverLoader {
         }
     }
 
-    /** 加载本地图片文件（自定义封面用），带缓存。 */
+    /** 加载本地图片文件（自定义封面用，file:// 直接 decodeFile，ContentResolver 读不了 file scheme），带缓存。 */
     fun loadFile(
         context: Context,
         fileUri: Uri,
@@ -61,12 +61,10 @@ object CoverLoader {
             callback(it)
             return
         }
-        val appContext = context.applicationContext
         pool.execute {
             val bmp = try {
-                val input = appContext.contentResolver.openInputStream(fileUri)
-                val bytes = input?.use { it.readBytes() }
-                if (bytes != null) decodeScaled(bytes, targetSize) else null
+                val path = fileUri.path
+                if (path != null) decodeFileScaled(path, targetSize) else null
             } catch (e: Exception) {
                 null
             }
@@ -74,6 +72,24 @@ object CoverLoader {
                 synchronized(cache) { cache[cacheKey] = bmp }
             }
             mainHandler.post { callback(bmp) }
+        }
+    }
+
+    private fun decodeFileScaled(path: String, target: Int): Bitmap? {
+        return try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(path, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            var sample = 1
+            while (bounds.outWidth / (sample * 2) >= target &&
+                bounds.outHeight / (sample * 2) >= target
+            ) {
+                sample *= 2
+            }
+            val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+            BitmapFactory.decodeFile(path, opts)
+        } catch (e: Exception) {
+            null
         }
     }
 
