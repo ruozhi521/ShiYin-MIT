@@ -27,6 +27,7 @@
     <string name="bg_saved">背景图已更新</string>
     <string name="bg_cleared">已清除背景图</string>
     <string name="bg_failed">背景图设置失败</string>
+    <string name="lyricon_enabled">状态栏歌词（词幕）</string>
     <string name="eq_pick_preset">选择预设</string>
     <string name="trans_base_hint">接口地址（默认 https://api.deepseek.com/v1）</string>
     <string name="trans_key_hint">API Key（DeepSeek/通义/GLM 等）</string>

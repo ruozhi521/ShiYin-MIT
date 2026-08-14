@@ -1115,6 +1115,14 @@ class MainActivity : AppCompatActivity() {
         checkByTag(rgUi, prefs.getInt(KEY_UI_SIZE, 15))
         checkByTag(rgFont, prefs.getInt(KEY_LYRIC_FONT, 0))
 
+        // ---- 词幕（状态栏歌词）开关 ----
+        val chkLyricon = view.findViewById<CheckBox>(R.id.chkLyricon)
+        chkLyricon.isChecked = prefs.getBoolean(MediaPlaybackService.KEY_LYRICON, true)
+        chkLyricon.setOnCheckedChangeListener { _, checked ->
+            prefs.edit().putBoolean(MediaPlaybackService.KEY_LYRICON, checked).apply()
+            playbackService?.setLyriconEnabled(checked)
+        }
+
         // ---- 桌面歌词 ----
         val chkDesktopLyrics = view.findViewById<CheckBox>(R.id.chkDesktopLyrics)
         val lyricsGroup = view.findViewById<View>(R.id.lyricsGroup)

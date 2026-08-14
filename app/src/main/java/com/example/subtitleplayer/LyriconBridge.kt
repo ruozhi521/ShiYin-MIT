@@ -15,7 +15,12 @@ class LyriconBridge(private val context: Context) {
 
     private var provider: LyriconProvider? = null
 
+    /** 开关：关闭时所有推送静默跳过。 */
+    var enabled: Boolean = true
+        private set
+
     private fun ensure(): LyriconProvider? {
+        if (!enabled) return null
         if (provider == null) {
             provider = try {
                 LyriconFactory.createProvider(context).also {
@@ -27,6 +32,12 @@ class LyriconBridge(private val context: Context) {
             }
         }
         return provider
+    }
+
+    /** 开关变更：开启时注册并等待同步，关闭时注销。 */
+    fun setEnabled(on: Boolean) {
+        enabled = on
+        if (on) ensure() else destroy()
     }
 
     /** 同步当前歌曲与歌词（行级 + 译文）。song 为 null 时清空。 */

@@ -57,6 +57,7 @@ class MediaPlaybackService : Service() {
         const val KEY_DESKTOP_ON = "desktop_lyrics_on"
         const val KEY_MIX_AUDIO = "mix_audio"
         const val KEY_PLAY_MODE = "play_mode"
+        const val KEY_LYRICON = "lyricon_enabled"
         const val MODE_SEQUENCE = 0
         const val MODE_SHUFFLE = 1
         const val MODE_REPEAT_ONE = 2
@@ -140,6 +141,16 @@ class MediaPlaybackService : Service() {
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         createChannel()
         initMediaSession()
+        // 词幕开关（设置里可关）
+        lyriconBridge.enabled = getSharedPreferences("player", Context.MODE_PRIVATE)
+            .getBoolean(KEY_LYRICON, true)
+    }
+
+    /** 设置页开关：开启/关闭状态栏歌词推送（词幕）。 */
+    fun setLyriconEnabled(on: Boolean) {
+        getSharedPreferences("player", Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_LYRICON, on).apply()
+        lyriconBridge.setEnabled(on)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

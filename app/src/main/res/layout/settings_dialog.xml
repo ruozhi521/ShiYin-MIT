@@ -38,6 +38,15 @@
             android:textSize="12sp" />
 
         <CheckBox
+            android:id="@+id/chkLyricon"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/lyricon_enabled"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp" />
+
+        <CheckBox
             android:id="@+id/chkDesktopLyrics"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
