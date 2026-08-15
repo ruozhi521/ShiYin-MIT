@@ -753,13 +753,9 @@ class MediaPlaybackService : Service() {
         mediaSession?.setPlaybackState(ps)
 
         val song = currentSong()
-        val artwork = notificationArtwork
         val mb = MediaMetadata.Builder()
             .putString(MediaMetadata.METADATA_KEY_TITLE, song?.title ?: getString(R.string.app_name))
             .putString(MediaMetadata.METADATA_KEY_ARTIST, song?.artist ?: song?.folder ?: "")
-        if (artwork != null) {
-            mb.putBitmap(MediaMetadata.METADATA_KEY_ARTWORK, artwork)
-        }
         mediaSession?.setMetadata(mb.build())
     }
 
