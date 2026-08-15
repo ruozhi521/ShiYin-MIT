@@ -47,12 +47,17 @@ object SubtitleParser {
 
     private fun detectKind(text: String): Kind {
         if (text.trimStart().startsWith("WEBVTT")) return Kind.VTT
+        // 扫描前若干行：跳过 srt 序号行（纯数字）、NOTE、空行，直到找到时间行
+        var scanned = 0
         for (line in text.lines()) {
             val t = line.trim()
-            if (t.isNotEmpty() && !t.startsWith("NOTE")) {
-                if (vttTimeRe.containsMatchIn(t)) return Kind.VTT
-                break
-            }
+            if (t.isEmpty()) continue
+            scanned++
+            if (scanned > 30) break
+            if (t.startsWith("NOTE")) continue
+            if (t.matches(Regex("""\d+"""))) continue // srt 序号
+            if (vttTimeRe.containsMatchIn(t)) return Kind.VTT
+            if (lrcTimeRe.containsMatchIn(t)) return Kind.LRC
         }
         return Kind.LRC
     }

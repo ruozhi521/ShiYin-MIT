@@ -104,6 +104,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var txtTime: TextView
     private lateinit var btnPlayPlayer: ImageButton
     private var currentCoverKey: String? = null
+    /** 用户手动滑动歌词页的时间（4 秒冷却期内不自动回位）。 */
+    private var lastLyricUserScroll = 0L
+    /** 播放页沉浸模式。 */
+    private var playerImmersed = false
+    private val immersionHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val immersionRunnable = Runnable { enterImmersion() }
+    private lateinit var playerHeader: View
+    private lateinit var playerControlsMain: View
+    private lateinit var playerControlsExtra: View
     private var cdAnimator: ObjectAnimator? = null
 
     // ---- 全屏歌词页 ----
@@ -166,7 +175,7 @@ class MainActivity : AppCompatActivity() {
     private val serviceListener = object : MediaPlaybackService.Listener {
         override fun onSongChanged(song: Song?, lines: List<SubtitleLine>, lyricName: String?) {
             txtPlayerTitle.text = song?.title ?: ""
-            txtPlayerFolder.text = song?.folder ?: ""
+            txtPlayerFolder.text = song?.artist ?: ""
             txtMiniTitle.text = song?.title ?: ""
             hasSong = song != null
             // 播放页/歌词页显示时不拉起底部迷你条（避免双进度条），换歌也不复现
@@ -202,8 +211,11 @@ class MainActivity : AppCompatActivity() {
                 CoverLoader.load(this@MainActivity, song.uri, 400) { bmp ->
                     if (bmp != null && song.uri.toString() == currentCoverKey) {
                         imgCd.setImageBitmap(bmp)
+                        applyPlayerBackground(bmp)
                     }
                 }
+            } else {
+                applyPlayerBackground(null)
             }
         }
 
@@ -289,6 +301,9 @@ class MainActivity : AppCompatActivity() {
         viewSearch = findViewById(R.id.pageSearch)
         viewPlayer = findViewById(R.id.pagePlayer)
         viewLyrics = findViewById(R.id.pageLyrics)
+        playerHeader = findViewById(R.id.playerHeader)
+        playerControlsMain = findViewById(R.id.playerControlsMain)
+        playerControlsExtra = findViewById(R.id.playerControlsExtra)
         (viewPlayer as SwipeFrameLayout).onHorizontalSwipe = { dir, downY -> handleSwipe(dir, downY) }
         (viewLyrics as SwipeFrameLayout).onHorizontalSwipe = { dir, downY -> handleSwipe(dir, downY) }
 
@@ -320,6 +335,10 @@ class MainActivity : AppCompatActivity() {
             val idx = playbackService?.currentIndex() ?: -1
             currentSongs.getOrNull(idx)?.let { showSongCoverMenu(it) }
             true
+        }
+        // 播放页任意点击：沉浸时恢复，平时重置沉浸计时
+        viewPlayer.setOnClickListener {
+            if (playerImmersed) exitImmersion() else scheduleImmersion()
         }
         txtNowLyric = findViewById(R.id.txtNowLyric)
         seekBar = findViewById(R.id.seekBar)
@@ -374,6 +393,13 @@ class MainActivity : AppCompatActivity() {
         lyricAdapter = LyricAdapter { pos -> onLyricClick(pos) }
         recyclerLyricFull.layoutManager = LinearLayoutManager(this)
         recyclerLyricFull.adapter = lyricAdapter
+        // 用户手动滑动时记录时间（自动回位冷却）
+        recyclerLyricFull.setOnTouchListener { _, ev ->
+            if (ev.action == android.view.MotionEvent.ACTION_DOWN) {
+                lastLyricUserScroll = System.currentTimeMillis()
+            }
+            false
+        }
 
         // ---- 搜索 ----
         searchAdapter = SearchAdapter(
@@ -524,6 +550,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        cancelImmersion()
         cdAnimator?.cancel()
         cdAnimator = null
     }
@@ -647,6 +674,13 @@ class MainActivity : AppCompatActivity() {
      */
     private fun showPage(p: Page, slide: Int = 0) {
         page = p
+        if (p == Page.PLAYER) {
+            exitImmersion()
+            scheduleImmersion()
+        } else {
+            cancelImmersion()
+            exitImmersion()
+        }
         val shows = listOf(
             viewDiscover to (p == Page.DISCOVER),
             viewLibrary to (p == Page.LIBRARY),
@@ -749,7 +783,7 @@ class MainActivity : AppCompatActivity() {
         toast(getString(R.string.scanning))
         Thread {
             val lib = try {
-                LibraryScanner(contentResolver).scan(uri)
+                LibraryScanner(this, contentResolver).scan(uri)
             } catch (e: Exception) {
                 null
             }
@@ -1061,15 +1095,58 @@ class MainActivity : AppCompatActivity() {
 
     private fun scrollToLyric(idx: Int) {
         if (idx < 0) return
+        // 用户手动滑动后的冷却期内不自动回位（避免卡手）
+        if (System.currentTimeMillis() - lastLyricUserScroll < 4000) return
         val lm = recyclerLyricFull.layoutManager as? LinearLayoutManager ?: return
         val first = lm.findFirstVisibleItemPosition()
         val last = lm.findLastVisibleItemPosition()
         if (idx < first || idx > last) {
             val target = idx
             recyclerLyricFull.post {
-                lm.scrollToPositionWithOffset(target, recyclerLyricFull.height / 3)
+                // 平滑滚动回当前行（不再瞬时跳转）
+                val scroller = object : androidx.recyclerview.widget.LinearSmoothScroller(this@MainActivity) {
+                    override fun getVerticalSnapPreference(): Int =
+                        androidx.recyclerview.widget.LinearSmoothScroller.SNAP_TO_START
+                }
+                scroller.targetPosition = target
+                lm.startSmoothScroll(scroller)
             }
         }
+    }
+
+    // ---------- 播放页沉浸模式 ----------
+
+    private fun scheduleImmersion() {
+        if (page != Page.PLAYER) return
+        immersionHandler.removeCallbacks(immersionRunnable)
+        immersionHandler.postDelayed(immersionRunnable, 5000)
+    }
+
+    private fun cancelImmersion() {
+        immersionHandler.removeCallbacks(immersionRunnable)
+    }
+
+    /** 沉浸：隐藏顶部栏/进度/控制行，只留封面与歌词，封面放大。 */
+    private fun enterImmersion() {
+        if (playerImmersed || page != Page.PLAYER) return
+        playerImmersed = true
+        for (v in listOf(playerHeader, seekBar, txtTime, playerControlsMain, playerControlsExtra)) {
+            v.animate().alpha(0f).setDuration(250).withEndAction {
+                if (playerImmersed) v.visibility = View.INVISIBLE
+            }
+        }
+        imgCd.animate().scaleX(1.22f).scaleY(1.22f).setDuration(320).start()
+    }
+
+    /** 退出沉浸：恢复全部控件。 */
+    private fun exitImmersion() {
+        if (!playerImmersed) return
+        playerImmersed = false
+        for (v in listOf(playerHeader, seekBar, txtTime, playerControlsMain, playerControlsExtra)) {
+            v.visibility = View.VISIBLE
+            v.animate().alpha(1f).setDuration(200).start()
+        }
+        imgCd.animate().scaleX(1f).scaleY(1f).setDuration(250).start()
     }
 
     // ---------- 定时 / 设置 ----------
@@ -1538,7 +1615,38 @@ class MainActivity : AppCompatActivity() {
         CoverLoader.load(this, song.uri, 400) { bmp ->
             if (bmp != null && song.uri.toString() == currentCoverKey) {
                 imgCd.setImageBitmap(bmp)
+                applyPlayerBackground(bmp)
             }
+        }
+    }
+
+    /** 播放页背景：自定义背景图优先；无则用封面主色渐变（暗化保证可读）。 */
+    private fun applyPlayerBackground(cover: Bitmap?) {
+        val bgUri = BgManager.bgUri(this)
+        if (bgUri != null) {
+            BgManager.apply(viewPlayer, bgUri)
+            return
+        }
+        if (cover == null) {
+            viewPlayer.background = null
+            return
+        }
+        try {
+            val color = Bitmap.createScaledBitmap(cover, 1, 1, true).getPixel(0, 0)
+            val blend = { c: Int, ratio: Float ->
+                android.graphics.Color.rgb(
+                    (android.graphics.Color.red(c) * ratio).toInt().coerceIn(0, 255),
+                    (android.graphics.Color.green(c) * ratio).toInt().coerceIn(0, 255),
+                    (android.graphics.Color.blue(c) * ratio).toInt().coerceIn(0, 255)
+                )
+            }
+            val gd = android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(blend(color, 0.5f), blend(color, 0.25f))
+            )
+            viewPlayer.background = gd
+        } catch (e: Exception) {
+            viewPlayer.background = null
         }
     }
 

@@ -8,6 +8,7 @@
     android:visibility="gone">
 
     <LinearLayout
+        android:id="@+id/playerHeader"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
@@ -116,10 +117,50 @@
         android:textColor="@color/text_primary"
         android:textSize="13sp" />
 
+    <!-- 主控行：上一首 / 播放 / 下一首 -->
     <LinearLayout
+        android:id="@+id/playerControlsMain"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
+        android:layout_marginTop="6dp"
+        android:gravity="center"
+        android:orientation="horizontal">
+
+        <ImageButton
+            android:id="@+id/btnPrev"
+            android:layout_width="52dp"
+            android:layout_height="52dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/prev"
+            android:src="@drawable/ic_prev"
+            android:tint="?attr/colorControlNormal" />
+
+        <ImageButton
+            android:id="@+id/btnPlayPlayer"
+            android:layout_width="76dp"
+            android:layout_height="76dp"
+            android:layout_marginStart="18dp"
+            android:layout_marginEnd="18dp"
+            android:background="@drawable/bg_play_circle"
+            android:contentDescription="@string/play"
+            android:src="@drawable/ic_play" />
+
+        <ImageButton
+            android:id="@+id/btnNext"
+            android:layout_width="52dp"
+            android:layout_height="52dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/next"
+            android:src="@drawable/ic_next"
+            android:tint="?attr/colorControlNormal" />
+    </LinearLayout>
+
+    <!-- 功能行：定时 / 播放模式 / 队列 / 全屏歌词 -->
+    <LinearLayout
+        android:id="@+id/playerControlsExtra"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
         android:gravity="center"
         android:orientation="horizontal">
 
@@ -136,43 +177,17 @@
             android:id="@+id/btnPlayMode"
             android:layout_width="44dp"
             android:layout_height="44dp"
+            android:layout_marginStart="28dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/play_mode_sequence"
             android:src="@drawable/ic_repeat"
             android:tint="?attr/colorControlNormal" />
 
         <ImageButton
-            android:id="@+id/btnPrev"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/prev"
-            android:src="@drawable/ic_prev"
-            android:tint="?attr/colorControlNormal" />
-
-        <ImageButton
-            android:id="@+id/btnPlayPlayer"
-            android:layout_width="68dp"
-            android:layout_height="68dp"
-            android:layout_marginStart="8dp"
-            android:layout_marginEnd="8dp"
-            android:background="@drawable/bg_play_circle"
-            android:contentDescription="@string/play"
-            android:src="@drawable/ic_play" />
-
-        <ImageButton
-            android:id="@+id/btnNext"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/next"
-            android:src="@drawable/ic_next"
-            android:tint="?attr/colorControlNormal" />
-
-        <ImageButton
             android:id="@+id/btnQueue"
             android:layout_width="44dp"
             android:layout_height="44dp"
+            android:layout_marginStart="28dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/queue"
             android:src="@drawable/ic_queue"
@@ -182,6 +197,7 @@
             android:id="@+id/btnLyricsIcon"
             android:layout_width="44dp"
             android:layout_height="44dp"
+            android:layout_marginStart="28dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/lyrics_full"
             android:src="@drawable/ic_lyric"

@@ -24,6 +24,7 @@ object LibraryCache {
                         .put("title", s.title)
                         .put("uri", s.uri.toString())
                         .put("folder", s.folder)
+                        .put("artist", s.artist)
                 )
             }
             val lyrics = JSONArray()
@@ -57,7 +58,8 @@ object LibraryCache {
                     Song(
                         o.getString("title"),
                         Uri.parse(o.getString("uri")),
-                        o.getString("folder")
+                        o.getString("folder"),
+                        o.optString("artist", "")
                     )
                 )
             }

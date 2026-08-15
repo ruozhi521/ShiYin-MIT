@@ -96,6 +96,7 @@ class MediaPlaybackService : Service() {
     private var pendingResumeMs = 0
     private var forcePlayAfterSeek = false
     private val lyriconBridge by lazy { LyriconBridge(this) }
+    private var notificationArtwork: android.graphics.Bitmap? = null
 
     private val progressRunnable = object : Runnable {
         override fun run() {
@@ -367,6 +368,7 @@ class MediaPlaybackService : Service() {
 
         loadLyric(song)
         lyriconBridge.syncSong(song, lyricLines, lyricTrans, 0)
+        loadNotificationArtwork(song)
         listener?.onSongChanged(song, lyricLines, lyricName)
 
         val mp = MediaPlayer()
@@ -679,7 +681,7 @@ class MediaPlaybackService : Service() {
     private fun buildNotification(playing: Boolean): Notification {
         val song = currentSong()
         val title = song?.title ?: getString(R.string.app_name)
-        val text = song?.folder ?: getString(R.string.no_song)
+        val text = song?.artist ?: song?.folder ?: getString(R.string.no_song)
 
         val openPi = PendingIntent.getActivity(
             this, 0,
@@ -702,6 +704,7 @@ class MediaPlaybackService : Service() {
             .setSmallIcon(R.drawable.ic_music)
             .setContentTitle(title)
             .setContentText(text)
+            .setLargeIcon(notificationArtwork)
             .setContentIntent(openPi)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -750,11 +753,27 @@ class MediaPlaybackService : Service() {
         mediaSession?.setPlaybackState(ps)
 
         val song = currentSong()
-        val metadata = MediaMetadata.Builder()
+        val artwork = notificationArtwork
+        val mb = MediaMetadata.Builder()
             .putString(MediaMetadata.METADATA_KEY_TITLE, song?.title ?: getString(R.string.app_name))
-            .putString(MediaMetadata.METADATA_KEY_ARTIST, song?.folder ?: "")
-            .build()
-        mediaSession?.setMetadata(metadata)
+            .putString(MediaMetadata.METADATA_KEY_ARTIST, song?.artist ?: song?.folder ?: "")
+        if (artwork != null) {
+            mb.putBitmap(MediaMetadata.METADATA_KEY_ARTWORK, artwork)
+        }
+        mediaSession?.setMetadata(mb.build())
+    }
+
+    /** 异步加载封面，用于媒体通知与 MediaSession artwork。 */
+    private fun loadNotificationArtwork(song: Song?) {
+        if (song == null) {
+            notificationArtwork = null
+            return
+        }
+        CoverLoader.load(this, song.uri, 96) { bmp ->
+            notificationArtwork = bmp
+            showForeground()
+            updateMediaSession(isPlaying())
+        }
     }
 
     // ---------- 文本解码（与旧代码一致） ----------

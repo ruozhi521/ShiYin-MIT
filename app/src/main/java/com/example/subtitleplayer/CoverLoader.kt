@@ -102,6 +102,7 @@ object CoverLoader {
         return try {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
             var sample = 1
             while (bounds.outWidth / (sample * 2) >= target &&
                 bounds.outHeight / (sample * 2) >= target
@@ -109,7 +110,13 @@ object CoverLoader {
                 sample *= 2
             }
             val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-            BitmapFactory.decodeByteArray(data, 0, data.size, opts)
+            try {
+                BitmapFactory.decodeByteArray(data, 0, data.size, opts)
+            } catch (e: OutOfMemoryError) {
+                // 内存不足时进一步降采样重试（高清封面兜底）
+                opts.inSampleSize = sample * 2
+                BitmapFactory.decodeByteArray(data, 0, data.size, opts)
+            }
         } catch (e: Exception) {
             null
         }

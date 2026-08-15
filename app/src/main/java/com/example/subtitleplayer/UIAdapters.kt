@@ -36,7 +36,7 @@ class DiscoverAdapter(
         holder.index.text = (position + 1).toString()
         holder.title.text = song.title
         holder.title.setTextSize(uiSizeSp)
-        holder.artist.text = song.folder
+        holder.artist.text = song.artist.ifBlank { song.folder }
         holder.cover.setImageResource(R.drawable.ic_music_tinted)
         CoverLoader.load(holder.itemView.context, song.uri, 200) { bmp ->
             if (bmp != null && holder.bindingAdapterPosition == position) {

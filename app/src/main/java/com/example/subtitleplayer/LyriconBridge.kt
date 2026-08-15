@@ -67,7 +67,7 @@ class LyriconBridge(private val context: Context) {
                 LyriconSong(
                     id = song.uri.toString(),
                     name = song.title,
-                    artist = song.folder.ifBlank { null },
+                    artist = song.artist.ifBlank { song.folder }.ifBlank { null },
                     duration = durationMs.toLong(),
                     lyrics = lines
                 )

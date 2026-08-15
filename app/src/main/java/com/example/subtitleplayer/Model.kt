@@ -6,7 +6,8 @@ import android.net.Uri
 data class Song(
     val title: String,
     val uri: Uri,
-    val folder: String
+    val folder: String,
+    val artist: String = ""
 )
 
 /** 一个歌词文件引用（播放时再读取内容）。 */

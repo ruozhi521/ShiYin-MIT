@@ -1,6 +1,8 @@
 package com.example.subtitleplayer
 
 import android.content.ContentResolver
+import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.DocumentsContract
 import java.util.Locale
@@ -10,12 +12,16 @@ import java.util.Locale
  * - 每个子文件夹成为一个歌单（根目录散落的音频归入 [DEFAULT_FOLDER]）
  * - 自动记录所有 .lrc/.vtt/.txt 歌词，供按文件名匹配
  */
-class LibraryScanner(private val resolver: ContentResolver) {
+class LibraryScanner(
+    private val context: Context,
+    private val resolver: ContentResolver
+) {
 
     private val audioExts = setOf(
-        "mp3", "m4a", "wav", "flac", "aac", "ogg", "opus", "amr", "wma", "mid", "midi"
+        "mp3", "m4a", "wav", "flac", "aac", "ogg", "opus", "amr", "wma", "mid", "midi",
+        "mp4", "m4v"
     )
-    private val lyricExts = setOf("lrc", "vtt", "txt")
+    private val lyricExts = setOf("lrc", "vtt", "txt", "srt")
 
     fun scan(treeUri: Uri): MusicLibrary {
         val rootId = DocumentsContract.getTreeDocumentId(treeUri)
@@ -63,7 +69,16 @@ class LibraryScanner(private val resolver: ContentResolver) {
                         }
                         isAudio(mime, name) -> {
                             val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
-                            songsHere.add(Song(name, uri, folderName ?: DEFAULT_FOLDER))
+                            val (tagTitle, tagArtist) = readTags(uri)
+                            songsHere.add(
+                                Song(
+                                    title = tagTitle?.takeIf { it.isNotBlank() } ?: stemOf(name),
+                                    uri = uri,
+                                    folder = folderName ?: DEFAULT_FOLDER,
+                                    artist = tagArtist?.takeIf { it.isNotBlank() }
+                                        ?: (folderName ?: DEFAULT_FOLDER)
+                                )
+                            )
                         }
                         isLyric(name) -> {
                             val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
@@ -95,6 +110,20 @@ class LibraryScanner(private val resolver: ContentResolver) {
     private fun isAudio(mime: String, name: String): Boolean {
         if (mime.startsWith("audio/")) return true
         return extOf(name) in audioExts
+    }
+
+    /** 读取内嵌标题/艺术家（读文件头，不整读）。失败返回 null，回退文件名/文件夹名。 */
+    private fun readTags(uri: Uri): Pair<String?, String?> {
+        return try {
+            val r = MediaMetadataRetriever()
+            r.setDataSource(context, uri)
+            val title = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
+            val artist = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+            r.release()
+            title to artist
+        } catch (e: Exception) {
+            null to null
+        }
     }
 
     private fun isLyric(name: String): Boolean = extOf(name) in lyricExts
