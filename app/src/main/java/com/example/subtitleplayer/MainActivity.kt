@@ -114,6 +114,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var playerHeader: View
     private lateinit var playerControlsMain: View
     private lateinit var playerControlsExtra: View
+    private lateinit var txtImmersiveLyric: android.widget.TextView
     private var cdAnimator: ObjectAnimator? = null
 
     // ---- 全屏歌词页 ----
@@ -305,6 +306,7 @@ class MainActivity : AppCompatActivity() {
         playerHeader = findViewById(R.id.playerHeader)
         playerControlsMain = findViewById(R.id.playerControlsMain)
         playerControlsExtra = findViewById(R.id.playerControlsExtra)
+        txtImmersiveLyric = findViewById(R.id.txtImmersiveLyric)
         (viewPlayer as SwipeFrameLayout).onHorizontalSwipe = { dir, downY -> handleSwipe(dir, downY) }
         (viewLyrics as SwipeFrameLayout).onHorizontalSwipe = { dir, downY -> handleSwipe(dir, downY) }
 
@@ -394,10 +396,12 @@ class MainActivity : AppCompatActivity() {
         lyricAdapter = LyricAdapter { pos -> onLyricClick(pos) }
         recyclerLyricFull.layoutManager = LinearLayoutManager(this)
         recyclerLyricFull.adapter = lyricAdapter
-        // 用户手动滑动时记录时间（自动回位冷却）
+        // 用户手动滑动时记录时间（自动回位冷却；按下与移动都刷新，松手后才开始计 5 秒）
         recyclerLyricFull.setOnTouchListener { _, ev ->
-            if (ev.action == android.view.MotionEvent.ACTION_DOWN) {
-                lastLyricUserScroll = System.currentTimeMillis()
+            when (ev.action) {
+                android.view.MotionEvent.ACTION_DOWN,
+                android.view.MotionEvent.ACTION_MOVE ->
+                    lastLyricUserScroll = System.currentTimeMillis()
             }
             false
         }
@@ -1064,6 +1068,11 @@ class MainActivity : AppCompatActivity() {
     // ---------- 播放页 CD / 歌词 ----------
 
     private fun updateNowLyric(lyricIndex: Int) {
+        if (playerImmersed) {
+            currentLyricHighlight = lyricIndex
+            updateImmersiveLyric()
+            return
+        }
         val newText = if (lyricIndex >= 0 && lyricIndex < lyricLines.size) {
             lyricLines[lyricIndex].text
         } else if (lyricLines.isNotEmpty() && lyricLines[0].startMs < 0) {
@@ -1096,8 +1105,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun scrollToLyric(idx: Int) {
         if (idx < 0) return
-        // 用户手动滑动后的冷却期内不自动回位（避免卡手）
-        if (System.currentTimeMillis() - lastLyricUserScroll < 4000) return
+        // 用户手动滑动后的冷却期内不自动回位（避免卡手，5 秒）
+        if (System.currentTimeMillis() - lastLyricUserScroll < 5000) return
         val lm = recyclerLyricFull.layoutManager as? LinearLayoutManager ?: return
         val first = lm.findFirstVisibleItemPosition()
         val last = lm.findLastVisibleItemPosition()
@@ -1120,14 +1129,15 @@ class MainActivity : AppCompatActivity() {
     private fun scheduleImmersion() {
         if (page != Page.PLAYER) return
         immersionHandler.removeCallbacks(immersionRunnable)
-        immersionHandler.postDelayed(immersionRunnable, 5000)
+        val seconds = prefs.getInt(KEY_IMMERSION_SECONDS, 5).coerceIn(3, 120)
+        immersionHandler.postDelayed(immersionRunnable, seconds * 1000L)
     }
 
     private fun cancelImmersion() {
         immersionHandler.removeCallbacks(immersionRunnable)
     }
 
-    /** 沉浸：隐藏顶部栏/进度/控制行，只留封面与歌词，封面放大。 */
+    /** 沉浸：隐藏顶部栏/进度/控制行，只留封面与歌词，封面放大；同时隐藏系统栏去除白边。 */
     private fun enterImmersion() {
         if (playerImmersed || page != Page.PLAYER) return
         playerImmersed = true
@@ -1137,9 +1147,22 @@ class MainActivity : AppCompatActivity() {
             }
         }
         imgCd.animate().scaleX(1.22f).scaleY(1.22f).setDuration(320).start()
+        // 隐藏系统状态栏/导航栏，消除上下白边
+        try {
+            androidx.core.view.WindowCompat.getInsetsController(window, viewPlayer)?.apply {
+                systemBarsBehavior =
+                    androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            }
+        } catch (_: Exception) {
+        }
+        // 切换为多行沉浸歌词
+        txtNowLyric.visibility = View.GONE
+        txtImmersiveLyric.visibility = View.VISIBLE
+        updateImmersiveLyric()
     }
 
-    /** 退出沉浸：恢复全部控件。 */
+    /** 退出沉浸：恢复全部控件与系统栏。 */
     private fun exitImmersion() {
         if (!playerImmersed) return
         playerImmersed = false
@@ -1148,6 +1171,25 @@ class MainActivity : AppCompatActivity() {
             v.animate().alpha(1f).setDuration(200).start()
         }
         imgCd.animate().scaleX(1f).scaleY(1f).setDuration(250).start()
+        try {
+            androidx.core.view.WindowCompat.getInsetsController(window, viewPlayer)
+                ?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        } catch (_: Exception) {
+        }
+        txtImmersiveLyric.visibility = View.GONE
+        txtNowLyric.visibility = View.VISIBLE
+    }
+
+    /** 沉浸歌词：显示当前行 ± 前后一行（共三行）。 */
+    private fun updateImmersiveLyric() {
+        val idx = currentLyricHighlight.coerceIn(0, lyricLines.size - 1)
+        val parts = mutableListOf<String>()
+        for (i in idx - 1..idx + 1) {
+            if (i in lyricLines.indices) {
+                parts.add(lyricLines[i].text)
+            }
+        }
+        txtImmersiveLyric.text = parts.joinToString("\n")
     }
 
     // ---------- 定时 / 设置 ----------
@@ -1352,6 +1394,28 @@ class MainActivity : AppCompatActivity() {
             setOnCheckedChangeListener { _, checked ->
                 prefs.edit().putBoolean(KEY_DARK, checked).apply()
                 applyDarkMode(checked)
+            }
+        })
+
+        // 沉浸进入时间
+        box.addView(android.widget.TextView(this).apply {
+            text = getString(R.string.immersion_seconds_title)
+            textSize = 16f
+            setTextColor(getColor(R.color.text_primary))
+            setPadding(0, dp(14f), 0, dp(14f))
+            setOnClickListener {
+                val options = arrayOf("5 秒", "10 秒", "15 秒", "30 秒", "关闭")
+                val values = intArrayOf(5, 10, 15, 30, 0)
+                val cur = prefs.getInt(KEY_IMMERSION_SECONDS, 5)
+                val idx = values.indexOf(cur).coerceAtLeast(0)
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle(R.string.immersion_seconds_title)
+                    .setSingleChoiceItems(options, idx) { d, which ->
+                        prefs.edit().putInt(KEY_IMMERSION_SECONDS, values[which]).apply()
+                        d.dismiss()
+                        toast(getString(R.string.saved))
+                    }
+                    .show()
             }
         })
 
@@ -1875,6 +1939,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val KEY_TREE = "tree_uri"
         private const val KEY_AUTO_SCAN = "auto_scan"
+        private const val KEY_IMMERSION_SECONDS = "immersion_seconds"
         private const val KEY_DARK = "dark_mode"
         private const val KEY_LYRIC_SIZE = "lyric_size"
         private const val KEY_UI_SIZE = "ui_size"

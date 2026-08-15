@@ -101,6 +101,18 @@
         android:textSize="18sp"
         android:textStyle="bold" />
 
+    <!-- 沉浸模式歌词（多行） -->
+    <TextView
+        android:id="@+id/txtImmersiveLyric"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:gravity="center"
+        android:lineSpacingExtra="6dp"
+        android:textSize="16sp"
+        android:textColor="@color/text_primary"
+        android:visibility="gone" />
+
     <SeekBar
         android:id="@+id/seekBar"
         android:layout_width="match_parent"

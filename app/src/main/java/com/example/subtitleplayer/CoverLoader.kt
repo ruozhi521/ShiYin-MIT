@@ -38,7 +38,13 @@ object CoverLoader {
                 retriever.setDataSource(appContext, uri)
                 val data = retriever.embeddedPicture
                 retriever.release()
-                if (data != null) decodeScaled(data, targetSize) else null
+                if (data != null) {
+                    decodeScaled(data, targetSize)
+                } else {
+                    // 高分辨率封面 embeddedPicture 可能返回 null：用 ID3v2 APIC 帧兜底
+                    val pic = Id3LyricsParser.extractEmbeddedPicture(appContext, uri)
+                    if (pic != null) decodeScaled(pic, targetSize) else null
+                }
             } catch (e: Exception) {
                 null
             }

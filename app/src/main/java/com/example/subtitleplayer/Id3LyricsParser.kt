@@ -14,6 +14,7 @@ import java.nio.charset.Charset
 object Id3LyricsParser {
 
     private const val MAX_TAG_BYTES = 2 * 1024 * 1024
+    private const val MAX_PIC_BYTES = 16 * 1024 * 1024
 
     fun parse(context: Context, uri: Uri): List<SubtitleLine>? {
         return try {
@@ -21,6 +22,92 @@ object Id3LyricsParser {
         } catch (e: Exception) {
             null
         }
+    }
+
+    /**
+     * 提取 ID3v2 APIC 帧中的内嵌封面（字节）。
+     * MediaMetadataRetriever.embeddedPicture 对高分辨率封面可能返回 null，
+     * 此方法作为兜底直接解析文件头的 APIC 帧。
+     */
+    fun extractEmbeddedPicture(context: Context, uri: Uri): ByteArray? {
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { input -> extractPicture(input) }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun extractPicture(input: InputStream): ByteArray? {
+        val header = ByteArray(10)
+        if (!readFully(input, header)) return null
+        if (header[0] != 'I'.code.toByte() ||
+            header[1] != 'D'.code.toByte() ||
+            header[2] != '3'.code.toByte()
+        ) {
+            return null
+        }
+        val major = header[3].toInt() and 0xFF
+        if (major != 3 && major != 4) return null
+        val tagSize = synchsafe(header, 6)
+        if (tagSize <= 0 || tagSize > MAX_PIC_BYTES) return null
+        val body = ByteArray(tagSize)
+        val got = readFullyLen(input, body)
+        if (got < 10) return null
+        return findPicture(body, got, major)
+    }
+
+    private fun findPicture(body: ByteArray, len: Int, major: Int): ByteArray? {
+        var off = 0
+        while (off + 10 <= len) {
+            val id = String(body, off, 4, Charsets.ISO_8859_1)
+            val size = if (major == 4) {
+                synchsafe(body, off + 4)
+            } else {
+                ((body[off + 4].toInt() and 0xFF) shl 24) or
+                    ((body[off + 5].toInt() and 0xFF) shl 16) or
+                    ((body[off + 6].toInt() and 0xFF) shl 8) or
+                    (body[off + 7].toInt() and 0xFF)
+            }
+            off += 10
+            if (size <= 0 || off + size > len) break
+            if (id == "APIC") {
+                return parseApicData(body, off, size)
+            }
+            off += size
+        }
+        return null
+    }
+
+    /** APIC 帧体：encoding(1) + mime(0 结尾) + 图片类型(1) + 描述(0 结尾) + 图片数据。 */
+    private fun parseApicData(body: ByteArray, start: Int, size: Int): ByteArray? {
+        if (size < 6) return null
+        val encoding = body[start].toInt() and 0xFF
+        var i = start + 1
+        var mimeEnd = -1
+        while (i < start + size) {
+            if (body[i] == 0.toByte()) {
+                mimeEnd = i
+                break
+            }
+            i++
+        }
+        if (mimeEnd < 0) return null
+        i = mimeEnd + 1 + 1 // mime 结束符 + 图片类型
+        val term = if (encoding == 1 || encoding == 2) 2 else 1
+        while (i + term <= start + size) {
+            var found = true
+            for (k in 0 until term) {
+                if (body[i + k] != 0.toByte()) {
+                    found = false
+                    break
+                }
+            }
+            if (found) break
+            i++
+        }
+        i += term
+        if (i >= start + size) return null
+        return body.copyOfRange(i, start + size)
     }
 
     /** 只读文件头部：ID3v2 标签位于文件最前，无需读取整个音频文件。 */

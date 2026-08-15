@@ -29,6 +29,8 @@
     <string name="bg_failed">背景图设置失败</string>
     <string name="lyricon_enabled">状态栏歌词（词幕）</string>
     <string name="lyricon_hint">需 root + LSPosed + 词幕模块；各机型效果请以实际为准</string>
+    <string name="immersion_seconds_title">沉浸模式进入时间</string>
+    <string name="saved">已保存</string>
     <string name="eq_pick_preset">选择预设</string>
     <string name="trans_base_hint">接口地址（默认 https://api.deepseek.com/v1）</string>
     <string name="trans_key_hint">API Key（DeepSeek/通义/GLM 等）</string>
