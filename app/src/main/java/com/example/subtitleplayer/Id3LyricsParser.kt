@@ -47,8 +47,14 @@ object Id3LyricsParser {
             return null
         }
         val major = header[3].toInt() and 0xFF
-        if (major != 3 && major != 4) return null
-        val tagSize = synchsafe(header, 6)
+        if (major != 2 && major != 3 && major != 4) return null
+        // v2.2 用普通大端 4 字节；v2.3+ 用 synchsafe。
+        val tagSize = if (major == 2) {
+            ((header[6].toInt() and 0xFF) shl 24) or
+                ((header[7].toInt() and 0xFF) shl 16) or
+                ((header[8].toInt() and 0xFF) shl 8) or
+                (header[9].toInt() and 0xFF)
+        } else synchsafe(header, 6)
         if (tagSize <= 0 || tagSize > MAX_PIC_BYTES) return null
         val body = ByteArray(tagSize)
         val got = readFullyLen(input, body)
@@ -69,6 +75,31 @@ object Id3LyricsParser {
                 ((body[2].toInt() and 0xFF) shl 8) or
                 (body[3].toInt() and 0xFF)
             if (extSize in 4 until len - 10) off = extSize
+        }
+        if (major == 2) {
+            // ID3v2.2：帧 id 3 字符、大小 3 字节、无 flags；封面帧为 PIC
+            while (off + 6 <= len) {
+                val id3 = String(body, off, 3, Charsets.ISO_8859_1)
+                var valid = true
+                for (k in 0 until 3) {
+                    val b = body[off + k].toInt() and 0xFF
+                    if (b < 0x20 || b > 0x7E) {
+                        valid = false
+                        break
+                    }
+                }
+                if (!valid) break
+                val size = ((body[off + 3].toInt() and 0xFF) shl 16) or
+                    ((body[off + 4].toInt() and 0xFF) shl 8) or
+                    (body[off + 5].toInt() and 0xFF)
+                off += 6
+                if (size <= 0 || off + size > len) break
+                if (id3 == "PIC") {
+                    return parsePicV22(body, off, size)
+                }
+                off += size
+            }
+            return null
         }
         while (off + 10 <= len) {
             val id = String(body, off, 4, Charsets.ISO_8859_1)
@@ -115,6 +146,28 @@ object Id3LyricsParser {
         }
         if (mimeEnd < 0) return null
         i = mimeEnd + 1 + 1 // mime 结束符 + 图片类型
+        val term = if (encoding == 1 || encoding == 2) 2 else 1
+        while (i + term <= start + size) {
+            var found = true
+            for (k in 0 until term) {
+                if (body[i + k] != 0.toByte()) {
+                    found = false
+                    break
+                }
+            }
+            if (found) break
+            i++
+        }
+        i += term
+        if (i >= start + size) return null
+        return body.copyOfRange(i, start + size)
+    }
+
+    /** PIC 帧体（v2.2）：encoding(1) + image_format(3,如 JPG) + 图片类型(1) + 描述(0 结尾) + 图片数据。 */
+    private fun parsePicV22(body: ByteArray, start: Int, size: Int): ByteArray? {
+        if (size < 6) return null
+        val encoding = body[start].toInt() and 0xFF
+        var i = start + 1 + 3 + 1 // encoding + image_format(3) + type(1)
         val term = if (encoding == 1 || encoding == 2) 2 else 1
         while (i + term <= start + size) {
             var found = true

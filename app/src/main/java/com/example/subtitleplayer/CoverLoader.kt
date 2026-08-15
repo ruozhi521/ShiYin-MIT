@@ -7,6 +7,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import java.util.concurrent.Executors
 
 /**
@@ -21,13 +22,14 @@ object CoverLoader {
 
     fun load(context: Context, uri: Uri, targetSize: Int, callback: (Bitmap?) -> Unit) {
         val key = uri.toString()
+        val cacheKey = key + "#" + targetSize
         // 自定义单曲封面优先
         val custom = CoverManager.songCover(context, key)
         if (custom != null) {
-            loadFile(context, custom, key, targetSize, callback)
+            loadFile(context, custom, cacheKey, targetSize, callback)
             return
         }
-        cache[key]?.let {
+        cache[cacheKey]?.let {
             callback(it)
             return
         }
@@ -44,13 +46,14 @@ object CoverLoader {
                     // 高分辨率封面 embeddedPicture 可能返回 null：ID3v2 APIC / FLAC PICTURE 兜底
                     val pic = Id3LyricsParser.extractEmbeddedPicture(appContext, uri)
                         ?: Id3LyricsParser.extractFlacPicture(appContext, uri)
-                    if (pic != null) decodeScaled(pic, targetSize) else null
+                    if (pic != null) decodeScaled(pic, targetSize)
+                    else albumArtFallback(appContext, uri, targetSize)
                 }
             } catch (e: Exception) {
                 null
             }
             if (bmp != null) {
-                synchronized(cache) { cache[key] = bmp }
+                synchronized(cache) { cache[cacheKey] = bmp }
             }
             mainHandler.post { callback(bmp) }
         }
@@ -82,6 +85,37 @@ object CoverLoader {
         }
     }
 
+    /** 无内嵌封面时兜底：查 MediaStore 专辑封面（文件夹 cover.jpg / 同专辑共享封面）。 */
+    private fun albumArtFallback(context: Context, uri: Uri, targetSize: Int): Bitmap? {
+        return try {
+            var albumId: Long = -1
+            context.contentResolver.query(
+                uri,
+                arrayOf(MediaStore.Audio.Media.ALBUM_ID),
+                null,
+                null,
+                null
+            )?.use { c ->
+                if (c.moveToFirst() && !c.isNull(0)) albumId = c.getLong(0)
+            }
+            if (albumId < 0) return null
+            var artPath: String? = null
+            context.contentResolver.query(
+                MediaStore.Audio.Albums.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Audio.Albums.ALBUM_ART),
+                MediaStore.Audio.Albums._ID + " = ?",
+                arrayOf(albumId.toString()),
+                null
+            )?.use { c ->
+                if (c.moveToFirst()) artPath = c.getString(0)
+            }
+            if (artPath == null) return null
+            decodeFileScaled(artPath, targetSize)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun decodeFileScaled(path: String, target: Int): Bitmap? {
         return try {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -100,9 +134,14 @@ object CoverLoader {
         }
     }
 
-    /** 清除自定义封面的缓存（设置/清除封面后调用）。 */
+    /** 清除缓存（设置/清除封面后调用；按前缀清除该 uri 的所有尺寸变体）。 */
     fun invalidate(cacheKey: String) {
-        synchronized(cache) { cache.remove(cacheKey) }
+        synchronized(cache) {
+            val it = cache.keys.iterator()
+            while (it.hasNext()) {
+                if (it.next().startsWith(cacheKey)) it.remove()
+            }
+        }
     }
 
     private fun decodeScaled(data: ByteArray, target: Int): Bitmap? {
