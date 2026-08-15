@@ -41,8 +41,9 @@ object CoverLoader {
                 if (data != null) {
                     decodeScaled(data, targetSize)
                 } else {
-                    // 高分辨率封面 embeddedPicture 可能返回 null：用 ID3v2 APIC 帧兜底
+                    // 高分辨率封面 embeddedPicture 可能返回 null：ID3v2 APIC / FLAC PICTURE 兜底
                     val pic = Id3LyricsParser.extractEmbeddedPicture(appContext, uri)
+                        ?: Id3LyricsParser.extractFlacPicture(appContext, uri)
                     if (pic != null) decodeScaled(pic, targetSize) else null
                 }
             } catch (e: Exception) {

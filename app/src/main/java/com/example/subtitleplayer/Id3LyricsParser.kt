@@ -58,8 +58,30 @@ object Id3LyricsParser {
 
     private fun findPicture(body: ByteArray, len: Int, major: Int): ByteArray? {
         var off = 0
+        // 扩展头（flags bit6）：v2.3 普通字节序、v2.4 synchsafe，大小含自身。
+        // 无扩展头时 body 起始是帧 id（4 字母，转数值巨大），会被 < len-10 校验挡下，安全。
+        if (major == 4) {
+            val extSize = synchsafe(body, 0)
+            if (extSize > 0 && extSize < len - 10) off = extSize
+        } else if (major == 3) {
+            val extSize = ((body[0].toInt() and 0xFF) shl 24) or
+                ((body[1].toInt() and 0xFF) shl 16) or
+                ((body[2].toInt() and 0xFF) shl 8) or
+                (body[3].toInt() and 0xFF)
+            if (extSize in 4 until len - 10) off = extSize
+        }
         while (off + 10 <= len) {
             val id = String(body, off, 4, Charsets.ISO_8859_1)
+            // 帧 id 校验：4 个可打印字符（0x20~0x7E），padding 全 0 时停止
+            var valid = true
+            for (k in 0 until 4) {
+                val b = body[off + k].toInt() and 0xFF
+                if (b < 0x20 || b > 0x7E) {
+                    valid = false
+                    break
+                }
+            }
+            if (!valid) break
             val size = if (major == 4) {
                 synchsafe(body, off + 4)
             } else {
@@ -108,6 +130,81 @@ object Id3LyricsParser {
         i += term
         if (i >= start + size) return null
         return body.copyOfRange(i, start + size)
+    }
+
+    /**
+     * 提取 FLAC 内嵌封面（METADATA_BLOCK_PICTURE，type 6）。
+     * FLAC 封面在文件头 metadata 块，MediaMetadataRetriever 对高分辨率可能返回 null。
+     */
+    fun extractFlacPicture(context: Context, uri: Uri): ByteArray? {
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { input -> extractFlac(input) }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun extractFlac(input: InputStream): ByteArray? {
+        val magic = ByteArray(4)
+        if (!readFully(input, magic)) return null
+        if (String(magic, Charsets.ISO_8859_1) != "fLaC") return null
+        var last = false
+        var picData: ByteArray? = null
+        while (!last) {
+            val head = ByteArray(4)
+            if (!readFully(input, head)) break
+            last = (head[0].toInt() and 0x80) != 0
+            val type = head[0].toInt() and 0x7F
+            val len = ((head[1].toInt() and 0xFF) shl 16) or
+                ((head[2].toInt() and 0xFF) shl 8) or
+                (head[3].toInt() and 0xFF)
+            if (len < 0 || len > MAX_PIC_BYTES) break
+            if (type == 6) {
+                val data = ByteArray(len)
+                if (!readFully(input, data)) break
+                picData = parseFlacPicture(data)
+                break
+            } else {
+                if (!skipFully(input, len)) break
+            }
+        }
+        return picData
+    }
+
+    private fun skipFully(input: InputStream, n: Int): Boolean {
+        var left = n
+        val buf = ByteArray(4096)
+        while (left > 0) {
+            val r = input.read(buf, 0, minOf(left, buf.size))
+            if (r < 0) return false
+            left -= r
+        }
+        return true
+    }
+
+    /** PICTURE 块：type(4) + mimeLen(4) + mime + descLen(4) + desc + w/h/depth/colors(各4) + dataLen(4) + data。 */
+    private fun parseFlacPicture(data: ByteArray): ByteArray? {
+        var off = 0
+        fun u32(): Long {
+            if (off + 4 > data.size) return -1
+            val v = ((data[off].toLong() and 0xFF) shl 24) or
+                ((data[off + 1].toLong() and 0xFF) shl 16) or
+                ((data[off + 2].toLong() and 0xFF) shl 8) or
+                (data[off + 3].toLong() and 0xFF)
+            off += 4
+            return v
+        }
+        if (u32() < 0) return null
+        val mimeLen = u32()
+        if (mimeLen < 0 || off + mimeLen > data.size) return null
+        off += mimeLen.toInt()
+        val descLen = u32()
+        if (descLen < 0 || off + descLen > data.size) return null
+        off += descLen.toInt()
+        u32(); u32(); u32(); u32() // width height depth colors
+        val dataLen = u32()
+        if (dataLen < 0 || off + dataLen > data.size) return null
+        return data.copyOfRange(off, off + dataLen.toInt())
     }
 
     /** 只读文件头部：ID3v2 标签位于文件最前，无需读取整个音频文件。 */

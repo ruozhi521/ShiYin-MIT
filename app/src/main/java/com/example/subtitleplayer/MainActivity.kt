@@ -115,6 +115,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var playerControlsMain: View
     private lateinit var playerControlsExtra: View
     private lateinit var txtImmersiveLyric: android.widget.TextView
+    private lateinit var bottomNav: View
     private var cdAnimator: ObjectAnimator? = null
 
     // ---- 全屏歌词页 ----
@@ -307,6 +308,7 @@ class MainActivity : AppCompatActivity() {
         playerControlsMain = findViewById(R.id.playerControlsMain)
         playerControlsExtra = findViewById(R.id.playerControlsExtra)
         txtImmersiveLyric = findViewById(R.id.txtImmersiveLyric)
+        bottomNav = findViewById(R.id.bottomNav)
         (viewPlayer as SwipeFrameLayout).onHorizontalSwipe = { dir, downY -> handleSwipe(dir, downY) }
         (viewLyrics as SwipeFrameLayout).onHorizontalSwipe = { dir, downY -> handleSwipe(dir, downY) }
 
@@ -1160,6 +1162,10 @@ class MainActivity : AppCompatActivity() {
         txtNowLyric.visibility = View.GONE
         txtImmersiveLyric.visibility = View.VISIBLE
         updateImmersiveLyric()
+        // 隐藏底部导航（发现/音乐库）
+        bottomNav.animate().alpha(0f).setDuration(250).withEndAction {
+            if (playerImmersed) bottomNav.visibility = View.GONE
+        }
     }
 
     /** 退出沉浸：恢复全部控件与系统栏。 */
@@ -1178,6 +1184,8 @@ class MainActivity : AppCompatActivity() {
         }
         txtImmersiveLyric.visibility = View.GONE
         txtNowLyric.visibility = View.VISIBLE
+        bottomNav.visibility = View.VISIBLE
+        bottomNav.animate().alpha(1f).setDuration(200).start()
     }
 
     /** 沉浸歌词：显示当前行 ± 前后一行（共三行）。 */
