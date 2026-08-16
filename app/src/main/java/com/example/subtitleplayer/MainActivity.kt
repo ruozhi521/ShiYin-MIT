@@ -278,6 +278,9 @@ class MainActivity : AppCompatActivity() {
             updateCdAnimation(playing)
             if (page == Page.VIDEO) {
                 txtVideoHint.visibility = if (playing) View.GONE else View.VISIBLE
+                findViewById<ImageButton>(R.id.btnVideoPlay).setImageResource(
+                    if (playing) R.drawable.ic_pause else R.drawable.ic_play
+                )
             }
         }
     }
@@ -384,6 +387,9 @@ class MainActivity : AppCompatActivity() {
         txtVideoTime = findViewById(R.id.txtVideoTime)
         findViewById<Button>(R.id.btnVideoBack).setOnClickListener { closeVideoPage() }
         findViewById<ImageButton>(R.id.btnVideo).setOnClickListener { openVideoPage() }
+        findViewById<ImageButton>(R.id.btnVideoPlay).setOnClickListener {
+            playbackService?.togglePlay()
+        }
         videoSurface.surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(
                 st: android.graphics.SurfaceTexture, width: Int, height: Int
@@ -2157,6 +2163,10 @@ class MainActivity : AppCompatActivity() {
         seekVideo.max = playbackService?.currentDuration() ?: 0
         txtVideoHint.visibility =
             if (playbackService?.isPlayingSafe() == true) View.GONE else View.VISIBLE
+        findViewById<ImageButton>(R.id.btnVideoPlay).setImageResource(
+            if (playbackService?.isPlayingSafe() == true) R.drawable.ic_pause
+            else R.drawable.ic_play
+        )
     }
 
     /** 播放器解出真实视频尺寸：修正方向并重新适配画面。 */

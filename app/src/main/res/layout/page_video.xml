@@ -62,11 +62,21 @@
             android:minWidth="64dp"
             android:text="@string/back" />
 
+        <ImageButton
+            android:id="@+id/btnVideoPlay"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="8dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/play"
+            android:src="@drawable/ic_play"
+            android:tint="#FFFFFF" />
+
         <TextView
             android:id="@+id/txtVideoTime"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="10dp"
+            android:layout_marginStart="8dp"
             android:text="00:00 / 00:00"
             android:textColor="#FFFFFF"
             android:textSize="12sp" />

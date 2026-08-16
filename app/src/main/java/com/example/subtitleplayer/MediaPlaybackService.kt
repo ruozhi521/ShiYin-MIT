@@ -283,14 +283,41 @@ class MediaPlaybackService : Service() {
         attachedVideoSurface = surface
         val mp = mediaPlayer ?: return
         try {
-            mp.setSurface(surface)
-            android.util.Log.d("ShiYinVideo", "attachVideoSurface: surface=$surface")
-            if (surface != null && mp.isPlaying) {
-                // 播放中附加 surface：部分设备/解码器不自动输出新帧，
-                // seek 到当前位置强制触发一次重绘
-                val pos = mp.currentPosition
-                mp.seekTo(pos)
-                android.util.Log.d("ShiYinVideo", "attachVideoSurface: seekTo($pos) force redraw")
+            if (surface != null) {
+                val wasPlaying = try {
+                    mp.isPlaying
+                } catch (e: Exception) {
+                    false
+                }
+                val pos = try {
+                    mp.currentPosition
+                } catch (e: Exception) {
+                    0
+                }
+                // 强制重建渲染通道并出帧：硬件解码器在播放中/暂停中换 surface 不会自动渲染
+                mp.setSurface(null)
+                mp.setSurface(surface)
+                try {
+                    mp.pause()
+                } catch (e: Exception) {
+                }
+                try {
+                    mp.seekTo(pos)
+                } catch (e: Exception) {
+                }
+                if (wasPlaying) {
+                    try {
+                        mp.start()
+                    } catch (e: Exception) {
+                    }
+                }
+                android.util.Log.d(
+                    "ShiYinVideo",
+                    "attachVideoSurface: force refresh wasPlaying=$wasPlaying pos=$pos"
+                )
+            } else {
+                mp.setSurface(null)
+                android.util.Log.d("ShiYinVideo", "attachVideoSurface: detach")
             }
         } catch (e: Exception) {
             android.util.Log.e("ShiYinVideo", "attachVideoSurface failed: ${e.message}")
