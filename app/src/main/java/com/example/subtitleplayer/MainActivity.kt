@@ -2261,9 +2261,11 @@ class MainActivity : AppCompatActivity() {
     private fun refreshCdCover() {
         // 用 Service 当前歌曲（不依赖 Activity 队列，后台/闹钟恢复播放也能刷新）
         val song = playbackService?.currentSongSafe() ?: return
+        android.util.Log.d("ShiYinCover", "refreshCdCover song=${song.uri} key=$currentCoverKey")
         CoverLoader.invalidate(song.uri.toString())
         imgCd.setImageResource(R.drawable.ic_music_tinted)
         CoverLoader.load(this, song.uri, 400, folder = song.folder) { bmp ->
+            android.util.Log.d("ShiYinCover", "refreshCdCover bmp=${bmp != null} key=$currentCoverKey")
             if (bmp != null && song.uri.toString() == currentCoverKey) {
                 imgCd.setImageBitmap(bmp)
                 applyPlayerBackground(bmp)

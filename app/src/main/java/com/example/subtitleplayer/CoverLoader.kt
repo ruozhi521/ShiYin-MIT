@@ -31,6 +31,7 @@ object CoverLoader {
         val cacheKey = key + "#" + targetSize
         // 自定义单曲封面优先
         val custom = CoverManager.songCover(context, key)
+        android.util.Log.d("ShiYinCover", "load uri=$key size=$targetSize custom=${custom?.toString() ?: "null"}")
         if (custom != null) {
             loadFile(context, custom, cacheKey, targetSize) { bmp ->
                 if (bmp != null) {
@@ -108,10 +109,12 @@ object CoverLoader {
         pool.execute {
             val bmp = try {
                 val path = fileUri.path
+                android.util.Log.d("ShiYinCover", "loadFile path=$path exists=${path?.let { java.io.File(it).exists() }}")
                 if (path != null) decodeFileScaled(path, targetSize) else null
             } catch (e: Exception) {
                 null
             }
+            android.util.Log.d("ShiYinCover", "loadFile result bmp=${bmp != null}")
             if (bmp != null) {
                 synchronized(cache) { cache[cacheKey] = bmp }
             }
