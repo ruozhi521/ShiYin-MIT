@@ -22,6 +22,8 @@ object ArtistLoader {
     /** uri -> artist 缓存（内存 + 磁盘持久化） */
     private val artistCache = HashMap<String, String>()
     private var loading = false
+    /** 加载期间到达的回调：完成后统一执行，避免丢失（loading 竞态导致永远卡加载）。 */
+    private val pendingCallbacks = ArrayList<(List<Pair<String, List<Song>>>) -> Unit>()
 
     /** 返回 歌手名 -> 歌曲列表（有序），在主线程回调。 */
     fun loadArtists(
@@ -29,7 +31,10 @@ object ArtistLoader {
         songs: List<Song>,
         callback: (List<Pair<String, List<Song>>>) -> Unit
     ) {
-        if (loading) return
+        if (loading) {
+            synchronized(pendingCallbacks) { pendingCallbacks.add(callback) }
+            return
+        }
         val allCached = songs.all { artistCache.containsKey(it.uri.toString()) }
         if (allCached) {
             callback(groupArtists(songs))
@@ -67,9 +72,27 @@ object ArtistLoader {
                     }
                 }
                 saveDisk(appContext)
-                mainHandler.post { callback(groupArtists(songs)) }
-            } finally {
-                loading = false
+                val result = groupArtists(songs)
+                mainHandler.post {
+                    loading = false
+                    callback(result)
+                    synchronized(pendingCallbacks) {
+                        val copy = ArrayList(pendingCallbacks)
+                        pendingCallbacks.clear()
+                        for (c in copy) c(result)
+                    }
+                }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    loading = false
+                    val empty = emptyList<Pair<String, List<Song>>>()
+                    callback(empty)
+                    synchronized(pendingCallbacks) {
+                        val copy = ArrayList(pendingCallbacks)
+                        pendingCallbacks.clear()
+                        for (c in copy) c(empty)
+                    }
+                }
             }
         }
     }

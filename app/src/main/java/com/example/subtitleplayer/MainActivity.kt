@@ -1155,7 +1155,6 @@ class MainActivity : AppCompatActivity() {
         if (artistLoaded || artistLoading) return
         val lib = library ?: return
         artistLoading = true
-        toast(getString(R.string.loading_artists))
         ArtistLoader.loadArtists(this, lib.allSongs) { groups ->
             artistLoading = false
             artistLoaded = true
@@ -2151,15 +2150,18 @@ class MainActivity : AppCompatActivity() {
             if (playbackService?.isPlayingSafe() == true) View.GONE else View.VISIBLE
     }
 
-    /** 视频画面等比适配（letterbox 居中），避免竖屏视频被拉伸。 */
+    /** 视频画面等比适配（letterbox 居中），避免竖屏视频被拉伸或裁切。 */
     private fun fitVideoSurface(viewW: Int, viewH: Int) {
         if (videoW <= 0 || videoH <= 0 || viewW <= 0 || viewH <= 0) return
         val scale = minOf(
             viewW.toFloat() / videoW,
             viewH.toFloat() / videoH
         )
+        val dx = (viewW - videoW * scale) / 2f
+        val dy = (viewH - videoH * scale) / 2f
         val m = android.graphics.Matrix()
-        m.setScale(scale, scale, viewW / 2f, viewH / 2f)
+        m.setScale(scale, scale)
+        m.postTranslate(dx, dy)
         videoSurface.setTransform(m)
     }
 
