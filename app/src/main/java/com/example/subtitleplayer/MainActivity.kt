@@ -397,6 +397,8 @@ class MainActivity : AppCompatActivity() {
 
             override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean {
                 videoSurfaceAttached = false
+                // surface 销毁时立即脱离画面，避免 MediaPlayer 持续向已销毁 surface 输出（跳歌/闪退）
+                playbackService?.attachVideoSurface(null)
                 return true
             }
 
