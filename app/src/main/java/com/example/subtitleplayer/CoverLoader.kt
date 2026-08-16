@@ -32,13 +32,32 @@ object CoverLoader {
         // 自定义单曲封面优先
         val custom = CoverManager.songCover(context, key)
         if (custom != null) {
-            loadFile(context, custom, cacheKey, targetSize, callback)
+            loadFile(context, custom, cacheKey, targetSize) { bmp ->
+                if (bmp != null) {
+                    callback(bmp)
+                } else {
+                    // 自定义封面读取失败（文件缺失/损坏）：回退常规封面链，避免完全无封面
+                    loadEmbeddedFallback(context, uri, targetSize, folder, cacheKey, callback)
+                }
+            }
             return
         }
         cache[cacheKey]?.let {
             callback(it)
             return
         }
+        loadEmbeddedFallback(context, uri, targetSize, folder, cacheKey, callback)
+    }
+
+    /** 常规封面链：内嵌 → APIC/FLAC → 专辑封面 → 歌单自定义封面兜底。 */
+    private fun loadEmbeddedFallback(
+        context: Context,
+        uri: Uri,
+        targetSize: Int,
+        folder: String?,
+        cacheKey: String,
+        callback: (Bitmap?) -> Unit
+    ) {
         val appContext = context.applicationContext
         pool.execute {
             val bmp = try {
