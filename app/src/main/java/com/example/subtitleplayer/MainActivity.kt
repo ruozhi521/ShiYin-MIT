@@ -45,7 +45,7 @@ import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
-    private enum class Page { DISCOVER, LIBRARY, PLAYLIST, SEARCH, PLAYER, LYRICS }
+    private enum class Page { DISCOVER, LIBRARY, PLAYLIST, SEARCH, PLAYER, LYRICS, FAVORITES, VIDEO }
 
     // ---- 页面视图 ----
     private lateinit var viewDiscover: View
@@ -56,9 +56,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var viewLyrics: View
 
     // ---- 底部导航 ----
-    private lateinit var tabDiscover: TextView
-    private lateinit var tabLibrary: TextView
-    private var currentTab = 0
+    private var currentModule = MODULE_LIBRARY
+    private val navTabs = LinkedHashMap<String, android.widget.TextView>()
     private var hasSong = false
 
     // ---- 迷你播放条 ----
@@ -116,6 +115,25 @@ class MainActivity : AppCompatActivity() {
     private lateinit var playerControlsExtra: View
     private lateinit var txtImmersiveLyric: android.widget.TextView
     private lateinit var bottomNav: View
+
+    // ---- 收藏页 ----
+    private lateinit var viewFavorites: View
+    private lateinit var btnFavorite: android.widget.TextView
+    private lateinit var recyclerFavorites: RecyclerView
+    private lateinit var txtFavoritesEmpty: TextView
+    private lateinit var favoritesAdapter: SongAdapter
+    private var favoriteSongs: List<Song> = emptyList()
+
+    // ---- 视频页 ----
+    private lateinit var viewVideo: View
+    private lateinit var videoSurface: android.view.TextureView
+    private lateinit var txtVideoHint: android.widget.TextView
+    private lateinit var seekVideo: SeekBar
+    private lateinit var txtVideoTime: android.widget.TextView
+    private var videoSurfaceAttached = false
+    private var videoSpeedUp = false
+    private var videoDownX = 0f
+    private val videoLongPressHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var cdAnimator: ObjectAnimator? = null
 
     // ---- 全屏歌词页 ----
@@ -180,7 +198,10 @@ class MainActivity : AppCompatActivity() {
             txtPlayerTitle.text = song?.title ?: ""
             txtPlayerFolder.text = song?.artist ?: ""
             txtMiniTitle.text = song?.title ?: ""
+            updateFavoriteButton(song)
             hasSong = song != null
+            findViewById<ImageButton>(R.id.btnVideo).visibility =
+                if (isVideoFile(song?.uri)) View.VISIBLE else View.GONE
             // 播放页/歌词页显示时不拉起底部迷你条（避免双进度条），换歌也不复现
             if (song != null && page != Page.PLAYER && page != Page.LYRICS) {
                 if (miniPlayer.visibility != View.VISIBLE) {
@@ -230,6 +251,11 @@ class MainActivity : AppCompatActivity() {
             if (miniSeekBar.max != duration) {
                 miniSeekBar.max = duration
             }
+            if (page == Page.VIDEO) {
+                if (seekVideo.max != duration) seekVideo.max = duration
+                if (!seekVideo.isPressed) seekVideo.progress = position
+                txtVideoTime.text = formatTime(position) + " / " + formatTime(duration)
+            }
             if (!seekBar.isPressed) {
                 seekBar.progress = position
             }
@@ -248,6 +274,9 @@ class MainActivity : AppCompatActivity() {
         override fun onPlayStateChanged(playing: Boolean) {
             updatePlayButtons(playing)
             updateCdAnimation(playing)
+            if (page == Page.VIDEO) {
+                txtVideoHint.visibility = if (playing) View.GONE else View.VISIBLE
+            }
         }
     }
 
@@ -261,11 +290,35 @@ class MainActivity : AppCompatActivity() {
 
     /** 自定义封面选图（复制到内部存储，无需持久授权）。 */
     private var pendingCoverTarget: String? = null
+    /** 批量封面模式：非空时 coverPicker 回调对这批 uri 批量写单曲封面。 */
+    private var pendingBatchSongs: List<String>? = null
     private val coverPicker =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             val target = pendingCoverTarget
             pendingCoverTarget = null
-            if (uri == null || target == null) return@registerForActivityResult
+            val batch = pendingBatchSongs
+            pendingBatchSongs = null
+            if (uri == null || (target == null && batch == null)) {
+                return@registerForActivityResult
+            }
+            // 批量模式：对勾选歌曲逐一写单曲封面
+            if (batch != null) {
+                var ok = 0
+                batch.forEach { su ->
+                    if (CoverManager.setSongCover(this, su, uri) != null) {
+                        ok++
+                        CoverLoader.invalidate(su)
+                    }
+                }
+                if (ok > 0) {
+                    toast(getString(R.string.batch_cover_done, ok))
+                    gridAdapter.notifyDataSetChanged()
+                    refreshCdCover()
+                } else {
+                    toast(getString(R.string.cover_failed))
+                }
+                return@registerForActivityResult
+            }
             val ok = if (target.startsWith("pl:")) {
                 CoverManager.setPlaylistCover(this, target.removePrefix("pl:"), uri) != null
             } else {
@@ -309,11 +362,64 @@ class MainActivity : AppCompatActivity() {
         playerControlsExtra = findViewById(R.id.playerControlsExtra)
         txtImmersiveLyric = findViewById(R.id.txtImmersiveLyric)
         bottomNav = findViewById(R.id.bottomNav)
+        viewFavorites = findViewById(R.id.pageFavorites)
+        btnFavorite = findViewById(R.id.btnFavorite)
+        recyclerFavorites = findViewById(R.id.recyclerFavorites)
+        txtFavoritesEmpty = findViewById(R.id.txtFavoritesEmpty)
+        btnFavorite.setOnClickListener {
+            val idx = playbackService?.currentIndex() ?: -1
+            val song = currentSongs.getOrNull(idx) ?: return@setOnClickListener
+            val on = FavoritesManager.toggle(this, song.uri.toString())
+            toast(getString(if (on) R.string.favorited else R.string.unfavorited))
+            updateFavoriteButton(song)
+            if (page == Page.FAVORITES) openFavorites()
+        }
+
+        viewVideo = findViewById(R.id.pageVideo)
+        videoSurface = findViewById(R.id.videoSurface)
+        txtVideoHint = findViewById(R.id.txtVideoHint)
+        seekVideo = findViewById(R.id.seekVideo)
+        txtVideoTime = findViewById(R.id.txtVideoTime)
+        findViewById<Button>(R.id.btnVideoBack).setOnClickListener { closeVideoPage() }
+        findViewById<ImageButton>(R.id.btnVideo).setOnClickListener { openVideoPage() }
+        videoSurface.surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
+            override fun onSurfaceTextureAvailable(
+                st: android.graphics.SurfaceTexture, width: Int, height: Int
+            ) {
+                playbackService?.attachVideoSurface(android.view.Surface(st))
+                videoSurfaceAttached = true
+            }
+
+            override fun onSurfaceTextureSizeChanged(
+                st: android.graphics.SurfaceTexture, width: Int, height: Int
+            ) {
+            }
+
+            override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean {
+                videoSurfaceAttached = false
+                return true
+            }
+
+            override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {
+            }
+        }
+        videoSurface.setOnTouchListener { v, ev -> handleVideoTouch(v, ev) }
+        seekVideo.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(
+                sb: android.widget.SeekBar, progress: Int, fromUser: Boolean
+            ) {
+            }
+
+            override fun onStartTrackingTouch(sb: android.widget.SeekBar) {
+            }
+
+            override fun onStopTrackingTouch(sb: android.widget.SeekBar) {
+                playbackService?.seekTo(sb.progress)
+            }
+        })
         (viewPlayer as SwipeFrameLayout).onHorizontalSwipe = { dir, downY -> handleSwipe(dir, downY) }
         (viewLyrics as SwipeFrameLayout).onHorizontalSwipe = { dir, downY -> handleSwipe(dir, downY) }
 
-        tabDiscover = findViewById(R.id.tabDiscover)
-        tabLibrary = findViewById(R.id.tabLibrary)
         miniPlayer = findViewById(R.id.miniPlayer)
         txtMiniTitle = findViewById(R.id.txtMiniTitle)
         btnMiniPlay = findViewById(R.id.btnMiniPlay)
@@ -338,7 +444,7 @@ class MainActivity : AppCompatActivity() {
         imgCd = findViewById(R.id.imgCd)
         imgCd.setOnLongClickListener {
             val idx = playbackService?.currentIndex() ?: -1
-            currentSongs.getOrNull(idx)?.let { showSongCoverMenu(it) }
+            currentSongs.getOrNull(idx)?.let { showSongMenu(it) }
             true
         }
         // 播放页任意点击：沉浸时恢复，平时重置沉浸计时
@@ -425,9 +531,16 @@ class MainActivity : AppCompatActivity() {
         recyclerSearch.layoutManager = LinearLayoutManager(this)
         recyclerSearch.adapter = searchAdapter
 
+        favoritesAdapter = SongAdapter(
+            hasLyric = { s -> library?.lyrics?.containsKey(s.uri.toString()) == true },
+            onClick = { pos -> playSong(favoriteSongs, pos) },
+            onLongClick = { showSongMenu(it) }
+        )
+        recyclerFavorites.layoutManager = LinearLayoutManager(this)
+        recyclerFavorites.adapter = favoritesAdapter
+        findViewById<Button>(R.id.btnBackFav).setOnClickListener { showPage(Page.LIBRARY) }
+
         // ---- 底部导航 ----
-        tabDiscover.setOnClickListener { selectTab(0) }
-        tabLibrary.setOnClickListener { selectTab(1) }
 
         // ---- 播放页控制 ----
         findViewById<Button>(R.id.btnBackSongs).setOnClickListener { backFromPlayer() }
@@ -517,7 +630,8 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        selectTab(0)
+        buildNavTabs()
+        selectModule(defaultModule())
         applyAppearance()
 
         // 恢复上次选择的文件夹
@@ -564,14 +678,162 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- 页面与导航 ----------
 
-    private fun selectTab(tab: Int) {
-        currentTab = tab
+    // ---------- 导航（用户自定义：增删/排序/默认页） ----------
+    private fun selectModule(module: String) {
+        currentModule = module
         val accent = ThemeManager.accent(this)
-        tabDiscover.setTextColor(if (tab == 0) accent else getColor(R.color.text_hint))
-        tabDiscover.typeface = if (tab == 0) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-        tabLibrary.setTextColor(if (tab == 1) accent else getColor(R.color.text_hint))
-        tabLibrary.typeface = if (tab == 1) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-        showPage(if (tab == 0) Page.DISCOVER else Page.LIBRARY)
+        navTabs.forEach { (m, v) ->
+            v.setTextColor(if (m == module) accent else getColor(R.color.text_hint))
+            v.typeface = if (m == module) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+        }
+        when (module) {
+            MODULE_DISCOVER -> showPage(Page.DISCOVER)
+            MODULE_LIBRARY -> { showPage(Page.LIBRARY); showSegment(true) }
+            MODULE_ARTISTS -> { showPage(Page.LIBRARY); showSegment(false) }
+            MODULE_FAVORITES -> openFavorites()
+            else -> showPage(Page.LIBRARY)
+        }
+    }
+
+    /** 按配置重建底部导航 tab。 */
+    private fun buildNavTabs() {
+        bottomNav.removeAllViews()
+        navTabs.clear()
+        navModules().forEach { m ->
+            val tv = android.widget.TextView(this).apply {
+                text = getString(navLabel(m))
+                gravity = android.view.Gravity.CENTER
+                setPadding(dp(10f), dp(10f), dp(10f), dp(10f))
+                textSize = 14f
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                )
+                setOnClickListener { selectModule(m) }
+            }
+            navTabs[m] = tv
+            bottomNav.addView(tv)
+        }
+    }
+
+    private fun navModules(): List<String> =
+        (prefs.getString(KEY_NAV_TABS, DEFAULT_NAV)?.split(",") ?: emptyList())
+            .filter { it in ALL_MODULES }.ifEmpty { ALL_MODULES }
+
+    private fun defaultModule(): String {
+        val d = prefs.getString(KEY_NAV_DEFAULT, null)
+        val list = navModules()
+        return if (d != null && list.contains(d)) d else list.first()
+    }
+
+    private fun navLabel(module: String): Int = when (module) {
+        MODULE_DISCOVER -> R.string.tab_discover
+        MODULE_LIBRARY -> R.string.tab_library
+        MODULE_ARTISTS -> R.string.nav_artists
+        else -> R.string.nav_favorites
+    }
+
+    /** 导航栏设置弹窗：开关显示、上下移动排序、默认启动页。 */
+    private fun showNavDialog() {
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(dp(20f), dp(10f), dp(20f), dp(10f))
+        }
+        val order = navModules().toMutableList()
+        var def = defaultModule()
+
+        fun persist() {
+            if (order.isEmpty()) order.add(MODULE_LIBRARY)
+            prefs.edit().putString(KEY_NAV_TABS, order.joinToString(",")).apply()
+            prefs.edit().putString(KEY_NAV_DEFAULT, def).apply()
+            buildNavTabs()
+            selectModule(if (navTabs.containsKey(currentModule)) currentModule else navTabs.keys.first())
+        }
+
+        fun render() {
+            box.removeAllViews()
+            ALL_MODULES.forEach { m ->
+                val visible = order.contains(m)
+                val row = android.widget.LinearLayout(this@MainActivity).apply {
+                    orientation = android.widget.LinearLayout.HORIZONTAL
+                    gravity = android.view.Gravity.CENTER_VERTICAL
+                }
+                row.addView(android.widget.TextView(this@MainActivity).apply {
+                    text = getString(navLabel(m))
+                    textSize = 15f
+                    setTextColor(getColor(if (visible) R.color.text_primary else R.color.text_hint))
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                    )
+                })
+                if (m == def) {
+                    row.addView(android.widget.TextView(this@MainActivity).apply {
+                        text = getString(R.string.nav_default_mark)
+                        textSize = 11f
+                        setTextColor(getColor(R.color.accent))
+                    })
+                }
+                if (visible) {
+                    val idx = order.indexOf(m)
+                    if (idx > 0) {
+                        row.addView(android.widget.Button(this@MainActivity).apply {
+                            text = getString(R.string.nav_move_up)
+                            setOnClickListener {
+                                val j = order.indexOf(m)
+                                order.removeAt(j); order.add(j - 1, m)
+                                persist(); render()
+                            }
+                        })
+                    }
+                    if (idx < order.size - 1) {
+                        row.addView(android.widget.Button(this@MainActivity).apply {
+                            text = getString(R.string.nav_move_down)
+                            setOnClickListener {
+                                val j = order.indexOf(m)
+                                order.removeAt(j); order.add(j + 1, m)
+                                persist(); render()
+                            }
+                        })
+                    }
+                }
+                row.addView(android.widget.Switch(this@MainActivity).apply {
+                    isChecked = visible
+                    setOnCheckedChangeListener { _, checked ->
+                        if (checked && !order.contains(m)) {
+                            order.add(m)
+                        } else if (!checked && order.contains(m)) {
+                            order.remove(m)
+                            if (def == m) def = order.firstOrNull() ?: m
+                        }
+                        persist(); render()
+                    }
+                })
+                box.addView(row)
+            }
+            // 默认启动页
+            box.addView(android.widget.TextView(this@MainActivity).apply {
+                text = getString(R.string.nav_default_page)
+                textSize = 16f
+                setTextColor(getColor(R.color.text_primary))
+                setPadding(0, dp(14f), 0, dp(10f))
+                setOnClickListener {
+                    val opts = order.map { getString(navLabel(it)) }.toTypedArray()
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle(R.string.nav_default_page)
+                        .setItems(opts) { d, which ->
+                            def = order[which]
+                            persist(); render()
+                            d.dismiss()
+                        }
+                        .show()
+                }
+            })
+        }
+        render()
+        AlertDialog.Builder(this)
+            .setTitle(R.string.nav_title)
+            .setView(box)
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     /** 应用主题色：进度条、播放按钮、tab、列表/歌词高亮、全局蓝色按钮。 */
@@ -587,7 +849,7 @@ class MainActivity : AppCompatActivity() {
         imgCd.backgroundTintList = list
         txtNowLyric.setTextColor(a)
         tintAccentViews(findViewById<View>(android.R.id.content), list)
-        selectTab(currentTab)
+        selectModule(currentModule)
         songAdapter.notifyDataSetChanged()
         lyricAdapter.notifyDataSetChanged()
         discoverAdapter.notifyDataSetChanged()
@@ -694,7 +956,9 @@ class MainActivity : AppCompatActivity() {
             viewPlaylist to (p == Page.PLAYLIST),
             viewSearch to (p == Page.SEARCH),
             viewPlayer to (p == Page.PLAYER),
-            viewLyrics to (p == Page.LYRICS)
+            viewLyrics to (p == Page.LYRICS),
+            viewFavorites to (p == Page.FAVORITES),
+            viewVideo to (p == Page.VIDEO)
         )
         for ((v, show) in shows) {
             if (show && v.visibility != View.VISIBLE) {
@@ -717,7 +981,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         // 播放页/歌词页不显示底部迷你条，避免双进度条
-        if (p == Page.PLAYER || p == Page.LYRICS) {
+        if (p == Page.PLAYER || p == Page.LYRICS || p == Page.VIDEO) {
             if (miniPlayer.visibility != View.GONE) {
                 miniPlayer.visibility = View.GONE
             }
@@ -734,7 +998,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun backFromPlayer() {
-        showPage(if (currentTab == 0) Page.DISCOVER else Page.LIBRARY)
+        selectModule(currentModule)
     }
 
     private fun updatePlayModeButton(mode: Int) {
@@ -773,7 +1037,8 @@ class MainActivity : AppCompatActivity() {
         when (page) {
             Page.LYRICS -> showPage(Page.PLAYER, -1)
             Page.PLAYER -> backFromPlayer()
-            Page.PLAYLIST, Page.SEARCH -> showPage(Page.LIBRARY)
+            Page.VIDEO -> closeVideoPage()
+            Page.PLAYLIST, Page.SEARCH, Page.FAVORITES -> showPage(Page.LIBRARY)
             else -> super.onBackPressed()
         }
     }
@@ -1131,6 +1396,7 @@ class MainActivity : AppCompatActivity() {
     private fun scheduleImmersion() {
         if (page != Page.PLAYER) return
         immersionHandler.removeCallbacks(immersionRunnable)
+        if (!prefs.getBoolean(KEY_IMMERSION_ENABLED, true)) return
         val seconds = prefs.getInt(KEY_IMMERSION_SECONDS, 5).coerceIn(3, 120)
         immersionHandler.postDelayed(immersionRunnable, seconds * 1000L)
     }
@@ -1405,15 +1671,42 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        // 沉浸进入时间
+        // 导航栏自定义
+        box.addView(android.widget.TextView(this).apply {
+            text = getString(R.string.nav_title)
+            textSize = 16f
+            setTextColor(getColor(R.color.text_primary))
+            setPadding(0, dp(14f), 0, 0)
+            setOnClickListener { showNavDialog() }
+        })
+
+        // 沉浸模式开关（默认开启）
+        box.addView(android.widget.Switch(this).apply {
+            isChecked = prefs.getBoolean(KEY_IMMERSION_ENABLED, true)
+            text = getString(R.string.immersion_enabled_title)
+            textSize = 16f
+            setTextColor(getColor(R.color.text_primary))
+            setPadding(0, dp(14f), 0, 0)
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(KEY_IMMERSION_ENABLED, checked).apply()
+                if (!checked) {
+                    cancelImmersion()
+                    if (playerImmersed) exitImmersion()
+                } else {
+                    if (page == Page.PLAYER) scheduleImmersion()
+                }
+            }
+        })
+
+        // 沉浸进入时间（开关开启时生效）
         box.addView(android.widget.TextView(this).apply {
             text = getString(R.string.immersion_seconds_title)
             textSize = 16f
-            setTextColor(getColor(R.color.text_primary))
-            setPadding(0, dp(14f), 0, dp(14f))
+            setTextColor(getColor(R.color.text_hint))
+            setPadding(0, dp(10f), 0, 0)
             setOnClickListener {
-                val options = arrayOf("5 秒", "10 秒", "15 秒", "30 秒", "关闭")
-                val values = intArrayOf(5, 10, 15, 30, 0)
+                val options = arrayOf("5 秒", "10 秒", "15 秒", "30 秒")
+                val values = intArrayOf(5, 10, 15, 30)
                 val cur = prefs.getInt(KEY_IMMERSION_SECONDS, 5)
                 val idx = values.indexOf(cur).coerceAtLeast(0)
                 AlertDialog.Builder(this@MainActivity)
@@ -1425,6 +1718,13 @@ class MainActivity : AppCompatActivity() {
                     }
                     .show()
             }
+        })
+        // 提示文案
+        box.addView(android.widget.TextView(this).apply {
+            text = getString(R.string.immersion_hint)
+            textSize = 12f
+            setTextColor(getColor(R.color.text_hint))
+            setPadding(0, dp(6f), 0, dp(2f))
         })
 
         AlertDialog.Builder(this)
@@ -1638,7 +1938,11 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle(name)
             .setItems(
-                arrayOf(getString(R.string.cover_set), getString(R.string.cover_clear))
+                arrayOf(
+                    getString(R.string.cover_set),
+                    getString(R.string.cover_clear),
+                    getString(R.string.batch_cover)
+                )
             ) { _, which ->
                 when (which) {
                     0 -> {
@@ -1651,8 +1955,72 @@ class MainActivity : AppCompatActivity() {
                         gridAdapter.notifyDataSetChanged()
                         toast(getString(R.string.cover_cleared))
                     }
+                    2 -> showBatchCoverPicker(name)
                 }
             }
+            .show()
+    }
+
+    /** 歌单批量设置封面：多选歌曲（含全选），统一选一张图应用到勾选歌曲。 */
+    private fun showBatchCoverPicker(playlistName: String) {
+        val pl = library?.playlists?.firstOrNull { it.name == playlistName }
+        val songs = pl?.songs
+        if (songs.isNullOrEmpty()) {
+            toast(getString(R.string.batch_cover_empty))
+            return
+        }
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(dp(20f), dp(16f), dp(20f), dp(8f))
+        }
+        val topRow = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+        }
+        val btnAll = android.widget.Button(this).apply { text = getString(R.string.select_all) }
+        val btnNone = android.widget.Button(this).apply { text = getString(R.string.deselect_all) }
+        topRow.addView(btnAll)
+        topRow.addView(btnNone)
+        box.addView(topRow)
+
+        val rows = ArrayList<android.widget.CheckBox>()
+        val listBox = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+        }
+        songs.forEach { s ->
+            rows.add(android.widget.CheckBox(this).apply {
+                text = s.title
+                textSize = 15f
+                setTextColor(getColor(R.color.text_primary))
+                listBox.addView(this)
+            })
+        }
+        val scroll = android.widget.ScrollView(this)
+        scroll.addView(listBox)
+        box.addView(
+            scroll,
+            android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, dp(320f)
+            )
+        )
+
+        btnAll.setOnClickListener { rows.forEach { it.isChecked = true } }
+        btnNone.setOnClickListener { rows.forEach { it.isChecked = false } }
+
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.batch_cover_title, playlistName))
+            .setView(box)
+            .setPositiveButton(R.string.batch_cover_apply) { d, _ ->
+                val checked = songs.filterIndexed { i, _ -> rows[i].isChecked }
+                    .map { it.uri.toString() }
+                if (checked.isEmpty()) {
+                    toast(getString(R.string.batch_cover_empty))
+                } else {
+                    pendingBatchSongs = checked
+                    coverPicker.launch(arrayOf("image/*"))
+                }
+                d.dismiss()
+            }
+            .setNegativeButton(R.string.cancel, null)
             .show()
     }
 
@@ -1680,6 +2048,125 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** 刷新播放页 CD 封面（设置/清除单曲封面后）。 */
+    /** 歌曲长按统一菜单：收藏 + 封面设置。 */
+    private fun showSongMenu(song: Song) {
+        val fav = FavoritesManager.isFavorite(this, song.uri.toString())
+        AlertDialog.Builder(this)
+            .setTitle(song.title)
+            .setItems(
+                arrayOf(
+                    getString(if (fav) R.string.unfavorite else R.string.favorite),
+                    getString(R.string.cover_set),
+                    getString(R.string.cover_clear)
+                )
+            ) { _, which ->
+                when (which) {
+                    0 -> {
+                        val on = FavoritesManager.toggle(this, song.uri.toString())
+                        toast(getString(if (on) R.string.favorited else R.string.unfavorited))
+                        updateFavoriteButton(song)
+                    }
+                    1 -> {
+                        pendingCoverTarget = "song:${song.uri}"
+                        coverPicker.launch(arrayOf("image/*"))
+                    }
+                    2 -> {
+                        CoverManager.clearSongCover(this, song.uri.toString())
+                        CoverLoader.invalidate(song.uri.toString())
+                        refreshCdCover()
+                        gridAdapter.notifyDataSetChanged()
+                        toast(getString(R.string.cover_cleared))
+                    }
+                }
+            }
+            .show()
+    }
+
+    /** 播放页心形按钮状态同步。 */
+    private fun updateFavoriteButton(song: Song?) {
+        if (!::btnFavorite.isInitialized) return
+        val fav = song != null && FavoritesManager.isFavorite(this, song.uri.toString())
+        btnFavorite.text = if (fav) "\u2665" else "\u2661"
+        btnFavorite.setTextColor(
+            if (fav) android.graphics.Color.parseColor("#E53935")
+            else getColor(R.color.text_hint)
+        )
+    }
+
+    /** 打开收藏列表页。 */
+    private fun openFavorites() {
+        favoriteSongs = library?.allSongs?.filter {
+            FavoritesManager.isFavorite(this, it.uri.toString())
+        } ?: emptyList()
+        favoritesAdapter.submit(favoriteSongs)
+        txtFavoritesEmpty.visibility =
+            if (favoriteSongs.isEmpty()) View.VISIBLE else View.GONE
+        showPage(Page.FAVORITES)
+    }
+
+    // ---------- 视频播放页 ----------
+    private fun isVideoFile(uri: android.net.Uri?): Boolean {
+        val p = uri?.lastPathSegment?.lowercase(Locale.getDefault()) ?: return false
+        return p.endsWith(".mp4") || p.endsWith(".m4v")
+    }
+
+    /** 打开视频页：横屏 + 绑定画面。 */
+    private fun openVideoPage() {
+        showPage(Page.VIDEO)
+        requestedOrientation =
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        seekVideo.max = playbackService?.currentDuration() ?: 0
+        txtVideoHint.visibility =
+            if (playbackService?.isPlayingSafe() == true) View.GONE else View.VISIBLE
+    }
+
+    /** 关闭视频页：脱离画面（播放不中断），恢复竖屏。 */
+    private fun closeVideoPage() {
+        videoLongPressHandler.removeCallbacksAndMessages(null)
+        if (videoSpeedUp) {
+            videoSpeedUp = false
+            playbackService?.setSpeed(1f)
+        }
+        playbackService?.attachVideoSurface(null)
+        videoSurfaceAttached = false
+        requestedOrientation =
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        showPage(Page.PLAYER)
+    }
+
+    /** 视频页触摸：单击暂停/播放，点左半屏回退 10s、右半屏快进 10s，长按 2 倍速。 */
+    private fun handleVideoTouch(v: View, ev: android.view.MotionEvent): Boolean {
+        when (ev.action) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                videoDownX = ev.x
+                videoSpeedUp = false
+                videoLongPressHandler.removeCallbacksAndMessages(null)
+                videoLongPressHandler.postDelayed({
+                    videoSpeedUp = true
+                    playbackService?.setSpeed(2f)
+                }, 400)
+            }
+            android.view.MotionEvent.ACTION_UP,
+            android.view.MotionEvent.ACTION_CANCEL -> {
+                videoLongPressHandler.removeCallbacksAndMessages(null)
+                if (videoSpeedUp) {
+                    videoSpeedUp = false
+                    playbackService?.setSpeed(1f)
+                } else {
+                    val svc = playbackService
+                    val dur = svc?.currentDuration() ?: 0
+                    val pos = svc?.currentPosition() ?: 0
+                    if (videoDownX < v.width / 2f) {
+                        svc?.seekTo((pos - 10000).coerceAtLeast(0))
+                    } else {
+                        svc?.seekTo((pos + 10000).coerceAtMost(dur))
+                    }
+                }
+            }
+        }
+        return true
+    }
+
     private fun refreshCdCover() {
         val idx = playbackService?.currentIndex() ?: -1
         val song = currentSongs.getOrNull(idx) ?: return
@@ -1948,6 +2435,16 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_TREE = "tree_uri"
         private const val KEY_AUTO_SCAN = "auto_scan"
         private const val KEY_IMMERSION_SECONDS = "immersion_seconds"
+        private const val KEY_IMMERSION_ENABLED = "immersion_enabled"
+        private const val MODULE_DISCOVER = "discover"
+        private const val MODULE_LIBRARY = "library"
+        private const val MODULE_ARTISTS = "artists"
+        private const val MODULE_FAVORITES = "favorites"
+        private const val KEY_NAV_TABS = "nav_tabs"
+        private const val KEY_NAV_DEFAULT = "nav_default"
+        private val ALL_MODULES =
+            listOf(MODULE_DISCOVER, MODULE_LIBRARY, MODULE_ARTISTS, MODULE_FAVORITES)
+        private const val DEFAULT_NAV = "discover,library,artists,favorites"
         private const val KEY_DARK = "dark_mode"
         private const val KEY_LYRIC_SIZE = "lyric_size"
         private const val KEY_UI_SIZE = "ui_size"

@@ -38,7 +38,7 @@ class DiscoverAdapter(
         holder.title.setTextSize(uiSizeSp)
         holder.artist.text = song.artist.ifBlank { song.folder }
         holder.cover.setImageResource(R.drawable.ic_music_tinted)
-        CoverLoader.load(holder.itemView.context, song.uri, 200) { bmp ->
+        CoverLoader.load(holder.itemView.context, song.uri, 200, folder = song.folder) { bmp ->
             if (bmp != null && holder.bindingAdapterPosition == position) {
                 holder.cover.setImageBitmap(bmp)
             }
@@ -97,7 +97,7 @@ class PlaylistGridAdapter(
                 }
             }
         } else if (song != null) {
-            CoverLoader.load(holder.itemView.context, song.uri, 200) { bmp ->
+            CoverLoader.load(holder.itemView.context, song.uri, 200, folder = song.folder) { bmp ->
                 if (bmp != null && holder.bindingAdapterPosition == position) {
                     holder.cover.setImageBitmap(bmp)
                 }

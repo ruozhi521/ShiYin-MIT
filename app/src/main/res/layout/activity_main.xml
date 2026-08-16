@@ -22,6 +22,10 @@
 
         <include layout="@layout/page_lyrics" />
 
+        <include layout="@layout/page_favorites" />
+
+        <include layout="@layout/page_video" />
+
     </FrameLayout>
 
     <!-- 全局迷你播放条 -->
@@ -81,7 +85,7 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- 底部导航 -->
+    <!-- 底部导航（动态生成：用户可自定义增删/排序/默认页） -->
     <LinearLayout
         android:id="@+id/bottomNav"
         android:layout_width="match_parent"
@@ -89,30 +93,6 @@
         android:background="@color/surface"
         android:orientation="horizontal"
         android:paddingTop="6dp"
-        android:paddingBottom="10dp">
-
-        <TextView
-            android:id="@+id/tabDiscover"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:gravity="center"
-            android:padding="10dp"
-            android:text="@string/tab_discover"
-            android:textColor="@color/accent"
-            android:textSize="14sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/tabLibrary"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:gravity="center"
-            android:padding="10dp"
-            android:text="@string/tab_library"
-            android:textColor="@color/text_hint"
-            android:textSize="14sp" />
-    </LinearLayout>
+        android:paddingBottom="10dp" />
 
 </LinearLayout>

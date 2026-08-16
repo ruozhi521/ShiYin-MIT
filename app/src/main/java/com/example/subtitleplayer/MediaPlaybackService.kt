@@ -271,6 +271,34 @@ class MediaPlaybackService : Service() {
         if (!isPlaying()) play()
     }
 
+    /** 视频页：绑定画面 surface；传 null 表示脱离画面（setSurface(null) 后继续纯音频播放）。 */
+    fun attachVideoSurface(surface: android.view.Surface?) {
+        val mp = mediaPlayer ?: return
+        try {
+            mp.setSurface(surface)
+        } catch (e: Exception) {
+        }
+    }
+
+    /** 视频页：播放速度（长按 2x 用；1f 恢复正常）。 */
+    fun setSpeed(speed: Float) {
+        val mp = mediaPlayer ?: return
+        try {
+            if (speed >= 1f) {
+                mp.playbackParams = android.media.PlaybackParams().setSpeed(speed)
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    fun currentPosition(): Int = try {
+        mediaPlayer?.currentPosition ?: 0
+    } catch (e: Exception) {
+        0
+    }
+
+    fun currentDuration(): Int = durationMs
+
     /** 定时开始播放：恢复上次播放的歌曲与进度；无记录时兜底播放第一个歌单。 */
     private fun playLast() {
         android.util.Log.d(
@@ -281,11 +309,28 @@ class MediaPlaybackService : Service() {
         if (!lastUri.isNullOrEmpty()) {
             try {
                 val uri = android.net.Uri.parse(lastUri)
-                val title = queryDisplayName(uri) ?: "音乐"
-                val folder = queryFolder(uri)
                 val pos = statePrefs.getInt(KEY_LAST_POS, 0)
-                android.util.Log.d("ShiYinAlarm", "playLast: restore uri=$lastUri pos=$pos")
-                startPlaylist(listOf(Song(title, uri, folder)), 0, emptyMap(), pos, forcePlay = true)
+                // 优先从库缓存取完整歌曲信息（tag 标题/艺术家/文件夹），
+                // 避免状态栏歌词显示文件名、艺术家为空
+                val lib = LibraryCache.load(this)
+                val cached = lib?.allSongs?.firstOrNull { it.uri.toString() == lastUri }
+                if (cached != null) {
+                    android.util.Log.d("ShiYinAlarm", "playLast: restore cached uri=$lastUri pos=$pos")
+                    startPlaylist(
+                        listOf(cached), 0, lib?.lyrics ?: emptyMap(), pos, forcePlay = true
+                    )
+                } else {
+                    // 文件不在库中（被移走/未扫描）：回退文件名（去扩展名）+ 文件夹兜底艺术家
+                    val title = queryDisplayName(uri)
+                        ?.substringBeforeLast(".")
+                        ?.takeIf { it.isNotBlank() } ?: "音乐"
+                    val folder = queryFolder(uri)
+                    android.util.Log.d("ShiYinAlarm", "playLast: restore raw uri=$lastUri pos=$pos")
+                    startPlaylist(
+                        listOf(Song(title, uri, folder, artist = folder)),
+                        0, emptyMap(), pos, forcePlay = true
+                    )
+                }
                 return
             } catch (e: Exception) {
                 android.util.Log.d("ShiYinAlarm", "playLast: restore failed ${e.message}")
@@ -459,6 +504,8 @@ class MediaPlaybackService : Service() {
     }
 
     private fun isPlaying(): Boolean = mediaPlayer?.isPlaying ?: false
+
+    fun isPlayingSafe(): Boolean = isPlaying()
 
     private fun updateAll(playing: Boolean) {
         handler.removeCallbacks(progressRunnable)

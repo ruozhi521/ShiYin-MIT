@@ -20,7 +20,13 @@ object CoverLoader {
     private val cache = HashMap<String, Bitmap>()
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    fun load(context: Context, uri: Uri, targetSize: Int, callback: (Bitmap?) -> Unit) {
+    fun load(
+        context: Context,
+        uri: Uri,
+        targetSize: Int,
+        callback: (Bitmap?) -> Unit,
+        folder: String? = null
+    ) {
         val key = uri.toString()
         val cacheKey = key + "#" + targetSize
         // 自定义单曲封面优先
@@ -46,8 +52,17 @@ object CoverLoader {
                     // 高分辨率封面 embeddedPicture 可能返回 null：ID3v2 APIC / FLAC PICTURE 兜底
                     val pic = Id3LyricsParser.extractEmbeddedPicture(appContext, uri)
                         ?: Id3LyricsParser.extractFlacPicture(appContext, uri)
-                    if (pic != null) decodeScaled(pic, targetSize)
-                    else albumArtFallback(appContext, uri, targetSize)
+                    if (pic != null) {
+                        decodeScaled(pic, targetSize)
+                    } else {
+                        // 专辑封面（文件夹 cover.jpg）兜底
+                        albumArtFallback(appContext, uri, targetSize)
+                            // 歌单自定义封面兜底：文件夹设置了封面，里面歌曲同样显示
+                            ?: folder?.let { f ->
+                                CoverManager.playlistCover(appContext, f)
+                                    ?.path?.let { path -> decodeFileScaled(path, targetSize) }
+                            }
+                    }
                 }
             } catch (e: Exception) {
                 null

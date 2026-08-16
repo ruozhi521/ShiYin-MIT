@@ -43,7 +43,7 @@ class PlaylistAdapter(
         holder.cover.setImageResource(R.drawable.ic_folder_tinted)
         val song = playlist.songs.firstOrNull()
         if (song != null) {
-            CoverLoader.load(holder.itemView.context, song.uri, 96) { bmp ->
+            CoverLoader.load(holder.itemView.context, song.uri, 96, folder = song.folder) { bmp ->
                 if (bmp != null && holder.bindingAdapterPosition == position) {
                     holder.cover.setImageBitmap(bmp)
                 }
@@ -64,7 +64,8 @@ class PlaylistAdapter(
 /** 歌曲列表适配器。 */
 class SongAdapter(
     private val hasLyric: (Song) -> Boolean,
-    private val onClick: (Int) -> Unit
+    private val onClick: (Int) -> Unit,
+    private val onLongClick: ((Song) -> Unit)? = null
 ) : RecyclerView.Adapter<SongAdapter.Holder>() {
 
     private var items: List<Song> = emptyList()
@@ -120,12 +121,16 @@ class SongAdapter(
             if (hasLyric(song)) View.VISIBLE else View.GONE
         holder.lyricMark.setTextColor(ThemeManager.accent(holder.itemView.context))
         holder.cover.setImageResource(R.drawable.ic_music_tinted)
-        CoverLoader.load(holder.itemView.context, song.uri, 64) { bmp ->
+        CoverLoader.load(holder.itemView.context, song.uri, 64, folder = song.folder) { bmp ->
             if (bmp != null && holder.bindingAdapterPosition == position) {
                 holder.cover.setImageBitmap(bmp)
             }
         }
         holder.itemView.setOnClickListener { onClick(position) }
+        holder.itemView.setOnLongClickListener {
+            onLongClick?.invoke(song)
+            true
+        }
     }
 
     override fun getItemCount(): Int = items.size
