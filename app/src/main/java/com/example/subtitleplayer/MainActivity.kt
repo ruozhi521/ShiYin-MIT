@@ -308,10 +308,13 @@ class MainActivity : AppCompatActivity() {
             }
             // 批量模式：对勾选歌曲逐一写单曲封面
             if (target == null) return@registerForActivityResult
+            // 批量模式：源图只复制一次，所有勾选歌曲共享（避免 content uri 一次性读取导致坏引用）
             if (batch != null) {
+                val shared = CoverManager.copySharedCover(this, uri)
                 var ok = 0
-                batch.forEach { su ->
-                    if (CoverManager.setSongCover(this, su, uri) != null) {
+                if (shared != null) {
+                    batch.forEach { su ->
+                        CoverManager.setSongCoverInternal(this, su, shared)
                         ok++
                         CoverLoader.invalidate(su)
                     }

@@ -44,7 +44,7 @@ class LibraryScanner(
     private fun scanDir(
         treeUri: Uri,
         docId: String,
-        folderName: String?,
+        folderPath: String?,
         folderSongs: MutableMap<String, MutableList<Song>>,
         lyrics: MutableMap<String, LyricRef>,
         all: MutableList<Song>
@@ -70,24 +70,28 @@ class LibraryScanner(
                         isAudio(mime, name) -> {
                             val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
                             val (tagTitle, tagArtist) = readTags(uri)
+                            // folderPath 为相对根目录完整路径（同名子文件夹不再合并）
+                            val folder = folderPath ?: DEFAULT_FOLDER
                             songsHere.add(
                                 Song(
                                     title = tagTitle?.takeIf { it.isNotBlank() } ?: stemOf(name),
                                     uri = uri,
-                                    folder = folderName ?: DEFAULT_FOLDER,
+                                    folder = folder,
                                     artist = tagArtist?.takeIf { it.isNotBlank() }
-                                        ?: (folderName ?: DEFAULT_FOLDER)
+                                        ?: folder.substringAfterLast('/'),
+                                    fileStem = stemOf(name)
                                 )
                             )
                         }
                         isLyric(name) -> {
                             val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
-                            val ref = LyricRef(name, uri)
+                            val folder = folderPath ?: DEFAULT_FOLDER
+                            val ref = LyricRef(name, uri, folder)
                             val stem = stemOf(name)
-                            lyrics[lower(stem)] = ref
+                            lyrics["$folder/${lower(stem)}"] = ref
                             val doubleStem = stemOf(stem)
                             if (doubleStem != stem) {
-                                lyrics[lower(doubleStem)] = ref
+                                lyrics["$folder/${lower(doubleStem)}"] = ref
                             }
                         }
                     }
@@ -103,7 +107,9 @@ class LibraryScanner(
             all.addAll(songsHere)
         }
         for ((id, name) in subDirs) {
-            scanDir(treeUri, id, name, folderSongs, lyrics, all)
+            // 子目录名拼上父路径：A/周杰伦 与 B/周杰伦 各自独立成歌单
+            val childPath = if (folderPath == null) name else "$folderPath/$name"
+            scanDir(treeUri, id, childPath, folderSongs, lyrics, all)
         }
     }
 
@@ -143,11 +149,24 @@ class LibraryScanner(
 
         private fun lower(s: String): String = s.lowercase(Locale.getDefault())
 
-        /** 按歌曲文件名查找歌词：支持 歌名.lrc 与 歌名.mp3.lrc 两种命名。 */
+        /**
+         * 按歌曲查找歌词：
+         * 1) 精确匹配：同文件夹 + 文件名 stem（歌词文件名可能带 .mp3 后缀，双 stem 已注册）
+         * 2) 全局兜底：仅当全局唯一（同名歌曲不同目录时宁可读不到也不串行）
+         */
         fun findLyric(song: Song, lyrics: Map<String, LyricRef>): LyricRef? {
-            val full = song.title.lowercase(Locale.getDefault())
-            val stem = stemOf(song.title).lowercase(Locale.getDefault())
-            return lyrics[stem] ?: lyrics[full]
+            val stem = lower(
+                if (song.fileStem.isNotBlank()) song.fileStem else stemOf(song.title)
+            )
+            val folder = song.folder
+            // 新格式（带路径）精确匹配
+            lyrics["$folder/$stem"]?.let { return it }
+            lyrics["$folder/${lower(song.title)}"]?.let { return it }
+            // 全局兜底：跨目录同名歌词有多个时返回 null，避免串行
+            val matches = lyrics.filterKeys { k ->
+                k == stem || k.endsWith("/$stem")
+            }
+            return if (matches.size == 1) matches.values.first() else null
         }
     }
 }

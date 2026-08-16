@@ -25,6 +25,7 @@ object LibraryCache {
                         .put("uri", s.uri.toString())
                         .put("folder", s.folder)
                         .put("artist", s.artist)
+                        .put("fileStem", s.fileStem)
                 )
             }
             val lyrics = JSONArray()
@@ -33,6 +34,7 @@ object LibraryCache {
                     JSONObject()
                         .put("name", ref.displayName)
                         .put("uri", ref.uri.toString())
+                        .put("folder", ref.folder)
                 )
             }
             val root = JSONObject()
@@ -59,7 +61,8 @@ object LibraryCache {
                         o.getString("title"),
                         Uri.parse(o.getString("uri")),
                         o.getString("folder"),
-                        o.optString("artist", "")
+                        o.optString("artist", ""),
+                        o.optString("fileStem", "")
                     )
                 )
             }
@@ -69,12 +72,16 @@ object LibraryCache {
             val lyrics = mutableMapOf<String, LyricRef>()
             for (i in 0 until lyricsArr.length()) {
                 val o = lyricsArr.getJSONObject(i)
-                val ref = LyricRef(o.getString("name"), Uri.parse(o.getString("uri")))
-                val stem = stemOf(o.getString("name"))
-                lyrics[stem.lowercase(Locale.getDefault())] = ref
+                val folder = o.optString("folder", "")
+                val ref = LyricRef(o.getString("name"), Uri.parse(o.getString("uri")), folder)
+                val stem = stemOf(o.getString("name")).lowercase(Locale.getDefault())
+                // 新格式带路径；旧缓存无 folder 时回退无路径 key（findLyric 全局唯一兜底兼容）
+                val key = if (folder.isNotBlank()) "$folder/$stem" else stem
+                lyrics[key] = ref
                 val doubleStem = stemOf(stem)
                 if (doubleStem != stem) {
-                    lyrics[doubleStem.lowercase(Locale.getDefault())] = ref
+                    val key2 = if (folder.isNotBlank()) "$folder/$doubleStem" else doubleStem
+                    lyrics[key2] = ref
                 }
             }
 

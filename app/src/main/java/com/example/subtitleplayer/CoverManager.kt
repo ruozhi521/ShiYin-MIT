@@ -94,15 +94,30 @@ object CoverManager {
     private fun copyToInternal(c: Context, src: Uri, fileName: String): Uri? {
         return try {
             val target = File(coversDir(c), fileName)
-            c.contentResolver.openInputStream(src)?.use { input ->
-                target.outputStream().use { output ->
-                    input.copyTo(output)
-                }
+            val input = c.contentResolver.openInputStream(src) ?: return null
+            input.use { ins ->
+                target.outputStream().use { out -> ins.copyTo(out) }
+            }
+            // 复制失败检测：文件不存在或 0 字节视为失败，绝不写入坏引用
+            if (!target.exists() || target.length() == 0L) {
+                target.delete()
+                return null
             }
             Uri.fromFile(target)
         } catch (e: Exception) {
             null
         }
+    }
+
+    /** 批量封面：源图只复制一次，返回共享内部文件 uri（Photo Picker 的 content uri 多是一次性读取）。 */
+    fun copySharedCover(c: Context, src: Uri): Uri? =
+        copyToInternal(c, src, "shared_" + System.currentTimeMillis() + ".jpg")
+
+    /** 直接用内部文件 uri 写入单曲封面映射（不重新复制）。 */
+    fun setSongCoverInternal(c: Context, songUri: String, internalUri: Uri) {
+        val obj = json(c, KEY_SONGS)
+        obj.put(songUri, internalUri.toString())
+        saveJson(c, KEY_SONGS, obj)
     }
 
     private fun deleteFileIfInternal(c: Context, uri: String) {
