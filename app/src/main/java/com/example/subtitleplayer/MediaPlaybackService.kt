@@ -284,7 +284,16 @@ class MediaPlaybackService : Service() {
         val mp = mediaPlayer ?: return
         try {
             mp.setSurface(surface)
+            android.util.Log.d("ShiYinVideo", "attachVideoSurface: surface=$surface")
+            if (surface != null && mp.isPlaying) {
+                // 播放中附加 surface：部分设备/解码器不自动输出新帧，
+                // seek 到当前位置强制触发一次重绘
+                val pos = mp.currentPosition
+                mp.seekTo(pos)
+                android.util.Log.d("ShiYinVideo", "attachVideoSurface: seekTo($pos) force redraw")
+            }
         } catch (e: Exception) {
+            android.util.Log.e("ShiYinVideo", "attachVideoSurface failed: ${e.message}")
         }
     }
 
@@ -437,7 +446,9 @@ class MediaPlaybackService : Service() {
             attachedVideoSurface?.let { surf ->
                 try {
                     mp.setSurface(surf)
+                    android.util.Log.d("ShiYinVideo", "playCurrent: rebind surface $surf")
                 } catch (e: Exception) {
+                    android.util.Log.e("ShiYinVideo", "playCurrent rebind failed: ${e.message}")
                 }
             }
             mp.setWakeMode(this, PowerManager.PARTIAL_WAKE_LOCK)
@@ -462,6 +473,7 @@ class MediaPlaybackService : Service() {
                 }
             }
             mp.setOnVideoSizeChangedListener { _, w, h ->
+                android.util.Log.d("ShiYinVideo", "onVideoSizeChanged: ${w}x$h")
                 if (w > 0 && h > 0) {
                     videoWidth = w
                     videoHeight = h

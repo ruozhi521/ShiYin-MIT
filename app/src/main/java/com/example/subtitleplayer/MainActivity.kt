@@ -388,6 +388,7 @@ class MainActivity : AppCompatActivity() {
             override fun onSurfaceTextureAvailable(
                 st: android.graphics.SurfaceTexture, width: Int, height: Int
             ) {
+                android.util.Log.d("ShiYinVideo", "surface available: ${width}x$height")
                 playbackService?.attachVideoSurface(android.view.Surface(st))
                 videoSurfaceAttached = true
                 fitVideoSurface(width, height)
