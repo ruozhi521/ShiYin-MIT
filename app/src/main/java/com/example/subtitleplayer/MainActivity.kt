@@ -133,6 +133,8 @@ class MainActivity : AppCompatActivity() {
     private var videoSurfaceAttached = false
     private var videoSpeedUp = false
     private var videoDownX = 0f
+    private var videoW = 0
+    private var videoH = 0
     private val videoLongPressHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var cdAnimator: ObjectAnimator? = null
 
@@ -388,6 +390,7 @@ class MainActivity : AppCompatActivity() {
             ) {
                 playbackService?.attachVideoSurface(android.view.Surface(st))
                 videoSurfaceAttached = true
+                fitVideoSurface(width, height)
             }
 
             override fun onSurfaceTextureSizeChanged(
@@ -980,6 +983,12 @@ class MainActivity : AppCompatActivity() {
             } else if (!show && v.visibility == View.VISIBLE) {
                 v.visibility = View.GONE
             }
+        }
+        // 视频页全屏：隐藏底部导航
+        if (p == Page.VIDEO) {
+            if (bottomNav.visibility != View.GONE) bottomNav.visibility = View.GONE
+        } else if (p != Page.PLAYER && p != Page.LYRICS) {
+            if (bottomNav.visibility != View.VISIBLE) bottomNav.visibility = View.VISIBLE
         }
         // 播放页/歌词页不显示底部迷你条，避免双进度条
         if (p == Page.PLAYER || p == Page.LYRICS || p == Page.VIDEO) {
@@ -2112,14 +2121,46 @@ class MainActivity : AppCompatActivity() {
         return p.endsWith(".mp4") || p.endsWith(".m4v")
     }
 
-    /** 打开视频页：横屏 + 绑定画面。 */
+    /** 打开视频页：方向跟随视频比例（横屏视频横屏、竖屏视频竖屏），绑定画面。 */
     private fun openVideoPage() {
+        val song = playbackService?.currentSongSafe() ?: return
+        videoW = 0
+        videoH = 0
+        try {
+            val r = android.media.MediaMetadataRetriever()
+            r.setDataSource(this, song.uri)
+            videoW = r
+                .extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                ?.toIntOrNull() ?: 0
+            videoH = r
+                .extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                ?.toIntOrNull() ?: 0
+            r.release()
+        } catch (e: Exception) {
+        }
+        requestedOrientation = when {
+            videoW > videoH ->
+                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            videoH > videoW ->
+                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            else -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
         showPage(Page.VIDEO)
-        requestedOrientation =
-            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         seekVideo.max = playbackService?.currentDuration() ?: 0
         txtVideoHint.visibility =
             if (playbackService?.isPlayingSafe() == true) View.GONE else View.VISIBLE
+    }
+
+    /** 视频画面等比适配（letterbox 居中），避免竖屏视频被拉伸。 */
+    private fun fitVideoSurface(viewW: Int, viewH: Int) {
+        if (videoW <= 0 || videoH <= 0 || viewW <= 0 || viewH <= 0) return
+        val scale = minOf(
+            viewW.toFloat() / videoW,
+            viewH.toFloat() / videoH
+        )
+        val m = android.graphics.Matrix()
+        m.setScale(scale, scale, viewW / 2f, viewH / 2f)
+        videoSurface.setTransform(m)
     }
 
     /** 关闭视频页：脱离画面（播放不中断），恢复竖屏。 */

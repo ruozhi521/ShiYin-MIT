@@ -68,6 +68,8 @@ class MediaPlaybackService : Service() {
     private var listener: Listener? = null
 
     private var mediaPlayer: MediaPlayer? = null
+    /** 视频 surface（视频页绑定时记录；切歌/循环后新播放器需重新绑定画面）。 */
+    private var attachedVideoSurface: android.view.Surface? = null
     private var isPrepared = false
     private var durationMs = 0
 
@@ -273,6 +275,7 @@ class MediaPlaybackService : Service() {
 
     /** 视频页：绑定画面 surface；传 null 表示脱离画面（setSurface(null) 后继续纯音频播放）。 */
     fun attachVideoSurface(surface: android.view.Surface?) {
+        attachedVideoSurface = surface
         val mp = mediaPlayer ?: return
         try {
             mp.setSurface(surface)
@@ -422,6 +425,13 @@ class MediaPlaybackService : Service() {
         val mp = MediaPlayer()
         try {
             mp.setDataSource(this, song.uri)
+            // 视频页打开中：新播放器重新绑定画面（否则循环/切歌后画面不动）
+            attachedVideoSurface?.let { surf ->
+                try {
+                    mp.setSurface(surf)
+                } catch (e: Exception) {
+                }
+            }
             mp.setWakeMode(this, PowerManager.PARTIAL_WAKE_LOCK)
             mp.setOnPreparedListener { player ->
                 isPrepared = true
