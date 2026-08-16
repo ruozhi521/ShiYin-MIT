@@ -298,11 +298,12 @@ class MainActivity : AppCompatActivity() {
     /** 批量封面模式：非空时 coverPicker 回调对这批 uri 批量写单曲封面。 */
     private var pendingBatchSongs: List<String>? = null
     private val coverPicker =
-        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
             val target = pendingCoverTarget
             pendingCoverTarget = null
             val batch = pendingBatchSongs
             pendingBatchSongs = null
+            android.util.Log.d("ShiYinCover", "coverPicker uri=$uri target=$target batch=${batch?.size}")
             if (uri == null || (target == null && batch == null)) {
                 return@registerForActivityResult
             }
@@ -344,7 +345,7 @@ class MainActivity : AppCompatActivity() {
 
     /** 背景图选择（复制到内部存储）。 */
     private val bgPicker =
-        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
             if (uri == null) return@registerForActivityResult
             if (BgManager.setBg(this, uri)) {
                 applyPageBackground()
@@ -941,7 +942,7 @@ class MainActivity : AppCompatActivity() {
                 arrayOf(getString(R.string.bg_set), getString(R.string.bg_clear))
             ) { _, which ->
                 when (which) {
-                    0 -> bgPicker.launch(arrayOf("image/*"))
+                    0 -> bgPicker.launch("image/*")
                     1 -> {
                         BgManager.clearBg(this)
                         applyPageBackground()
@@ -1971,7 +1972,7 @@ class MainActivity : AppCompatActivity() {
                 when (which) {
                     0 -> {
                         pendingCoverTarget = "pl:$name"
-                        coverPicker.launch(arrayOf("image/*"))
+                        coverPicker.launch("image/*")
                     }
                     1 -> {
                         CoverManager.clearPlaylistCover(this, name)
@@ -2040,7 +2041,7 @@ class MainActivity : AppCompatActivity() {
                     toast(getString(R.string.batch_cover_empty))
                 } else {
                     pendingBatchSongs = checked
-                    coverPicker.launch(arrayOf("image/*"))
+                    coverPicker.launch("image/*")
                 }
                 d.dismiss()
             }
@@ -2057,7 +2058,7 @@ class MainActivity : AppCompatActivity() {
                 when (which) {
                     0 -> {
                         pendingCoverTarget = "song:${song.uri}"
-                        coverPicker.launch(arrayOf("image/*"))
+                        coverPicker.launch("image/*")
                     }
                     1 -> {
                         CoverManager.clearSongCover(this, song.uri.toString())
@@ -2092,7 +2093,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     1 -> {
                         pendingCoverTarget = "song:${song.uri}"
-                        coverPicker.launch(arrayOf("image/*"))
+                        coverPicker.launch("image/*")
                     }
                     2 -> {
                         CoverManager.clearSongCover(this, song.uri.toString())

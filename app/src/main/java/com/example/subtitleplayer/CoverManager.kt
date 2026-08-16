@@ -43,8 +43,16 @@ object CoverManager {
 
     // ---------- 读取 ----------
 
-    fun playlistCover(c: Context, name: String): Uri? =
-        json(c, KEY_PLAYLISTS).optString(name, "").ifEmpty { null }?.let { Uri.parse(it) }
+    fun playlistCover(c: Context, name: String): Uri? {
+        val obj = json(c, KEY_PLAYLISTS)
+        obj.optString(name, "").ifEmpty { null }?.let { return Uri.parse(it) }
+        // 兼容旧版本（1.24 前 folder 是目录名而非相对路径）：回退查最后一段
+        val short = name.substringAfterLast('/')
+        if (short != name) {
+            obj.optString(short, "").ifEmpty { null }?.let { return Uri.parse(it) }
+        }
+        return null
+    }
 
     fun songCover(c: Context, songUri: String): Uri? =
         json(c, KEY_SONGS).optString(songUri, "").ifEmpty { null }?.let { Uri.parse(it) }
@@ -94,17 +102,22 @@ object CoverManager {
     private fun copyToInternal(c: Context, src: Uri, fileName: String): Uri? {
         return try {
             val target = File(coversDir(c), fileName)
-            val input = c.contentResolver.openInputStream(src) ?: return null
+            val input = c.contentResolver.openInputStream(src) ?: run {
+                android.util.Log.e("ShiYinCover", "copyToInternal openInputStream null src=$src")
+                return null
+            }
             input.use { ins ->
                 target.outputStream().use { out -> ins.copyTo(out) }
             }
             // 复制失败检测：文件不存在或 0 字节视为失败，绝不写入坏引用
             if (!target.exists() || target.length() == 0L) {
+                android.util.Log.e("ShiYinCover", "copyToInternal empty file $fileName")
                 target.delete()
                 return null
             }
             Uri.fromFile(target)
         } catch (e: Exception) {
+            android.util.Log.e("ShiYinCover", "copyToInternal failed ${e.message}")
             null
         }
     }
