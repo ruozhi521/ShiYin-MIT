@@ -114,7 +114,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var playerControlsMain: View
     private lateinit var playerControlsExtra: View
     private lateinit var txtImmersiveLyric: android.widget.TextView
-    private lateinit var bottomNav: View
+    private lateinit var bottomNav: android.view.ViewGroup
 
     // ---- 收藏页 ----
     private lateinit var viewFavorites: View
@@ -302,6 +302,7 @@ class MainActivity : AppCompatActivity() {
                 return@registerForActivityResult
             }
             // 批量模式：对勾选歌曲逐一写单曲封面
+            if (target == null) return@registerForActivityResult
             if (batch != null) {
                 var ok = 0
                 batch.forEach { su ->
@@ -1621,9 +1622,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** 主题设置弹窗：主题色 + 背景图 + 深色模式三合一。 */
+    private fun dp(v: Float): Int = (v * resources.displayMetrics.density).toInt()
+
     private fun showThemeDialog() {
         val d = resources.displayMetrics.density
-        fun dp(v: Float): Int = (v * d).toInt()
         val box = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
             setPadding(dp(18f), dp(8f), dp(18f), dp(8f))

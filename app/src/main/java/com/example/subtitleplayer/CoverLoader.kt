@@ -24,8 +24,8 @@ object CoverLoader {
         context: Context,
         uri: Uri,
         targetSize: Int,
-        callback: (Bitmap?) -> Unit,
-        folder: String? = null
+        folder: String? = null,
+        callback: (Bitmap?) -> Unit
     ) {
         val key = uri.toString()
         val cacheKey = key + "#" + targetSize
