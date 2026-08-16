@@ -368,8 +368,7 @@ class MainActivity : AppCompatActivity() {
         recyclerFavorites = findViewById(R.id.recyclerFavorites)
         txtFavoritesEmpty = findViewById(R.id.txtFavoritesEmpty)
         btnFavorite.setOnClickListener {
-            val idx = playbackService?.currentIndex() ?: -1
-            val song = currentSongs.getOrNull(idx) ?: return@setOnClickListener
+            val song = playbackService?.currentSongSafe() ?: return@setOnClickListener
             val on = FavoritesManager.toggle(this, song.uri.toString())
             toast(getString(if (on) R.string.favorited else R.string.unfavorited))
             updateFavoriteButton(song)
@@ -539,7 +538,6 @@ class MainActivity : AppCompatActivity() {
         )
         recyclerFavorites.layoutManager = LinearLayoutManager(this)
         recyclerFavorites.adapter = favoritesAdapter
-        findViewById<Button>(R.id.btnBackFav).setOnClickListener { showPage(Page.LIBRARY) }
 
         // ---- 底部导航 ----
 

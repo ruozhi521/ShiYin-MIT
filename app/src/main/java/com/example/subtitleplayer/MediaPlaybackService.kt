@@ -407,6 +407,9 @@ class MediaPlaybackService : Service() {
 
     private fun currentSong(): Song? = songs.getOrNull(index)
 
+    /** 外部（播放页红心等）获取 Service 当前歌曲，不依赖 Activity 队列。 */
+    fun currentSongSafe(): Song? = currentSong()
+
     private fun playCurrent() {
         val song = currentSong() ?: return
         releasePlayer()

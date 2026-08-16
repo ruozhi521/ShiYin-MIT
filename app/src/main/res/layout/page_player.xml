@@ -56,8 +56,9 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginEnd="10dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/favorite"
-            android:padding="6dp"
+            android:padding="10dp"
             android:text="♡"
             android:textColor="@color/text_hint"
             android:textSize="24sp" />
