@@ -284,37 +284,12 @@ class MediaPlaybackService : Service() {
         val mp = mediaPlayer ?: return
         try {
             if (surface != null) {
-                val wasPlaying = try {
-                    mp.isPlaying
-                } catch (e: Exception) {
-                    false
-                }
-                val pos = try {
-                    mp.currentPosition
-                } catch (e: Exception) {
-                    0
-                }
-                // 强制重建渲染通道并出帧：硬件解码器在播放中/暂停中换 surface 不会自动渲染
+                // 先清空再重设：强制重建渲染通道让画面输出。
+                // 注意：不在此处 pause/seek（seek 在部分设备会卡住解码器导致进度冻结），
+                // 播放/暂停一律走 Service 的 play()/pause() 保持状态一致。
                 mp.setSurface(null)
                 mp.setSurface(surface)
-                try {
-                    mp.pause()
-                } catch (e: Exception) {
-                }
-                try {
-                    mp.seekTo(pos)
-                } catch (e: Exception) {
-                }
-                if (wasPlaying) {
-                    try {
-                        mp.start()
-                    } catch (e: Exception) {
-                    }
-                }
-                android.util.Log.d(
-                    "ShiYinVideo",
-                    "attachVideoSurface: force refresh wasPlaying=$wasPlaying pos=$pos"
-                )
+                android.util.Log.d("ShiYinVideo", "attachVideoSurface: rebind surface")
             } else {
                 mp.setSurface(null)
                 android.util.Log.d("ShiYinVideo", "attachVideoSurface: detach")

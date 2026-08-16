@@ -1472,6 +1472,10 @@ class MainActivity : AppCompatActivity() {
 
     /** 沉浸歌词：显示当前行 ± 前后一行（共三行）。 */
     private fun updateImmersiveLyric() {
+        if (lyricLines.isEmpty()) {
+            txtImmersiveLyric.text = ""
+            return
+        }
         val idx = currentLyricHighlight.coerceIn(0, lyricLines.size - 1)
         val parts = mutableListOf<String>()
         for (i in idx - 1..idx + 1) {
