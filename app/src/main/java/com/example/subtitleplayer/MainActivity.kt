@@ -2120,7 +2120,7 @@ class MainActivity : AppCompatActivity() {
         return p.endsWith(".mp4") || p.endsWith(".m4v")
     }
 
-    /** 打开视频页：方向跟随视频比例（横屏视频横屏、竖屏视频竖屏），绑定画面。 */
+    /** 打开视频页：方向跟随视频真实比例（横屏视频横屏、竖屏视频竖屏），绑定画面。 */
     private fun openVideoPage() {
         val song = playbackService?.currentSongSafe() ?: return
         videoW = 0
@@ -2137,6 +2137,12 @@ class MainActivity : AppCompatActivity() {
             r.release()
         } catch (e: Exception) {
         }
+        // 优先用播放器解码后的真实尺寸（retriever 给的是存储方向，旋转视频会错）
+        val (sw, sh) = playbackService?.currentVideoSize() ?: (0 to 0)
+        if (sw > 0 && sh > 0) {
+            videoW = sw
+            videoH = sh
+        }
         requestedOrientation = when {
             videoW > videoH ->
                 android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -2144,13 +2150,34 @@ class MainActivity : AppCompatActivity() {
                 android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             else -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
+        // 播放器后续解出/修正尺寸时同步
+        playbackService?.onVideoSizeChanged = { w, h -> onVideoSizeReady(w, h) }
         showPage(Page.VIDEO)
         seekVideo.max = playbackService?.currentDuration() ?: 0
         txtVideoHint.visibility =
             if (playbackService?.isPlayingSafe() == true) View.GONE else View.VISIBLE
     }
 
-    /** 视频画面等比适配（letterbox 居中），避免竖屏视频被拉伸或裁切。 */
+    /** 播放器解出真实视频尺寸：修正方向并重新适配画面。 */
+    private fun onVideoSizeReady(w: Int, h: Int) {
+        if (w <= 0 || h <= 0 || page != Page.VIDEO) return
+        val changed = videoW != w || videoH != h
+        videoW = w
+        videoH = h
+        val target = when {
+            w > h -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            h > w -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            else -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+        if (target != requestedOrientation) {
+            requestedOrientation = target
+        }
+        if (changed && videoSurfaceAttached) {
+            fitVideoSurface(videoSurface.width, videoSurface.height)
+        }
+    }
+
+    /** 视频画面完整显示（fit：等比缩放、宁可黑边不裁切）。画面区域 = 视频 FrameLayout，不含底部进度条。 */
     private fun fitVideoSurface(viewW: Int, viewH: Int) {
         if (videoW <= 0 || videoH <= 0 || viewW <= 0 || viewH <= 0) return
         val scale = minOf(
@@ -2174,6 +2201,7 @@ class MainActivity : AppCompatActivity() {
         }
         playbackService?.attachVideoSurface(null)
         videoSurfaceAttached = false
+        playbackService?.onVideoSizeChanged = null
         requestedOrientation =
             android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         showPage(Page.PLAYER)

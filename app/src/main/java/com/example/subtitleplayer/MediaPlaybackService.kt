@@ -70,6 +70,11 @@ class MediaPlaybackService : Service() {
     private var mediaPlayer: MediaPlayer? = null
     /** 视频 surface（视频页绑定时记录；切歌/循环后新播放器需重新绑定画面）。 */
     private var attachedVideoSurface: android.view.Surface? = null
+    /** 解码后的真实视频尺寸（含旋转修正，区别于 MediaMetadataRetriever 的存储方向）。 */
+    private var videoWidth = 0
+    private var videoHeight = 0
+    /** 视频尺寸解出后回调（视频页用于修正方向与画面比例）。 */
+    var onVideoSizeChanged: ((Int, Int) -> Unit)? = null
     private var isPrepared = false
     private var durationMs = 0
 
@@ -302,6 +307,9 @@ class MediaPlaybackService : Service() {
 
     fun currentDuration(): Int = durationMs
 
+    /** 当前视频解码尺寸（0,0 表示未知/音频）。 */
+    fun currentVideoSize(): Pair<Int, Int> = videoWidth to videoHeight
+
     /** 定时开始播放：恢复上次播放的歌曲与进度；无记录时兜底播放第一个歌单。 */
     private fun playLast() {
         android.util.Log.d(
@@ -453,11 +461,26 @@ class MediaPlaybackService : Service() {
                     play()
                 }
             }
+            mp.setOnVideoSizeChangedListener { _, w, h ->
+                if (w > 0 && h > 0) {
+                    videoWidth = w
+                    videoHeight = h
+                    onVideoSizeChanged?.invoke(w, h)
+                }
+            }
             mp.setOnCompletionListener {
                 // 播放完成：按播放模式决定下一首（单曲循环重播当前）
                 when (getPlayMode()) {
                     MODE_REPEAT_ONE -> {
                         seekTo(0)
+                        // 单曲循环不重建播放器，强制重设 surface 触发画面刷新（部分设备 seek 后无新帧）
+                        attachedVideoSurface?.let { surf ->
+                            try {
+                                mp.setSurface(null)
+                                mp.setSurface(surf)
+                            } catch (e: Exception) {
+                            }
+                        }
                         play()
                     }
                     MODE_SHUFFLE -> {
