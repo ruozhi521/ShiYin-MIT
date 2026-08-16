@@ -234,7 +234,7 @@ class MainActivity : AppCompatActivity() {
             imgCd.setImageResource(R.drawable.ic_music_tinted)
             currentCoverKey = song?.uri?.toString()
             if (song != null) {
-                CoverLoader.load(this@MainActivity, song.uri, 400) { bmp ->
+                CoverLoader.load(this@MainActivity, song.uri, 400, folder = song.folder) { bmp ->
                     if (bmp != null && song.uri.toString() == currentCoverKey) {
                         imgCd.setImageBitmap(bmp)
                         applyPlayerBackground(bmp)
