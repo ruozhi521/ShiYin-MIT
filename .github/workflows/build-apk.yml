@@ -75,6 +75,9 @@ jobs:
       - name: Build debug APK
         run: gradle assembleDebug
 
+      - name: Run unit tests (JVM, cloud)
+        run: gradle testDebugUnitTest
+
       - name: Print signing fingerprints (diagnose signature consistency)
         run: |
           gradle signingReport 2>&1 | grep -E "Variant:|Config:|Store:|SHA1:|SHA256:" || echo "signingReport failed"
