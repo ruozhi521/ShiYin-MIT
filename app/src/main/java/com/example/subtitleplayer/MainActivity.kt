@@ -78,6 +78,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var recyclerPlaylists: RecyclerView
     private lateinit var recyclerArtists: RecyclerView
     private lateinit var treeAdapter: FolderTreeAdapter
+    private lateinit var gridAdapter: PlaylistGridAdapter
     private lateinit var artistAdapter: ArtistAdapter
     private var artistGroups: List<Pair<String, List<Song>>> = emptyList()
     private var artistLoaded = false
@@ -321,7 +322,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (ok > 0) {
                     toast(getString(R.string.batch_cover_done, ok))
-                    treeAdapter.notifyDataSetChanged()
+                    refreshLibGrid()
                     refreshCdCover()
                 } else {
                     toast(getString(R.string.cover_failed))
@@ -337,7 +338,7 @@ class MainActivity : AppCompatActivity() {
             }
             if (ok) {
                 toast(getString(R.string.cover_saved))
-                treeAdapter.notifyDataSetChanged()
+                refreshLibGrid()
                 refreshCdCover()
             } else {
                 toast(getString(R.string.cover_failed))
@@ -485,13 +486,18 @@ class MainActivity : AppCompatActivity() {
         recyclerDiscover.adapter = discoverAdapter
         findViewById<Button>(R.id.btnRefreshDiscover).setOnClickListener { loadDiscover() }
 
-        // ---- 音乐库页：文件夹树（Poweramp 式缩进展开）----
+        // ---- 音乐库页：歌单展示（默认网格大图标，设置里可切树形目录）----
+        gridAdapter = PlaylistGridAdapter(
+            { pos -> playlistList().getOrNull(pos)?.let { openPlaylist(it) } },
+            { pos -> playlistList().getOrNull(pos)?.let { showPlaylistCoverMenu(it.name) } }
+        )
         treeAdapter = FolderTreeAdapter(
             { pl -> openPlaylist(pl) },
             { pl -> showPlaylistCoverMenu(pl.name) }
         )
-        recyclerPlaylists.layoutManager = LinearLayoutManager(this)
-        recyclerPlaylists.adapter = treeAdapter
+        recyclerPlaylists.layoutManager = GridLayoutManager(this, 2)
+        recyclerPlaylists.adapter = gridAdapter
+        applyLibLayout()
 
         // ---- 音乐库页：歌手 ----
         artistAdapter = ArtistAdapter { pos -> openArtistSongs(pos) }
@@ -614,26 +620,26 @@ class MainActivity : AppCompatActivity() {
         seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
-                    playbackService?.seekTo(progress)
+                    // 拖动中只预览时间，不实时 seek（高频 seek 导致解码卡顿，松手才跳转）
                     updateTime(progress)
                 }
             }
 
             override fun onStartTrackingTouch(sb: SeekBar) {}
 
-            override fun onStopTrackingTouch(sb: SeekBar) {}
+            override fun onStopTrackingTouch(sb: SeekBar) {
+                playbackService?.seekTo(sb.progress)
+            }
         })
 
         miniSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
-                if (fromUser) {
-                    playbackService?.seekTo(progress)
-                }
-            }
+            override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {}
 
             override fun onStartTrackingTouch(sb: SeekBar) {}
 
-            override fun onStopTrackingTouch(sb: SeekBar) {}
+            override fun onStopTrackingTouch(sb: SeekBar) {
+                playbackService?.seekTo(sb.progress)
+            }
         })
 
         etSearch.addTextChangedListener(object : TextWatcher {
@@ -869,7 +875,7 @@ class MainActivity : AppCompatActivity() {
         songAdapter.notifyDataSetChanged()
         lyricAdapter.notifyDataSetChanged()
         discoverAdapter.notifyDataSetChanged()
-        treeAdapter.notifyDataSetChanged()
+        refreshLibGrid()
         artistAdapter.notifyDataSetChanged()
         searchAdapter.notifyDataSetChanged()
     }
@@ -1106,7 +1112,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onLibraryReady() {
-        treeAdapter.submit(playlistList())
+        applyLibLayout()
         loadDiscover()
         artistLoaded = false
         artistGroups = emptyList()
@@ -1550,6 +1556,8 @@ class MainActivity : AppCompatActivity() {
         val chkLyricsLocked = view.findViewById<CheckBox>(R.id.chkLyricsLocked)
         val chkMixAudio = view.findViewById<CheckBox>(R.id.chkMixAudio)
         chkMixAudio.isChecked = prefs.getBoolean(KEY_MIX_AUDIO, false)
+        val rgLibLayout = view.findViewById<RadioGroup>(R.id.rgLibLayout)
+        checkByTag(rgLibLayout, if (prefs.getString(KEY_LIB_LAYOUT, "grid") == "tree") 1 else 0)
         val chkAlarmPlay = view.findViewById<CheckBox>(R.id.chkAlarmPlay)
         chkAlarmPlay.isChecked = prefs.getBoolean(KEY_ALARM_ON, false)
         chkAlarmPlay.setOnClickListener { showAlarmPicker(chkAlarmPlay) }
@@ -1606,8 +1614,10 @@ class MainActivity : AppCompatActivity() {
                     .putInt(KEY_DESKTOP_ALPHA, tagOf(rgDesktopAlpha))
                     .putBoolean(KEY_DESKTOP_LOCKED, chkLyricsLocked.isChecked)
                     .putBoolean(KEY_MIX_AUDIO, chkMixAudio.isChecked)
+                    .putString(KEY_LIB_LAYOUT, if (tagOf(rgLibLayout) == 1) "tree" else "grid")
                     .apply()
                 applyAppearance()
+                applyLibLayout()
                 playbackService?.refreshDesktopLyricsStyle()
             }
             .setNegativeButton(R.string.cancel, null)
@@ -1978,7 +1988,7 @@ class MainActivity : AppCompatActivity() {
                     1 -> {
                         CoverManager.clearPlaylistCover(this, name)
                         CoverLoader.invalidate("pl:$name")
-                        treeAdapter.notifyDataSetChanged()
+                        refreshLibGrid()
                         toast(getString(R.string.cover_cleared))
                     }
                     2 -> showBatchCoverPicker(name)
@@ -2076,7 +2086,7 @@ class MainActivity : AppCompatActivity() {
                         CoverManager.clearSongCover(this, song.uri.toString())
                         CoverLoader.invalidate(song.uri.toString())
                         refreshCdCover()
-                        treeAdapter.notifyDataSetChanged()
+                        refreshLibGrid()
                         toast(getString(R.string.cover_cleared))
                     }
                 }
@@ -2432,6 +2442,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** 音乐库歌单展示布局：网格大图标（默认）/ 树形目录，切换时重挂 adapter 并刷新数据。 */
+    private fun applyLibLayout() {
+        val mode = prefs.getString(KEY_LIB_LAYOUT, "grid")
+        val list = playlistList()
+        if (mode == "tree") {
+            if (recyclerPlaylists.layoutManager !is LinearLayoutManager) {
+                recyclerPlaylists.layoutManager = LinearLayoutManager(this)
+            }
+            if (recyclerPlaylists.adapter !== treeAdapter) {
+                recyclerPlaylists.adapter = treeAdapter
+            }
+            treeAdapter.submit(list)
+        } else {
+            if (recyclerPlaylists.layoutManager !is GridLayoutManager) {
+                recyclerPlaylists.layoutManager = GridLayoutManager(this, 2)
+            }
+            if (recyclerPlaylists.adapter !== gridAdapter) {
+                recyclerPlaylists.adapter = gridAdapter
+            }
+            gridAdapter.submit(list)
+        }
+    }
+
+    /** 封面/主题变更后刷新两种布局的列表（当前可见的立即生效）。 */
+    private fun refreshLibGrid() {
+        gridAdapter.notifyDataSetChanged()
+        treeAdapter.notifyDataSetChanged()
+    }
+
     private fun applyAppearance() {
         lyricAdapter.applyStyle(
             prefs.getInt(KEY_LYRIC_SIZE, 18),
@@ -2440,6 +2479,7 @@ class MainActivity : AppCompatActivity() {
         val uiSize = prefs.getInt(KEY_UI_SIZE, 15)
         songAdapter.applyUiSize(uiSize)
         searchAdapter.applyUiSize(uiSize)
+        gridAdapter.applyUiSize(uiSize)
         treeAdapter.applyUiSize(uiSize)
         discoverAdapter.applyUiSize(uiSize)
     }
@@ -2529,6 +2569,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_DESKTOP_ALPHA = "desktop_lyrics_alpha"
         private const val KEY_DESKTOP_LOCKED = "desktop_lyrics_locked"
         private const val KEY_MIX_AUDIO = "mix_audio"
+        private const val KEY_LIB_LAYOUT = "lib_layout"
         private const val KEY_ALARM_ON = "alarm_play_on"
         private const val KEY_ALARM_HOUR = "alarm_play_hour"
         private const val KEY_ALARM_MINUTE = "alarm_play_minute"

@@ -267,6 +267,8 @@ class MediaPlaybackService : Service() {
         if (!isPrepared) return
         try {
             mp.seekTo(ms.coerceIn(0, durationMs))
+            // 刷新会话 position，通知进度与播放器同步（否则暂停时 seek 后通知停在旧位置）
+            updateMediaSession(isPlaying())
         } catch (e: Exception) {
             // ignore
         }
@@ -591,12 +593,15 @@ class MediaPlaybackService : Service() {
         if (ref != null) {
             try {
                 val bytes =
-                    contentResolver.openInputStream(ref.uri)?.use { it.readBytes() } ?: return
-                val parsed = SubtitleParser.parse(decodeText(bytes))
-                if (parsed.isNotEmpty()) {
-                    lyricLines = parsed
-                    lyricName = ref.displayName
-                    return
+                    contentResolver.openInputStream(ref.uri)?.use { it.readBytes() }
+                // 外置读取失败（null/空）也继续走内嵌兜底，不能直接 return
+                if (bytes != null && bytes.isNotEmpty()) {
+                    val parsed = SubtitleParser.parse(decodeText(bytes))
+                    if (parsed.isNotEmpty()) {
+                        lyricLines = parsed
+                        lyricName = ref.displayName
+                        return
+                    }
                 }
             } catch (e: Exception) {
                 // 外部歌词读取失败则尝试内嵌
@@ -853,6 +858,8 @@ class MediaPlaybackService : Service() {
         val mb = MediaMetadata.Builder()
             .putString(MediaMetadata.METADATA_KEY_TITLE, song?.title ?: getString(R.string.app_name))
             .putString(MediaMetadata.METADATA_KEY_ARTIST, song?.artist ?: song?.folder ?: "")
+            // 通知栏/锁屏进度条读这个字段，漏了会一直显示 00:00/00:00
+            .putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs.toLong())
         mediaSession?.setMetadata(mb.build())
     }
 

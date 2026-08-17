@@ -290,6 +290,40 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
+            android:text="@string/lib_layout"
+            android:textColor="@color/text_hint"
+            android:textSize="13sp" />
+
+        <RadioGroup
+            android:id="@+id/rgLibLayout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:orientation="horizontal">
+
+            <RadioButton
+                android:id="@+id/rbLibGrid"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:tag="0"
+                android:text="@string/lib_grid"
+                android:textColor="@color/text_primary" />
+
+            <RadioButton
+                android:id="@+id/rbLibTree"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:tag="1"
+                android:text="@string/lib_tree"
+                android:textColor="@color/text_primary" />
+        </RadioGroup>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
             android:text="@string/lyric_font_label"
             android:textColor="@color/text_hint"
             android:textSize="13sp" />

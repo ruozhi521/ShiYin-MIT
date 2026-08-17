@@ -169,4 +169,7 @@
     <string name="sleep_set">将在 %1$d 分钟后自动暂停</string>
     <string name="sleep_cancelled">已取消定时</string>
     <string name="timer">定时</string>
+    <string name="lib_layout">音乐库布局</string>
+    <string name="lib_grid">网格（大图标）</string>
+    <string name="lib_tree">树形目录</string>
 </resources>

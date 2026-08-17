@@ -55,7 +55,8 @@ class FolderTreeAdapter(
         holder.name.setTextSize(uiSizeSp)
 
         val isLeaf = !node.isDir
-        holder.arrow.visibility = if (isLeaf) View.GONE else View.VISIBLE
+        // INVISIBLE 保留箭头占位（24dp），保证叶子行封面与目录行封面垂直对齐（GONE 会错位显乱）
+        holder.arrow.visibility = if (isLeaf) View.INVISIBLE else View.VISIBLE
         holder.arrow.text = if (expanded.contains(node.path)) "▼" else "▶"
         holder.count.text = holder.itemView.context
             .getString(R.string.songs_count, if (isLeaf) node.playlist?.songs?.size ?: 0 else node.totalSongs)
