@@ -170,12 +170,13 @@ class LibraryScanner(
             for (st in stems) {
                 lyrics["$folder/${lower(st)}"]?.let { return it }
             }
-            // 全局兜底：跨目录同名歌词有多个时返回 null，避免串行
-            val lowerStems = stems.map { lower(it) }
+            // 全局兜底：跨目录同名歌词有多个时返回 null，避免串行。
+            // 注意同一歌词的双 key（歌名.mp3 + 歌名 指向同一 ref）要先去重，
+            // 否则旧缓存（无路径 key）双注册会误判为多个。
             val matches = lyrics.filterKeys { k ->
                 lowerStems.any { st -> k == st || k.endsWith("/$st") }
-            }
-            return if (matches.size == 1) matches.values.first() else null
+            }.values.distinct()
+            return if (matches.size == 1) matches.first() else null
         }
 
         /** 从 SAF 文档 uri 提取完整文件名（保留扩展名，如 歌名.mp3）。旧缓存 Song 无 fileStem 时用。 */

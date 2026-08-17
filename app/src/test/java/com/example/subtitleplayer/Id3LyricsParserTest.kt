@@ -24,8 +24,8 @@ class Id3LyricsParserTest {
 
     @Test
     fun `USLT 纯文本歌词解析`() {
-        // encoding=0(ISO-8859-1) + lang(3) + desc\0 + text
-        val data = byteArrayOf(0, 'z'.code.toByte(), 'h'.code.toByte(), '0'.code.toByte(), 0) +
+        // encoding=3(UTF-8) + lang(3) + desc\0 + text
+        val data = byteArrayOf(3, 'z'.code.toByte(), 'h'.code.toByte(), '0'.code.toByte(), 0) +
             "第一句\n第二句".toByteArray(Charsets.UTF_8)
         val lines = Id3LyricsParser.parseUslt(data)
         assertNotNull(lines)
@@ -35,13 +35,13 @@ class Id3LyricsParserTest {
 
     @Test
     fun `SYLT 同步歌词带时间戳解析`() {
-        // encoding=0 + lang(3) + format(1)=1 + type(1) + desc\0 + [text\0 + ts(4 大端)]
+        // encoding=3(UTF-8) + lang(3) + format(1)=1 + type(1) + desc\0 + [text\0 + ts(4 大端)]
         val text1 = "第一句".toByteArray(Charsets.UTF_8)
         val text2 = "第二句".toByteArray(Charsets.UTF_8)
         val ts1 = 1000 // 大端 4 字节
         val ts2 = 3000
         val data = byteArrayOf(
-            0, 'z'.code.toByte(), 'h'.code.toByte(), '0'.code.toByte(),
+            3, 'z'.code.toByte(), 'h'.code.toByte(), '0'.code.toByte(),
             1, 1, 0 // format=1, type=1, desc 结束
         ) + text1 + byteArrayOf(0,
             (ts1 shr 24).toByte(), (ts1 shr 16).toByte(), (ts1 shr 8).toByte(), ts1.toByte()
@@ -61,7 +61,7 @@ class Id3LyricsParserTest {
     @Test
     fun `parseBody 只认歌词帧忽略其他帧`() {
         val txxx = frame("TIT2", byteArrayOf(0) + "标题".toByteArray(Charsets.UTF_8))
-        val usltData = byteArrayOf(0, 'z'.code.toByte(), 'h'.code.toByte(), '0'.code.toByte(), 0) +
+        val usltData = byteArrayOf(3, 'z'.code.toByte(), 'h'.code.toByte(), '0'.code.toByte(), 0) +
             "歌词内容".toByteArray(Charsets.UTF_8)
         val uslt = frame("USLT", usltData)
         val body = txxx + uslt
