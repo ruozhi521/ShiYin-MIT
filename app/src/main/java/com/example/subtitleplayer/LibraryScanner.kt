@@ -155,18 +155,38 @@ class LibraryScanner(
          * 2) 全局兜底：仅当全局唯一（同名歌曲不同目录时宁可读不到也不串行）
          */
         fun findLyric(song: Song, lyrics: Map<String, LyricRef>): LyricRef? {
-            val stem = lower(
-                if (song.fileStem.isNotBlank()) song.fileStem else stemOf(song.title)
-            )
             val folder = song.folder
+            // 匹配候选（按可靠度排序，全部尝试）：
+            // 1. fileStem（新扫描/新缓存）
+            // 2. uri 文件名（旧缓存无 fileStem 时从文档 uri 推导——不用 ID3 title，mp3 中文标签
+            //    GBK 乱码/与文件名不一致会导致 wav 能匹配而 mp3 匹配不上）
+            // 3. title / title 去扩展名（最后兜底；某些 provider 的 uri 是数字 id 拿不到文件名）
+            val stems = linkedSetOf<String>()
+            if (song.fileStem.isNotBlank()) stems.add(song.fileStem)
+            stemFromUri(song.uri).takeIf { it.isNotBlank() }?.let { stems.add(it) }
+            stems.add(stemOf(song.title))
+            stems.add(song.title)
             // 新格式（带路径）精确匹配
-            lyrics["$folder/$stem"]?.let { return it }
-            lyrics["$folder/${lower(song.title)}"]?.let { return it }
+            for (st in stems) {
+                lyrics["$folder/${lower(st)}"]?.let { return it }
+            }
             // 全局兜底：跨目录同名歌词有多个时返回 null，避免串行
+            val lowerStems = stems.map { lower(it) }
             val matches = lyrics.filterKeys { k ->
-                k == stem || k.endsWith("/$stem")
+                lowerStems.any { st -> k == st || k.endsWith("/$st") }
             }
             return if (matches.size == 1) matches.values.first() else null
+        }
+
+        /** 从 SAF 文档 uri 提取文件名（去扩展名）。旧缓存 Song 无 fileStem 时用。 */
+        private fun stemFromUri(uri: Uri): String {
+            val raw = uri.lastPathSegment ?: return ""
+            val decoded = try {
+                java.net.URLDecoder.decode(raw, "UTF-8")
+            } catch (e: Exception) {
+                raw
+            }
+            return stemOf(decoded.substringAfterLast('/'))
         }
     }
 }

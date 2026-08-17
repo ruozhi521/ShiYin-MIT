@@ -57,68 +57,6 @@ class DiscoverAdapter(
 }
 
 /** 音乐库歌单网格卡片：封面 + 名称 + 歌曲数。支持自定义封面与长按。 */
-class PlaylistGridAdapter(
-    private val onClick: (Int) -> Unit,
-    private val onLongClick: (Int) -> Unit
-) : RecyclerView.Adapter<PlaylistGridAdapter.Holder>() {
-
-    private var items: List<Playlist> = emptyList()
-    private var uiSizeSp = 14f
-
-    fun submit(list: List<Playlist>) {
-        items = list
-        notifyDataSetChanged()
-    }
-
-    fun applyUiSize(sizeSp: Int) {
-        uiSizeSp = sizeSp.toFloat()
-        notifyDataSetChanged()
-    }
-
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
-        val view = LayoutInflater.from(parent.context)
-            .inflate(R.layout.item_playlist_grid, parent, false)
-        return Holder(view)
-    }
-
-    override fun onBindViewHolder(holder: Holder, position: Int) {
-        val playlist = items[position]
-        holder.name.text = playlist.name
-        holder.name.setTextSize(uiSizeSp)
-        holder.count.text = holder.itemView.context
-            .getString(R.string.songs_count, playlist.songs.size)
-        holder.cover.setImageResource(R.drawable.ic_folder_tinted)
-        val song = playlist.songs.firstOrNull()
-        val custom = CoverManager.playlistCover(holder.itemView.context, playlist.name)
-        if (custom != null) {
-            CoverLoader.loadFile(holder.itemView.context, custom, "pl:" + playlist.name, 200) { bmp ->
-                if (bmp != null && holder.bindingAdapterPosition == position) {
-                    holder.cover.setImageBitmap(bmp)
-                }
-            }
-        } else if (song != null) {
-            CoverLoader.load(holder.itemView.context, song.uri, 200, folder = song.folder) { bmp ->
-                if (bmp != null && holder.bindingAdapterPosition == position) {
-                    holder.cover.setImageBitmap(bmp)
-                }
-            }
-        }
-        holder.itemView.setOnClickListener { onClick(position) }
-        holder.itemView.setOnLongClickListener {
-            onLongClick(position)
-            true
-        }
-    }
-
-    override fun getItemCount(): Int = items.size
-
-    class Holder(itemView: View) : RecyclerView.ViewHolder(itemView) {
-        val cover: ImageView = itemView.findViewById(R.id.imgGridCover)
-        val name: TextView = itemView.findViewById(R.id.txtGridName)
-        val count: TextView = itemView.findViewById(R.id.txtGridCount)
-    }
-}
-
 /** 歌手列表：圆形音符头像 + 歌手名 + 歌曲数。 */
 class ArtistAdapter(
     private val onClick: (Int) -> Unit

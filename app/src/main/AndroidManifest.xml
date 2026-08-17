@@ -45,9 +45,6 @@
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
 
-        <receiver
-            android:name=".AlarmPlayReceiver"
-            android:exported="false" />
 
     </application>
 

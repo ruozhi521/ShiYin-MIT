@@ -77,7 +77,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var segArtists: TextView
     private lateinit var recyclerPlaylists: RecyclerView
     private lateinit var recyclerArtists: RecyclerView
-    private lateinit var gridAdapter: PlaylistGridAdapter
+    private lateinit var treeAdapter: FolderTreeAdapter
     private lateinit var artistAdapter: ArtistAdapter
     private var artistGroups: List<Pair<String, List<Song>>> = emptyList()
     private var artistLoaded = false
@@ -321,21 +321,23 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (ok > 0) {
                     toast(getString(R.string.batch_cover_done, ok))
-                    gridAdapter.notifyDataSetChanged()
+                    treeAdapter.notifyDataSetChanged()
                     refreshCdCover()
                 } else {
                     toast(getString(R.string.cover_failed))
                 }
                 return@registerForActivityResult
             }
-            val ok = if (target.startsWith("pl:")) {
-                CoverManager.setPlaylistCover(this, target.removePrefix("pl:"), uri) != null
+            // 到此处 batch 分支已 return；若 target 为空（单选模式必非空）直接放弃
+            val t = target ?: return@registerForActivityResult
+            val ok = if (t.startsWith("pl:")) {
+                CoverManager.setPlaylistCover(this, t.removePrefix("pl:"), uri) != null
             } else {
-                CoverManager.setSongCover(this, target.removePrefix("song:"), uri) != null
+                CoverManager.setSongCover(this, t.removePrefix("song:"), uri) != null
             }
             if (ok) {
                 toast(getString(R.string.cover_saved))
-                gridAdapter.notifyDataSetChanged()
+                treeAdapter.notifyDataSetChanged()
                 refreshCdCover()
             } else {
                 toast(getString(R.string.cover_failed))
@@ -483,13 +485,13 @@ class MainActivity : AppCompatActivity() {
         recyclerDiscover.adapter = discoverAdapter
         findViewById<Button>(R.id.btnRefreshDiscover).setOnClickListener { loadDiscover() }
 
-        // ---- 音乐库页：歌单网格 ----
-        gridAdapter = PlaylistGridAdapter(
-            { pos -> playlistList().getOrNull(pos)?.let { openPlaylist(it) } },
-            { pos -> playlistList().getOrNull(pos)?.let { showPlaylistCoverMenu(it.name) } }
+        // ---- 音乐库页：文件夹树（Poweramp 式缩进展开）----
+        treeAdapter = FolderTreeAdapter(
+            { pl -> openPlaylist(pl) },
+            { pl -> showPlaylistCoverMenu(pl.name) }
         )
-        recyclerPlaylists.layoutManager = GridLayoutManager(this, 2)
-        recyclerPlaylists.adapter = gridAdapter
+        recyclerPlaylists.layoutManager = LinearLayoutManager(this)
+        recyclerPlaylists.adapter = treeAdapter
 
         // ---- 音乐库页：歌手 ----
         artistAdapter = ArtistAdapter { pos -> openArtistSongs(pos) }
@@ -867,7 +869,7 @@ class MainActivity : AppCompatActivity() {
         songAdapter.notifyDataSetChanged()
         lyricAdapter.notifyDataSetChanged()
         discoverAdapter.notifyDataSetChanged()
-        gridAdapter.notifyDataSetChanged()
+        treeAdapter.notifyDataSetChanged()
         artistAdapter.notifyDataSetChanged()
         searchAdapter.notifyDataSetChanged()
     }
@@ -1104,7 +1106,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onLibraryReady() {
-        gridAdapter.submit(playlistList())
+        treeAdapter.submit(playlistList())
         loadDiscover()
         artistLoaded = false
         artistGroups = emptyList()
@@ -1976,7 +1978,7 @@ class MainActivity : AppCompatActivity() {
                     1 -> {
                         CoverManager.clearPlaylistCover(this, name)
                         CoverLoader.invalidate("pl:$name")
-                        gridAdapter.notifyDataSetChanged()
+                        treeAdapter.notifyDataSetChanged()
                         toast(getString(R.string.cover_cleared))
                     }
                     2 -> showBatchCoverPicker(name)
@@ -2048,30 +2050,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun showSongCoverMenu(song: Song) {
-        AlertDialog.Builder(this)
-            .setTitle(song.title)
-            .setItems(
-                arrayOf(getString(R.string.cover_set), getString(R.string.cover_clear))
-            ) { _, which ->
-                when (which) {
-                    0 -> {
-                        pendingCoverTarget = "song:${song.uri}"
-                        coverPicker.launch("image/*")
-                    }
-                    1 -> {
-                        CoverManager.clearSongCover(this, song.uri.toString())
-                        CoverLoader.invalidate(song.uri.toString())
-                        refreshCdCover()
-                        gridAdapter.notifyDataSetChanged()
-                        toast(getString(R.string.cover_cleared))
-                    }
-                }
-            }
-            .show()
-    }
-
-    /** 刷新播放页 CD 封面（设置/清除单曲封面后）。 */
     /** 歌曲长按统一菜单：收藏 + 封面设置。 */
     private fun showSongMenu(song: Song) {
         val fav = FavoritesManager.isFavorite(this, song.uri.toString())
@@ -2098,7 +2076,7 @@ class MainActivity : AppCompatActivity() {
                         CoverManager.clearSongCover(this, song.uri.toString())
                         CoverLoader.invalidate(song.uri.toString())
                         refreshCdCover()
-                        gridAdapter.notifyDataSetChanged()
+                        treeAdapter.notifyDataSetChanged()
                         toast(getString(R.string.cover_cleared))
                     }
                 }
@@ -2462,7 +2440,7 @@ class MainActivity : AppCompatActivity() {
         val uiSize = prefs.getInt(KEY_UI_SIZE, 15)
         songAdapter.applyUiSize(uiSize)
         searchAdapter.applyUiSize(uiSize)
-        gridAdapter.applyUiSize(uiSize)
+        treeAdapter.applyUiSize(uiSize)
         discoverAdapter.applyUiSize(uiSize)
     }
 
