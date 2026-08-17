@@ -156,14 +156,14 @@ class LibraryScanner(
          */
         fun findLyric(song: Song, lyrics: Map<String, LyricRef>): LyricRef? {
             val folder = song.folder
-            // 匹配候选（按可靠度排序，全部尝试）：
-            // 1. fileStem（新扫描/新缓存）
-            // 2. uri 文件名（旧缓存无 fileStem 时从文档 uri 推导——不用 ID3 title，mp3 中文标签
-            //    GBK 乱码/与文件名不一致会导致 wav 能匹配而 mp3 匹配不上）
+            // 匹配候选（按精确度排序，全部尝试）：
+            // 1. uri 完整文件名（含音频扩展名，如 歌名.mp3）——命中各自的 歌名.mp3.vtt；
+            //    避免同名不同格式（歌名.mp3 + 歌名.flac 各带格式后缀歌词）时兜底 key 互相覆盖错配
+            // 2. fileStem（新扫描/新缓存，文件名去扩展名）
             // 3. title / title 去扩展名（最后兜底；某些 provider 的 uri 是数字 id 拿不到文件名）
             val stems = linkedSetOf<String>()
+            fileNameFromUri(song.uri).takeIf { it.isNotBlank() }?.let { stems.add(it) }
             if (song.fileStem.isNotBlank()) stems.add(song.fileStem)
-            stemFromUri(song.uri).takeIf { it.isNotBlank() }?.let { stems.add(it) }
             stems.add(stemOf(song.title))
             stems.add(song.title)
             // 新格式（带路径）精确匹配
@@ -178,15 +178,15 @@ class LibraryScanner(
             return if (matches.size == 1) matches.values.first() else null
         }
 
-        /** 从 SAF 文档 uri 提取文件名（去扩展名）。旧缓存 Song 无 fileStem 时用。 */
-        private fun stemFromUri(uri: Uri): String {
+        /** 从 SAF 文档 uri 提取完整文件名（保留扩展名，如 歌名.mp3）。旧缓存 Song 无 fileStem 时用。 */
+        private fun fileNameFromUri(uri: Uri): String {
             val raw = uri.lastPathSegment ?: return ""
             val decoded = try {
                 java.net.URLDecoder.decode(raw, "UTF-8")
             } catch (e: Exception) {
                 raw
             }
-            return stemOf(decoded.substringAfterLast('/'))
+            return decoded.substringAfterLast('/')
         }
     }
 }

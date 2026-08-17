@@ -261,7 +261,7 @@ object Id3LyricsParser {
     }
 
     /** 只读文件头部：ID3v2 标签位于文件最前，无需读取整个音频文件。 */
-    private fun parseStream(input: InputStream): List<SubtitleLine>? {
+    internal fun parseStream(input: InputStream): List<SubtitleLine>? {
         val header = ByteArray(10)
         if (!readFully(input, header)) return null
         if (header[0] != 'I'.code.toByte() ||
@@ -301,7 +301,7 @@ object Id3LyricsParser {
         return read
     }
 
-    private fun parseBody(body: ByteArray, bodyLen: Int, major: Int): List<SubtitleLine>? {
+    internal fun parseBody(body: ByteArray, bodyLen: Int, major: Int): List<SubtitleLine>? {
         val usltLines = mutableListOf<String>()
         val syltLines = mutableListOf<SubtitleLine>()
         var pos = 0
@@ -333,7 +333,7 @@ object Id3LyricsParser {
     }
 
     /** USLT: encoding(1) + lang(3) + descriptor\0 + lyrics text */
-    private fun parseUslt(data: ByteArray): List<String>? {
+    internal fun parseUslt(data: ByteArray): List<String>? {
         if (data.size < 5) return null
         val encoding = data[0].toInt() and 0xFF
         val descEnd = findTerminator(data, 4, encoding)
@@ -346,7 +346,7 @@ object Id3LyricsParser {
     }
 
     /** SYLT: encoding(1) + lang(3) + format(1) + type(1) + descriptor\0 + [text\0 + ts(4)]* */
-    private fun parseSylt(data: ByteArray): List<SubtitleLine>? {
+    internal fun parseSylt(data: ByteArray): List<SubtitleLine>? {
         if (data.size < 7) return null
         val encoding = data[0].toInt() and 0xFF
         val format = data[4].toInt() and 0xFF

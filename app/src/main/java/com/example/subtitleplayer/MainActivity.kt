@@ -31,7 +31,6 @@ import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.SeekBar
 import android.widget.TextView
-import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -1656,8 +1655,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** 主题设置弹窗：主题色 + 背景图 + 深色模式三合一。 */
-    private fun dp(v: Float): Int = (v * resources.displayMetrics.density).toInt()
-
     private fun showThemeDialog() {
         val d = resources.displayMetrics.density
         val box = android.widget.LinearLayout(this).apply {
@@ -2428,20 +2425,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun tagOf(rg: RadioGroup): Int =
-        rg.findViewById<android.view.View>(rg.checkedRadioButtonId)
-            ?.tag?.toString()?.toIntOrNull() ?: 0
-
-    private fun checkByTag(rg: RadioGroup, value: Int) {
-        for (i in 0 until rg.childCount) {
-            val child = rg.getChildAt(i)
-            if (child.tag?.toString()?.toIntOrNull() == value) {
-                (child as? RadioButton)?.isChecked = true
-                return
-            }
-        }
-    }
-
     /** 音乐库歌单展示布局：网格大图标（默认）/ 树形目录，切换时重挂 adapter 并刷新数据。 */
     private fun applyLibLayout() {
         val mode = prefs.getString(KEY_LIB_LAYOUT, "grid")
@@ -2510,18 +2493,6 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun formatTime(ms: Int): String {
-        val totalSec = ms / 1000
-        val h = totalSec / 3600
-        val m = (totalSec % 3600) / 60
-        val s = totalSec % 60
-        return if (h > 0) {
-            String.format(Locale.getDefault(), "%d:%02d:%02d", h, m, s)
-        } else {
-            String.format(Locale.getDefault(), "%02d:%02d", m, s)
-        }
-    }
-
     // ---------- 权限 ----------
 
     private fun persistRead(uri: Uri) {
@@ -2537,10 +2508,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun hasPersistRead(uri: Uri): Boolean =
         contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }
-
-    private fun toast(msg: String) {
-        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
-    }
 
     companion object {
         private const val KEY_TREE = "tree_uri"
