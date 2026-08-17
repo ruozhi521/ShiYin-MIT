@@ -173,6 +173,7 @@ class LibraryScanner(
             // 全局兜底：跨目录同名歌词有多个时返回 null，避免串行。
             // 注意同一歌词的双 key（歌名.mp3 + 歌名 指向同一 ref）要先去重，
             // 否则旧缓存（无路径 key）双注册会误判为多个。
+            val lowerStems = stems.map { lower(it) }
             val matches = lyrics.filterKeys { k ->
                 lowerStems.any { st -> k == st || k.endsWith("/$st") }
             }.values.distinct()
