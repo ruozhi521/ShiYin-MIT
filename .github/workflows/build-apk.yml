@@ -87,3 +87,33 @@ jobs:
         with:
           name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+
+  # 模拟器 UI 冒烟测试（每次 push 自动跑；时间较长但覆盖 UI 流程）
+  ui-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.11.1'
+          cache-disabled: true
+
+      - name: Build app + test APKs
+        run: gradle assembleDebug assembleDebugAndroidTest
+
+      - name: Run instrumented UI tests on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          disable-animations: true
+          script: gradle connectedDebugAndroidTest
