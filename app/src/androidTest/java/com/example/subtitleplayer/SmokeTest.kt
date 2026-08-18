@@ -61,7 +61,10 @@ class SmokeTest {
     @Test
     fun 底部导航切换到音乐库页() {
         launch { activity ->
-            assertTrue("找不到音乐库导航项", clickByText(activity, "音乐库"))
+            assertTrue(
+                "找不到音乐库导航项",
+                clickByText(activity.window.decorView, "音乐库")
+            )
             val list = activity.findViewById<View>(R.id.recyclerPlaylists)
             assertTrue("音乐库列表未显示", list.visibility == View.VISIBLE)
         }
