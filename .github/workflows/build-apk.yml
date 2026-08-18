@@ -113,9 +113,11 @@ jobs:
       - name: Run instrumented UI tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          # API 34 + google_apis：CI 上比 API 30 AOSP 镜像启动稳定（30 曾卡死在 boot 拿不到属性）
-          api-level: 34
-          target: google_apis
+          # 无硬件加速环境（Linux runner）只能用最轻镜像：API 26 = minSdk，
+          # 软件模拟也能在超时前 boot；API 30/34 大镜像在无加速下 boot 超时（已验证两次）
+          api-level: 26
+          target: default
           arch: x86_64
+          emulator-boot-timeout: 900
           disable-animations: true
           script: gradle connectedDebugAndroidTest
