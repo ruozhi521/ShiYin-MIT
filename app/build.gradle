@@ -78,4 +78,6 @@ dependencies {
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
     androidTestImplementation 'androidx.test:runner:1.5.2'
     androidTestImplementation 'androidx.test:rules:1.5.0'
+    // UiAutomator：跨窗口查对话框内容，不依赖窗口焦点（headless 模拟器上 Espresso onView 会因无焦点超时）
+    androidTestImplementation 'androidx.test.uiautomator:uiautomator:2.2.0'
 }
