@@ -78,6 +78,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var recyclerArtists: RecyclerView
     private lateinit var treeAdapter: FolderTreeAdapter
     private lateinit var gridAdapter: PlaylistGridAdapter
+    private lateinit var btnSeekBack: TextView
+    private lateinit var btnSpeed: TextView
+    private lateinit var btnSeekForward: TextView
     private lateinit var artistAdapter: ArtistAdapter
     private var artistGroups: List<Pair<String, List<Song>>> = emptyList()
     private var artistLoaded = false
@@ -228,6 +231,8 @@ class MainActivity : AppCompatActivity() {
             translating = false
             btnTranslate.isEnabled = true
             btnTranslate.text = getString(R.string.translate)
+            // 切歌后倍速按钮回到 1x（Service 已重置播放速度）
+            btnSpeed.text = "1x"
             val cachedTrans = song?.let { translationCache[it.uri.toString()] } ?: emptyMap()
             lyricAdapter.setTranslations(cachedTrans)
             maybeAutoTranslate(song, lines)
@@ -593,6 +598,14 @@ class MainActivity : AppCompatActivity() {
         findViewById<ImageButton>(R.id.btnTimer).setOnClickListener {
             showSleepDialog()
         }
+        // ---- 快进退 / 倍速（1.25）----
+        btnSeekBack = findViewById(R.id.btnSeekBack)
+        btnSpeed = findViewById(R.id.btnSpeed)
+        btnSeekForward = findViewById(R.id.btnSeekForward)
+        btnSeekBack.setOnClickListener { seekRelative(-seekStepSeconds() * 1000) }
+        btnSeekForward.setOnClickListener { seekRelative(seekStepSeconds() * 1000) }
+        btnSpeed.setOnClickListener { cycleSpeed() }
+        updateSeekButtons()
         btnPlayPlayer.setOnClickListener {
             playbackService?.togglePlay()
         }
@@ -1557,6 +1570,8 @@ class MainActivity : AppCompatActivity() {
         chkMixAudio.isChecked = prefs.getBoolean(KEY_MIX_AUDIO, false)
         val rgLibLayout = view.findViewById<RadioGroup>(R.id.rgLibLayout)
         checkByTag(rgLibLayout, if (prefs.getString(KEY_LIB_LAYOUT, "grid") == "tree") 1 else 0)
+        val rgSeekStep = view.findViewById<RadioGroup>(R.id.rgSeekStep)
+        checkByTag(rgSeekStep, prefs.getInt(KEY_SEEK_STEP, 10))
         val chkAlarmPlay = view.findViewById<CheckBox>(R.id.chkAlarmPlay)
         chkAlarmPlay.isChecked = prefs.getBoolean(KEY_ALARM_ON, false)
         chkAlarmPlay.setOnClickListener { showAlarmPicker(chkAlarmPlay) }
@@ -1614,9 +1629,11 @@ class MainActivity : AppCompatActivity() {
                     .putBoolean(KEY_DESKTOP_LOCKED, chkLyricsLocked.isChecked)
                     .putBoolean(KEY_MIX_AUDIO, chkMixAudio.isChecked)
                     .putString(KEY_LIB_LAYOUT, if (tagOf(rgLibLayout) == 1) "tree" else "grid")
+                    .putInt(KEY_SEEK_STEP, tagOf(rgSeekStep))
                     .apply()
                 applyAppearance()
                 applyLibLayout()
+                updateSeekButtons()
                 playbackService?.refreshDesktopLyricsStyle()
             }
             .setNegativeButton(R.string.cancel, null)
@@ -2425,6 +2442,34 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    // ---------- 快进退 / 倍速（1.25）----------
+
+    private fun seekStepSeconds(): Int = prefs.getInt(KEY_SEEK_STEP, 10)
+
+    /** 相对当前进度快进/快退 N 秒（播放页按钮）。 */
+    private fun seekRelative(deltaMs: Int) {
+        val svc = playbackService ?: return
+        val pos = svc.currentPosition()
+        val dur = svc.currentDuration()
+        svc.seekTo((pos + deltaMs).coerceIn(0, if (dur > 0) dur else Int.MAX_VALUE))
+    }
+
+    /** 倍速循环：1x → 1.5x → 2x → 3x → 4x → 1x。 */
+    private fun cycleSpeed() {
+        val cur = playbackService?.currentSpeed() ?: 1f
+        val next = SPEED_LIST.firstOrNull { it > cur + 0.01f } ?: SPEED_LIST[0]
+        playbackService?.setSpeed(next)
+        btnSpeed.text = if (next == 1f) "1x" else "${next}x"
+    }
+
+    /** 刷新快进退按钮文本（跟随设置里的秒数）。 */
+    private fun updateSeekButtons() {
+        val s = seekStepSeconds()
+        btnSeekBack.text = "-${s}s"
+        btnSeekForward.text = "+${s}s"
+        btnSpeed.text = "1x"
+    }
+
     /** 音乐库歌单展示布局：网格大图标（默认）/ 树形目录，切换时重挂 adapter 并刷新数据。 */
     private fun applyLibLayout() {
         val mode = prefs.getString(KEY_LIB_LAYOUT, "grid")
@@ -2537,6 +2582,8 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_DESKTOP_LOCKED = "desktop_lyrics_locked"
         private const val KEY_MIX_AUDIO = "mix_audio"
         private const val KEY_LIB_LAYOUT = "lib_layout"
+        private const val KEY_SEEK_STEP = "seek_step"
+        private val SPEED_LIST = floatArrayOf(1f, 1.5f, 2f, 3f, 4f)
         private const val KEY_ALARM_ON = "alarm_play_on"
         private const val KEY_ALARM_HOUR = "alarm_play_hour"
         private const val KEY_ALARM_MINUTE = "alarm_play_minute"

@@ -77,6 +77,7 @@ class MediaPlaybackService : Service() {
     var onVideoSizeChanged: ((Int, Int) -> Unit)? = null
     private var isPrepared = false
     private var durationMs = 0
+    private var speed = 1f
 
     private var songs: List<Song> = emptyList()
     private var index = -1
@@ -301,16 +302,19 @@ class MediaPlaybackService : Service() {
         }
     }
 
-    /** 视频页：播放速度（长按 2x 用；1f 恢复正常）。 */
+    /** 播放速度（倍速用；1f 正常）。切歌/换播放器时重置为 1f。 */
     fun setSpeed(speed: Float) {
+        this.speed = speed
         val mp = mediaPlayer ?: return
         try {
-            if (speed >= 1f) {
+            if (speed >= 0.5f && speed <= 16f) {
                 mp.playbackParams = android.media.PlaybackParams().setSpeed(speed)
             }
         } catch (e: Exception) {
         }
     }
+
+    fun currentSpeed(): Float = speed
 
     fun currentPosition(): Int = try {
         mediaPlayer?.currentPosition ?: 0
@@ -437,6 +441,7 @@ class MediaPlaybackService : Service() {
     private fun playCurrent() {
         val song = currentSong() ?: return
         releasePlayer()
+        speed = 1f // 切歌/换播放器后倍速重置
 
         loadLyric(song)
         lyriconBridge.syncSong(song, lyricLines, lyricTrans, 0)

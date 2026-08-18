@@ -22,8 +22,9 @@ android {
         applicationId "com.example.subtitleplayer"
         minSdk 26
         targetSdk 34
-        versionCode 13
-        versionName "1.24"
+        versionCode 14
+        versionName "1.25"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -71,4 +72,10 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
     // Robolectric：JVM 里模拟 Android 框架（Uri/ContentResolver 等），测 findLyric/ID3 解析
     testImplementation 'org.robolectric:robolectric:4.11.1'
+
+    // 仪器化 UI 测试（GitHub Actions 模拟器跑：connectedDebugAndroidTest）
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+    androidTestImplementation 'androidx.test:runner:1.5.2'
+    androidTestImplementation 'androidx.test:rules:1.5.0'
 }

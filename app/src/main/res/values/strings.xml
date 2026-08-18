@@ -100,7 +100,7 @@
     <string name="auto_trans_confirm_msg">开启后，播放外语歌曲时会自动翻译歌词。\n\n· 只翻译非中文歌词（含中文占比高的歌曲不会触发）\n· 每首歌只翻译一遍，结果本地缓存，不会重复扣费\n\n翻译使用「翻译设置」中配置的 API。</string>
     <string name="auto_trans_ok">已开启自动翻译：仅翻译非中文歌词，每首歌只翻一遍</string>
     <string name="enable">开启</string>
-    <string name="about_version">版本 1.24</string>
+    <string name="about_version">版本 1.25</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>
@@ -172,4 +172,5 @@
     <string name="lib_layout">音乐库布局</string>
     <string name="lib_grid">网格（大图标）</string>
     <string name="lib_tree">树形目录</string>
+    <string name="seek_step_label">快进退时长</string>
 </resources>
