@@ -1,14 +1,14 @@
 package com.example.subtitleplayer
 
+import android.app.Activity
+import android.app.AlertDialog
 import android.view.View
 import android.view.ViewGroup
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.platform.app.InstrumentationRegistry
-import androidx.test.uiautomator.By
-import androidx.test.uiautomator.UiDevice
-import androidx.test.uiautomator.Until
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -17,27 +17,25 @@ import org.junit.runner.RunWith
 /**
  * 冒烟 UI 测试（GitHub Actions 模拟器跑 connectedDebugAndroidTest）。
  *
- * 注意：headless 模拟器窗口无焦点，Espresso onView 交互（点击）会 RootViewWithoutFocusException。
- * 因此交互统一走两种不依赖窗口焦点的方式：
- *  - onActivity 内直接 performClick()（绕开 focus/idle）
- *  - UiAutomator 查跨窗口的对话框内容（accessibility 树）
+ * headless 模拟器窗口无焦点：Espresso onView 交互（点击）报 RootViewWithoutFocusException，
+ * UiAutomator 跨窗口查 dialog 也不可靠。因此交互统一走 onActivity 内 performClick() +
+ * Activity 成员引用（settingsDialog）同步断言，完全不依赖窗口焦点。
  *
- * 覆盖：启动、底部导航切页、设置对话框、音乐库布局切换、1.25 新控件存在性。
+ * 覆盖：启动、底部导航切页、设置对话框（布局切换/快进退时长）、1.25 新控件存在性。
  * 媒体播放/SAF/通知/闹钟/桌面歌词等系统级场景模拟器覆盖不到，靠真机回归。
  */
 @RunWith(AndroidJUnit4::class)
 class SmokeTest {
 
-    private val device: UiDevice =
-        UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
-
-    private fun launch(block: (android.app.Activity) -> Unit) {
+    private fun launch(block: (Activity) -> Unit) {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.onActivity { block(it) }
         }
     }
 
-    /** 遍历 view tree 找指定文本的 TextView/Button 并点击（导航 tab 是动态构建无 id）。 */
+    private fun main(activity: Activity): MainActivity = activity as MainActivity
+
+    /** 遍历 view tree 找指定文本的 TextView/Button 并点击（导航 tab 动态构建无 id）。 */
     private fun clickByText(root: View, text: String): Boolean {
         if (root is TextView && root.text?.toString() == text) {
             root.performClick()
@@ -74,11 +72,12 @@ class SmokeTest {
     fun 设置对话框打开并可切换树形布局() {
         launch { activity ->
             activity.findViewById<View>(R.id.btnSettings).performClick()
+            val dlg = main(activity).settingsDialog
+            assertNotNull("设置对话框未打开", dlg)
+            assertTrue("对话框未显示", dlg!!.isShowing)
+            dlg.findViewById<RadioButton>(R.id.rbLibTree)?.performClick()
+            dlg.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
         }
-        // UiAutomator 跨窗口断言对话框内容
-        assertTrue("设置对话框未打开", device.wait(Until.hasObject(By.text("快进退时长")), 5000))
-        device.findObject(By.text("树形目录")).click()
-        device.findObject(By.text("确定")).click()
     }
 
     @Test
@@ -94,10 +93,17 @@ class SmokeTest {
     fun 设置对话框快进退时长选项存在() {
         launch { activity ->
             activity.findViewById<View>(R.id.btnSettings).performClick()
+            val dlg = main(activity).settingsDialog
+            assertNotNull("设置对话框未打开", dlg)
+            val rg = dlg!!.findViewById<RadioGroup>(R.id.rgSeekStep)
+            assertNotNull("快进退时长选项缺失", rg)
+            // 点 30s 选项（tag=30），不崩溃即通过
+            for (i in 0 until rg.childCount) {
+                if (rg.getChildAt(i).tag?.toString() == "30") {
+                    (rg.getChildAt(i) as RadioButton).performClick()
+                }
+            }
+            dlg.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
         }
-        assertTrue("设置对话框未打开", device.wait(Until.hasObject(By.text("快进退时长")), 5000))
-        // 点 30s 选项并确定，不崩溃即通过
-        device.findObject(By.text("30s")).click()
-        device.findObject(By.text("确定")).click()
     }
 }

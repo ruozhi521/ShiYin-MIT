@@ -81,6 +81,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSeekBack: TextView
     private lateinit var btnSpeed: TextView
     private lateinit var btnSeekForward: TextView
+    /** 设置对话框引用（供 UI 测试同步断言；正常流程不依赖）。 */
+    internal var settingsDialog: AlertDialog? = null
     private lateinit var artistAdapter: ArtistAdapter
     private var artistGroups: List<Pair<String, List<Song>>> = emptyList()
     private var artistLoaded = false
@@ -1614,7 +1616,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val dialog = AlertDialog.Builder(this)
+        settingsDialog = AlertDialog.Builder(this)
             .setTitle(R.string.settings)
             .setView(view)
             .setPositiveButton(R.string.ok) { _, _ ->
@@ -1638,10 +1640,10 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.cancel, null)
             .create()
-        dialog.show()
+        settingsDialog?.show()
 
         view.findViewById<Button>(R.id.btnRescanNow).setOnClickListener {
-            dialog.dismiss()
+            settingsDialog?.dismiss()
             val uri = treeUri()
             if (uri == null) {
                 treePicker.launch(null)
@@ -1650,23 +1652,23 @@ class MainActivity : AppCompatActivity() {
             }
         }
         view.findViewById<Button>(R.id.btnChangeFolder).setOnClickListener {
-            dialog.dismiss()
+            settingsDialog?.dismiss()
             treePicker.launch(null)
         }
         view.findViewById<Button>(R.id.btnAbout).setOnClickListener {
-            dialog.dismiss()
+            settingsDialog?.dismiss()
             showAboutDialog()
         }
         view.findViewById<Button>(R.id.btnTransSettings).setOnClickListener {
-            dialog.dismiss()
+            settingsDialog?.dismiss()
             showTransSettingsDialog()
         }
         view.findViewById<Button>(R.id.btnEqSettings).setOnClickListener {
-            dialog.dismiss()
+            settingsDialog?.dismiss()
             showEqualizerDialog()
         }
         view.findViewById<Button>(R.id.btnTheme).setOnClickListener {
-            dialog.dismiss()
+            settingsDialog?.dismiss()
             showThemeDialog()
         }
     }
