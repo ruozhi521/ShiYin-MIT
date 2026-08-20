@@ -173,4 +173,6 @@
     <string name="lib_grid">网格（大图标）</string>
     <string name="lib_tree">树形目录</string>
     <string name="seek_step_label">快进退时长</string>
+    <string name="per_song_label">记住每首歌的播放进度</string>
+    <string name="per_song_hint">开启后切走再切回，从上次位置继续（占用更多存储，建议歌曲多时关闭）</string>
 </resources>

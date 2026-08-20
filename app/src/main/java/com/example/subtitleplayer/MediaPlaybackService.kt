@@ -54,6 +54,7 @@ class MediaPlaybackService : Service() {
         const val ACTION_ALARM_PLAY = "com.example.subtitleplayer.ALARM_PLAY"
         const val KEY_LAST_URI = "last_uri"
         const val KEY_LAST_POS = "last_pos"
+        const val KEY_PER_SONG = "per_song_pos"
         const val KEY_DESKTOP_ON = "desktop_lyrics_on"
         const val KEY_MIX_AUDIO = "mix_audio"
         const val KEY_PLAY_MODE = "play_mode"
@@ -80,6 +81,9 @@ class MediaPlaybackService : Service() {
     private var speed = 1f
     /** 连续播放失败计数（onError 自动切歌防死循环）。 */
     private var playErrorStreak = 0
+    /** 每首歌独立进度记忆（默认关，设置开）。uri -> positionMs。 */
+    private val perSongPositions = HashMap<String, Int>()
+    private var perSongLoaded = false
 
     private var songs: List<Song> = emptyList()
     private var index = -1
@@ -405,6 +409,54 @@ class MediaPlaybackService : Service() {
             .putString(KEY_LAST_URI, song.uri.toString())
             .putInt(KEY_LAST_POS, mp.currentPosition)
             .apply()
+        // 每首歌独立进度（设置开启时）：记录 + 持久化
+        if (perSongEnabled()) {
+            loadPerSongPositions()
+            perSongPositions[song.uri.toString()] = mp.currentPosition
+            persistPerSongPositions()
+        }
+    }
+
+    // ---------- 每首歌独立进度记忆（默认关闭，设置开启）----------
+
+    private fun perSongEnabled(): Boolean =
+        getSharedPreferences("player", Context.MODE_PRIVATE).getBoolean(KEY_PER_SONG, false)
+
+    private fun perSongFile(): File = File(filesDir, "per_song_pos.json")
+
+    private fun loadPerSongPositions() {
+        if (perSongLoaded) return
+        perSongLoaded = true
+        if (!perSongEnabled()) return
+        try {
+            val f = perSongFile()
+            if (f.exists() && f.length() > 0) {
+                val jo = org.json.JSONObject(f.readText())
+                val it = jo.keys()
+                while (it.hasNext()) {
+                    val k = it.next()
+                    perSongPositions[k] = jo.optInt(k, 0)
+                }
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun persistPerSongPositions() {
+        if (!perSongEnabled()) return
+        try {
+            val jo = org.json.JSONObject()
+            for ((k, v) in perSongPositions) jo.put(k, v)
+            perSongFile().writeText(jo.toString())
+        } catch (e: Exception) {
+        }
+    }
+
+    /** 该歌的记忆进度（未开启/无记录返回 0）。 */
+    private fun perSongPos(song: Song?): Int {
+        if (song == null || !perSongEnabled()) return 0
+        loadPerSongPositions()
+        return perSongPositions[song.uri.toString()] ?: 0
     }
 
     /** 定时关闭：minutes 分钟后自动暂停；minutes <= 0 表示取消。 */
@@ -469,8 +521,15 @@ class MediaPlaybackService : Service() {
                 // fMP4（m4s）duration 可能为 -1/0，兜底为 0（界面显示未知时长）
                 durationMs = player.duration.coerceAtLeast(0)
                 lyriconBridge.syncSong(currentSong(), lyricLines, lyricTrans, durationMs)
-                val resume = pendingResumeMs
+                var resume = pendingResumeMs
                 pendingResumeMs = 0
+                // 每首歌独立进度：调用方没指定位置时，用该歌自己的记录（接近结尾不恢复）
+                if (resume <= 0) {
+                    val saved = perSongPos(currentSong())
+                    if (saved > 0 && durationMs > 5000 && saved < durationMs - 5000) {
+                        resume = saved
+                    }
+                }
                 if (resume > 0 && resume < durationMs) {
                     player.seekTo(resume)
                     if (forcePlayAfterSeek) {
@@ -494,6 +553,12 @@ class MediaPlaybackService : Service() {
                 }
             }
             mp.setOnCompletionListener {
+                // 听完了：清除该歌的独立进度记录（下次从头播）
+                if (perSongEnabled()) {
+                    loadPerSongPositions()
+                    currentSong()?.let { perSongPositions.remove(it.uri.toString()) }
+                    persistPerSongPositions()
+                }
                 // 播放完成：按播放模式决定下一首（单曲循环重播当前）
                 when (getPlayMode()) {
                     MODE_REPEAT_ONE -> {

@@ -200,6 +200,23 @@
             android:textColor="@color/text_hint"
             android:textSize="12sp" />
 
+        <CheckBox
+            android:id="@+id/chkPerSong"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/per_song_label"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="30dp"
+            android:text="@string/per_song_hint"
+            android:textColor="@color/text_hint"
+            android:textSize="12sp" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
