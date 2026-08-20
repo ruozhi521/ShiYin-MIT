@@ -2,9 +2,12 @@ package com.example.subtitleplayer
 
 import android.content.ContentResolver
 import android.content.Context
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.DocumentsContract
+import org.json.JSONObject
 import java.util.Locale
 
 /**
@@ -19,7 +22,7 @@ class LibraryScanner(
 
     private val audioExts = setOf(
         "mp3", "m4a", "wav", "flac", "aac", "ogg", "opus", "amr", "wma", "mid", "midi",
-        "mp4", "m4v"
+        "mp4", "m4v", "m4s"
     )
     private val lyricExts = setOf("lrc", "vtt", "txt", "srt")
 
@@ -57,6 +60,10 @@ class LibraryScanner(
         )
         val subDirs = mutableListOf<Pair<String, String>>()
         val songsHere = mutableListOf<Song>()
+        // b 站缓存目录的 entry.json 标题（m4s 文件名是数字，用视频标题代替）
+        var dirEntryTitle: String? = null
+        // m4s 先收集后统一处理（视频流/音频流去重，见循环后逻辑）
+        val m4sCandidates = mutableListOf<Triple<Uri, String, String>>() // uri, name, folder
         try {
             resolver.query(childrenUri, projection, null, null, null)?.use { c ->
                 while (c.moveToNext()) {
@@ -67,21 +74,31 @@ class LibraryScanner(
                         mime == DocumentsContract.Document.MIME_TYPE_DIR -> {
                             subDirs.add(id to name)
                         }
+                        name.equals("entry.json", true) -> {
+                            // b 站缓存视频信息：{"title": "...", "page_data": {"part": "分P"}}
+                            dirEntryTitle = readJsonTitle(
+                                DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
+                            )
+                        }
                         isAudio(mime, name) -> {
                             val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
-                            val (tagTitle, tagArtist) = readTags(uri)
-                            // folderPath 为相对根目录完整路径（同名子文件夹不再合并）
                             val folder = folderPath ?: DEFAULT_FOLDER
-                            songsHere.add(
-                                Song(
-                                    title = tagTitle?.takeIf { it.isNotBlank() } ?: stemOf(name),
-                                    uri = uri,
-                                    folder = folder,
-                                    artist = tagArtist?.takeIf { it.isNotBlank() }
-                                        ?: folder.substringAfterLast('/'),
-                                    fileStem = stemOf(name)
+                            if (extOf(name) == "m4s") {
+                                m4sCandidates.add(Triple(uri, name, folder))
+                            } else {
+                                val (tagTitle, tagArtist) = readTags(uri)
+                                // folderPath 为相对根目录完整路径（同名子文件夹不再合并）
+                                songsHere.add(
+                                    Song(
+                                        title = tagTitle?.takeIf { it.isNotBlank() } ?: stemOf(name),
+                                        uri = uri,
+                                        folder = folder,
+                                        artist = tagArtist?.takeIf { it.isNotBlank() }
+                                            ?: folder.substringAfterLast('/'),
+                                        fileStem = stemOf(name)
+                                    )
                                 )
-                            )
+                            }
                         }
                         isLyric(name) -> {
                             val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
@@ -99,6 +116,33 @@ class LibraryScanner(
             }
         } catch (e: Exception) {
             // 单个文件夹读取失败不影响整体
+        }
+
+        // m4s 去重收录：b 站缓存 video.m4s 含视频+音频轨、audio.m4s 纯音频——
+        // 有视频轨的优先（进歌单+可进视频页），只有音频轨的仅当本目录无视频 m4s 时兜底收录
+        val videoM4s = m4sCandidates.filter { hasVideoTrack(it.first) }
+        val pickedM4s =
+            if (videoM4s.isNotEmpty()) videoM4s
+            else m4sCandidates.filter { hasAudioTrack(it.first) }
+        for ((uri, name, folder) in pickedM4s) {
+            val (tagTitle, tagArtist) = readTags(uri)
+            songsHere.add(
+                Song(
+                    title = tagTitle?.takeIf { it.isNotBlank() } ?: stemOf(name),
+                    uri = uri,
+                    folder = folder,
+                    artist = tagArtist?.takeIf { it.isNotBlank() }
+                        ?: folder.substringAfterLast('/'),
+                    fileStem = stemOf(name)
+                )
+            )
+        }
+
+        // b 站缓存：纯数字文件名的 m4s 用 entry.json 的视频标题
+        if (!dirEntryTitle.isNullOrBlank() && songsHere.isNotEmpty()) {
+            songsHere.replaceAll { s ->
+                if (s.title.matches(Regex("\\d+"))) s.copy(title = dirEntryTitle) else s
+            }
         }
 
         if (songsHere.isNotEmpty()) {
@@ -129,6 +173,59 @@ class LibraryScanner(
             title to artist
         } catch (e: Exception) {
             null to null
+        }
+    }
+
+    /** 读 b 站缓存 entry.json 的视频标题（title 或 page_data.part）。 */
+    private fun readJsonTitle(uri: Uri): String? {
+        return try {
+            val text = resolver.openInputStream(uri)
+                ?.use { it.readBytes() }?.toString(Charsets.UTF_8) ?: return null
+            val jo = JSONObject(text)
+            jo.optString("title").takeIf { it.isNotBlank() }
+                ?: jo.optJSONObject("page_data")?.optString("part")?.takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** m4s 是否有音频轨道（b 站缓存同时有视频流/音频流两个 m4s，视频流要跳过）。读取失败保守返回 true。 */
+    private fun hasAudioTrack(uri: Uri): Boolean {
+        return try {
+            val ex = MediaExtractor()
+            ex.setDataSource(context, uri, null)
+            var has = false
+            for (i in 0 until ex.trackCount) {
+                val fmt = ex.getTrackFormat(i)
+                if (fmt.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true) {
+                    has = true
+                    break
+                }
+            }
+            ex.release()
+            has
+        } catch (e: Exception) {
+            true
+        }
+    }
+
+    /** m4s 是否有视频轨道（b 站 video.m4s 含视频轨，可进视频页播放）。 */
+    private fun hasVideoTrack(uri: Uri): Boolean {
+        return try {
+            val ex = MediaExtractor()
+            ex.setDataSource(context, uri, null)
+            var has = false
+            for (i in 0 until ex.trackCount) {
+                val fmt = ex.getTrackFormat(i)
+                if (fmt.getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true) {
+                    has = true
+                    break
+                }
+            }
+            ex.release()
+            has
+        } catch (e: Exception) {
+            false
         }
     }
 

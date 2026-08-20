@@ -2135,7 +2135,29 @@ class MainActivity : AppCompatActivity() {
     // ---------- 视频播放页 ----------
     private fun isVideoFile(uri: android.net.Uri?): Boolean {
         val p = uri?.lastPathSegment?.lowercase(Locale.getDefault()) ?: return false
-        return p.endsWith(".mp4") || p.endsWith(".m4v")
+        if (p.endsWith(".mp4") || p.endsWith(".m4v")) return true
+        // b 站缓存视频流 m4s（fMP4 含视频轨）也可进视频页；纯音频 m4s 不显示视频按钮
+        if (p.endsWith(".m4s")) return hasVideoTrack(uri)
+        return false
+    }
+
+    private fun hasVideoTrack(uri: android.net.Uri): Boolean {
+        return try {
+            val ex = android.media.MediaExtractor()
+            ex.setDataSource(this, uri, null)
+            var has = false
+            for (i in 0 until ex.trackCount) {
+                val mime = ex.getTrackFormat(i).getString(android.media.MediaFormat.KEY_MIME)
+                if (mime?.startsWith("video/") == true) {
+                    has = true
+                    break
+                }
+            }
+            ex.release()
+            has
+        } catch (e: Exception) {
+            false
+        }
     }
 
     /** 打开视频页：方向跟随视频真实比例（横屏视频横屏、竖屏视频竖屏），绑定画面。 */
