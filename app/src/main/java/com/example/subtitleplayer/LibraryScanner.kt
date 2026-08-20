@@ -118,11 +118,15 @@ class LibraryScanner(
             // 单个文件夹读取失败不影响整体
         }
 
-        // m4s 去重收录：b 站缓存 video.m4s 含视频+音频轨、audio.m4s 纯音频——
-        // 有视频轨的优先（进歌单+可进视频页），只有音频轨的仅当本目录无视频 m4s 时兜底收录
-        val videoM4s = m4sCandidates.filter { hasVideoTrack(it.first) }
+        // m4s 收录（b 站 DASH 音视频分离）：
+        // 1. 优先纯音频 m4s（audio.m4s，播放最稳、能出声）
+        // 2. 其次含音频轨的 m4s（video.m4s 若含双轨）
+        // 3. 纯视频 m4s（无音频轨）跳过——无声且无时长，收进来只有坏体验
+        val audioOnlyM4s = m4sCandidates.filter {
+            hasAudioTrack(it.first) && !hasVideoTrack(it.first)
+        }
         val pickedM4s =
-            if (videoM4s.isNotEmpty()) videoM4s
+            if (audioOnlyM4s.isNotEmpty()) audioOnlyM4s
             else m4sCandidates.filter { hasAudioTrack(it.first) }
         for ((uri, name, folder) in pickedM4s) {
             val (tagTitle, tagArtist) = readTags(uri)

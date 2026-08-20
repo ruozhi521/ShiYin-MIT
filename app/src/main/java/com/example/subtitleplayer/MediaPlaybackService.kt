@@ -78,6 +78,8 @@ class MediaPlaybackService : Service() {
     private var isPrepared = false
     private var durationMs = 0
     private var speed = 1f
+    /** 连续播放失败计数（onError 自动切歌防死循环）。 */
+    private var playErrorStreak = 0
 
     private var songs: List<Song> = emptyList()
     private var index = -1
@@ -463,7 +465,9 @@ class MediaPlaybackService : Service() {
             mp.setWakeMode(this, PowerManager.PARTIAL_WAKE_LOCK)
             mp.setOnPreparedListener { player ->
                 isPrepared = true
-                durationMs = player.duration
+                playErrorStreak = 0 // 播放成功：重置连续失败计数
+                // fMP4（m4s）duration 可能为 -1/0，兜底为 0（界面显示未知时长）
+                durationMs = player.duration.coerceAtLeast(0)
                 lyriconBridge.syncSong(currentSong(), lyricLines, lyricTrans, durationMs)
                 val resume = pendingResumeMs
                 pendingResumeMs = 0
@@ -514,7 +518,16 @@ class MediaPlaybackService : Service() {
                 }
             }
             mp.setOnErrorListener { _, what, extra ->
-                listener?.onSongChanged(null, emptyList(), null)
+                playErrorStreak++
+                android.util.Log.w("ShiYinPlay", "onError what=$what extra=$extra streak=$playErrorStreak")
+                // 播放失败（fMP4 无 moov 等异常文件）：自动切下一首，避免卡死在无声文件；
+                // 连续失败超过歌曲数（整轮全坏）或单曲列表才清空，防死循环。
+                if (songs.size > 1 && playErrorStreak < songs.size) {
+                    playNext()
+                } else {
+                    playErrorStreak = 0
+                    listener?.onSongChanged(null, emptyList(), null)
+                }
                 true
             }
             mp.prepareAsync()

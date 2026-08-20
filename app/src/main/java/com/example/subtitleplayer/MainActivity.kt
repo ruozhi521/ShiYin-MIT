@@ -2558,7 +2558,8 @@ class MainActivity : AppCompatActivity() {
     private fun updateTime(pos: Int) {
         txtTime.text = String.format(
             Locale.getDefault(), "%s / %s",
-            formatTime(pos), formatTime(durationMs)
+            formatTime(pos),
+            if (durationMs > 0) formatTime(durationMs) else "--:--"
         )
     }
 
