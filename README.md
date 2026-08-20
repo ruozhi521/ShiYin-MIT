@@ -44,14 +44,17 @@
 
 - 📁 **文件夹即歌单**：指定一个大文件夹，子文件夹自动归类成歌单
 - 💿 **播放页**：CD 旋转动画封面 + 当前歌词行；「列表」按钮随时查看/切换当前歌单全部歌曲
+- ⏪ **快进 / 快退 / 倍速**：播放页 -N 秒 / +N 秒按钮（时长 1~30 秒可设），倍速 1x→1.5x→2x→3x→4x 循环，切歌自动复位
 - 🏠 **发现页**：随机推荐大封面卡片，一键「换一批」
 - 🎵 **歌手自动分类**：按音频元数据读取歌手分组浏览
 - 🔔 **稳定后台播放**：通知栏/锁屏控制、来电自动暂停
 - ⏯️ **断点续播**：大退重开恢复到上次进度
+- 📌 **每首歌进度记忆**（可选开关）：切走再切回，从上次位置继续；听完了自动清零
+- 🎬 **b 站缓存 m4s 直放**：无需转格式，自动识别视频标题、过滤无声视频流
 - 🎨 **深色 / 浅色双主题**，歌词字号、界面字号、歌词字体可调
 - 🔍 **歌单 / 单曲实时搜索**
 - 🖼️ **内嵌封面显示**：播放页 CD、歌单、歌曲列表全覆盖
-- ⏺️ 支持超长音频，MP3 / M4A / WAV / FLAC / AAC / OGG 等常见格式
+- ⏺️ 支持超长音频，MP3 / M4A / WAV / FLAC / AAC / OGG / M4S 等常见格式
 - 🔒 **完全本地**：除你主动开启的歌词翻译外，不联网、无广告、无账号、不收集任何数据
 
 ## 📲 安装
@@ -78,7 +81,14 @@ gradle assembleDebug
 
 ### 🔑 稳定签名（重要：覆盖安装不丢数据）
 
-之后每次构建都会用同一签名；**唯一一次例外**：从旧签名换到新签名的这次更新，仍需先卸载旧版（旧数据会丢，之后不再需要）
+默认 debug 构建每次云端编译会用**临时签名**，导致手机要求"删除旧版"再安装（数据会丢）。配置一次固定签名后，以后更新都是**覆盖安装、数据保留**：
+
+1. 仓库 Actions 页 → 手动运行 workflow → 勾选 **Generate a stable debug keystore** → 运行
+2. 下载产物 `debug-keystore-b64` 里的 `keystore.b64`，打开复制全部内容
+3. 仓库 Settings → Secrets and variables → Actions → New repository secret：
+   - Name：`DEBUG_KEYSTORE_B64`
+   - Value：粘贴刚才的内容
+4. 之后每次构建都会用同一签名；**唯一一次例外**：从旧签名换到新签名的这次更新，仍需先卸载旧版（旧数据会丢，之后不再需要）
 
 ## 🧱 技术栈
 
@@ -97,8 +107,11 @@ app/src/main/java/com/example/subtitleplayer/
 ├── SubtitleLine.kt        歌词行数据
 ├── LyricTranslator.kt     歌词 AI 翻译（OpenAI 兼容接口，分批逐行）
 ├── LyricTranslationCache.kt  译文本地缓存
-├── LibraryScanner.kt      文件夹扫描（歌单归类、歌词匹配）
+├── LibraryScanner.kt      文件夹扫描（歌单归类、歌词匹配、m4s 音视频流区分）
 ├── LibraryCache.kt        扫描结果本地缓存（启动秒开）
+├── LibraryTree.kt         文件夹树构建（树形目录模式）
+├── FolderTreeAdapter.kt   树形目录适配器
+├── UiUtils.kt             通用 UI 工具（toast / 时间格式化等）
 ├── ArtistLoader.kt        歌手元数据读取与持久化
 ├── CoverLoader.kt         内嵌封面读取（线程池 + 缓存）
 ├── Id3LyricsParser.kt     MP3 内嵌歌词读取（USLT / SYLT）
