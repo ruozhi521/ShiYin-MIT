@@ -528,10 +528,12 @@ class MediaPlaybackService : Service() {
                 var resume = pendingResumeMs
                 pendingResumeMs = 0
                 // 每首歌独立进度：调用方没指定位置时，用该歌自己的记录（接近结尾不恢复）
+                var fromPerSong = false
                 if (resume <= 0) {
                     val saved = perSongPos(currentSong())
                     if (saved > 0 && durationMs > 5000 && saved < durationMs - 5000) {
                         resume = saved
+                        fromPerSong = true
                     }
                 }
                 if (resume > 0 && resume < durationMs) {
@@ -539,6 +541,10 @@ class MediaPlaybackService : Service() {
                     if (forcePlayAfterSeek) {
                         // 定时开始播放（闹钟）：恢复进度后直接响，不等用户点播放
                         forcePlayAfterSeek = false
+                        play()
+                    } else if (fromPerSong) {
+                        // 每首歌进度记忆：切回时直接继续播放（不是断点续播的"恢复后暂停"），
+                        // 走 play() 才能重启 progressRunnable 刷新时长/进度 UI
                         play()
                     } else {
                         updateAll(false)
