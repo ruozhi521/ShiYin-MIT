@@ -218,6 +218,7 @@ class MediaPlaybackService : Service() {
         resumeMs: Int = 0,
         forcePlay: Boolean = false
     ) {
+        savePosition() // 切歌单/列表点击前保存当前歌位置
         this.songs = songs
         this.index = index
         this.lyricMap = lyricMap
@@ -234,6 +235,7 @@ class MediaPlaybackService : Service() {
 
     fun playPrev() {
         if (songs.isEmpty()) return
+        savePosition() // 切歌前保存当前歌位置（播放中 9 秒内切换也能记住）
         index = when (getPlayMode()) {
             MODE_SHUFFLE -> randomIndex()
             else -> (index - 1 + songs.size) % songs.size
@@ -243,6 +245,7 @@ class MediaPlaybackService : Service() {
 
     fun playNext() {
         if (songs.isEmpty()) return
+        savePosition() // 切歌前保存当前歌位置（播放中 9 秒内切换也能记住）
         index = when (getPlayMode()) {
             MODE_SHUFFLE -> randomIndex()
             else -> (index + 1) % songs.size
