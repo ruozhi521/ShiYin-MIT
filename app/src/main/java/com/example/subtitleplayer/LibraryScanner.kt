@@ -186,23 +186,25 @@ class LibraryScanner(
 
     /** 读取内嵌标题/艺术家（读文件头，不整读）。失败返回 null，回退文件名/文件夹名。 */
     private fun readTags(uri: Uri): Pair<String?, String?> {
+        // 优先用自己解析的 ID3 帧：严格按帧内 encoding 解码（UTF-16 自动 BOM）。
+        // MediaMetadataRetriever 对部分 UTF-16 标签会解出"部分乱码"（如序号数字地区），
+        // cleanTag 高占比判定可能被正常中文稀释判不出 → 必须先走自解析。
+        val parsed = try { Id3TagReader.read(context, uri) } catch (_: Exception) { null to null }
+        val pTitle = cleanTag(parsed.first)
+        val pArtist = cleanTag(parsed.second)
+        if (pTitle != null || pArtist != null) {
+            return pTitle to pArtist
+        }
+        // 自解析读不到（非 ID3/mp3 用别格式内嵌标签）时，退回 MediaMetadataRetriever
         return try {
             val r = MediaMetadataRetriever()
             r.setDataSource(context, uri)
-            var title = cleanTag(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE))
-            var artist = cleanTag(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST))
+            val title = cleanTag(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE))
+            val artist = cleanTag(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST))
             r.release()
-            // MMR 读不出/读出乱码时，用自己解析 ID3 帧（正确处理 UTF-16 BOM）兜底
-            if (title == null || artist == null) {
-                val (it, ia) = Id3TagReader.read(context, uri)
-                if (title == null) title = cleanTag(it)
-                if (artist == null) artist = cleanTag(ia)
-            }
             title to artist
         } catch (e: Exception) {
-            // MMR 异常时也尝试自解析
-            val fallback = try { Id3TagReader.read(context, uri) } catch (_: Exception) { null to null }
-            fallback.first?.let { cleanTag(it) } to fallback.second?.let { cleanTag(it) }
+            null to null
         }
     }
 
