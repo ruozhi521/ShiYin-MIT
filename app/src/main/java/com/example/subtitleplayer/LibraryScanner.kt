@@ -271,12 +271,17 @@ class LibraryScanner(
             for (st in stems) {
                 lyrics["$folder/${lower(st)}"]?.let { return it }
             }
-            // 全局兜底：跨目录同名歌词有多个时返回 null，避免串行。
-            // 注意同一歌词的双 key（歌名.mp3 + 歌名 指向同一 ref）要先去重，
-            // 否则旧缓存（无路径 key）双注册会误判为多个。
-            val lowerStems = stems.map { lower(it) }
+            // 全局兜底（限同文件夹或旧缓存无路径格式）：只用文件名来源（uri 完整名/fileStem），
+            // 不用 title——粉丝案例：音声 title 带序号前缀（如 "02. 歌名"）会撞到别的文件夹
+            // 同系列文件的歌词 key，导致"毫不相干的歌词"错配。跨文件夹一律不匹配。
+            val nameStems = linkedSetOf<String>()
+            fileNameFromUri(song.uri).takeIf { it.isNotBlank() }?.let { nameStems.add(it) }
+            if (song.fileStem.isNotBlank()) nameStems.add(song.fileStem)
+            val lowerNameStems = nameStems.map { lower(it) }
+            // 同一歌词的双 key（歌名.mp3 + 歌名 指向同一 ref）先去重再计数
             val matches = lyrics.filterKeys { k ->
-                lowerStems.any { st -> k == st || k.endsWith("/$st") }
+                val inFolder = k.startsWith("$folder/") || !k.contains('/')
+                inFolder && lowerNameStems.any { st -> k == st || k.endsWith("/$st") }
             }.values.distinct()
             return if (matches.size == 1) matches.first() else null
         }

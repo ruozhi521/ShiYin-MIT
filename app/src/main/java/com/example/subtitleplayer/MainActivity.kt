@@ -78,9 +78,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var recyclerArtists: RecyclerView
     private lateinit var treeAdapter: FolderTreeAdapter
     private lateinit var gridAdapter: PlaylistGridAdapter
+    /** 树形目录路径栈：从顶层到当前层（空 = 顶层）。 */
+    private val treeStack = mutableListOf<TreeNode>()
+    private var treeRoots: List<TreeNode> = emptyList()
+    private lateinit var txtTreePath: TextView
     private lateinit var btnSeekBack: TextView
     private lateinit var btnSpeed: TextView
     private lateinit var btnSeekForward: TextView
+    /** 任一进度条拖动中（手指按住）：不刷新时间文本、不进入沉浸。 */
+    private var seeking = false
     /** 设置对话框引用（供 UI 测试同步断言；正常流程不依赖）。 */
     internal var settingsDialog: AlertDialog? = null
     private lateinit var artistAdapter: ArtistAdapter
@@ -263,7 +269,9 @@ class MainActivity : AppCompatActivity() {
             if (page == Page.VIDEO) {
                 if (seekVideo.max != duration) seekVideo.max = duration
                 if (!seekVideo.isPressed) seekVideo.progress = position
-                txtVideoTime.text = formatTime(position) + " / " + formatTime(duration)
+                if (!seeking) {
+                    txtVideoTime.text = formatTime(position) + " / " + formatTime(duration)
+                }
             }
             if (!seekBar.isPressed) {
                 seekBar.progress = position
@@ -271,7 +279,10 @@ class MainActivity : AppCompatActivity() {
             if (!miniSeekBar.isPressed) {
                 miniSeekBar.progress = position
             }
-            updateTime(position)
+            // 拖动中不刷新时间文本（保持手指预览位置，onProgressChanged 已设置）
+            if (!seeking) {
+                updateTime(position)
+            }
             updateNowLyric(lyricIndex)
             if (lyricIndex != currentLyricHighlight) {
                 currentLyricHighlight = lyricIndex
@@ -435,9 +446,11 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onStartTrackingTouch(sb: android.widget.SeekBar) {
+                seeking = true
             }
 
             override fun onStopTrackingTouch(sb: android.widget.SeekBar) {
+                seeking = false
                 playbackService?.seekTo(sb.progress)
             }
         })
@@ -498,9 +511,12 @@ class MainActivity : AppCompatActivity() {
             { pos -> playlistList().getOrNull(pos)?.let { showPlaylistCoverMenu(it.name) } }
         )
         treeAdapter = FolderTreeAdapter(
+            { node -> openTreeFolder(node) },
             { pl -> openPlaylist(pl) },
             { pl -> showPlaylistCoverMenu(pl.name) }
         )
+        txtTreePath = findViewById(R.id.txtTreePath)
+        txtTreePath.setOnClickListener { backTree() }
         recyclerPlaylists.layoutManager = GridLayoutManager(this, 2)
         recyclerPlaylists.adapter = gridAdapter
         applyLibLayout()
@@ -639,20 +655,30 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            override fun onStartTrackingTouch(sb: SeekBar) {}
+            override fun onStartTrackingTouch(sb: SeekBar) {
+                seeking = true
+                cancelImmersion() // 按住进度条期间不进入沉浸（否则进度条被隐藏）
+            }
 
             override fun onStopTrackingTouch(sb: SeekBar) {
+                seeking = false
                 playbackService?.seekTo(sb.progress)
+                scheduleImmersion()
             }
         })
 
         miniSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {}
 
-            override fun onStartTrackingTouch(sb: SeekBar) {}
+            override fun onStartTrackingTouch(sb: SeekBar) {
+                seeking = true
+                cancelImmersion()
+            }
 
             override fun onStopTrackingTouch(sb: SeekBar) {
+                seeking = false
                 playbackService?.seekTo(sb.progress)
+                scheduleImmersion()
             }
         })
 
@@ -1076,6 +1102,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onBackPressed() {
+        // 树形目录逐级进入：先返回上一级，不退出
+        if (page == Page.LIBRARY && isTreeMode() && treeStack.isNotEmpty()) {
+            backTree()
+            return
+        }
         when (page) {
             Page.LYRICS -> showPage(Page.PLAYER, -1)
             Page.PLAYER -> backFromPlayer()
@@ -2497,6 +2528,34 @@ class MainActivity : AppCompatActivity() {
         btnSpeed.text = "1x"
     }
 
+    // ---------- 树形目录：逐级进入（1.27）----------
+
+    private fun isTreeMode(): Boolean = prefs.getString(KEY_LIB_LAYOUT, "grid") == "tree"
+
+    /** 点击目录：进入下一级。 */
+    private fun openTreeFolder(node: TreeNode) {
+        treeStack.add(node)
+        refreshTree()
+    }
+
+    /** 面包屑/返回键：回到上一级。 */
+    private fun backTree() {
+        if (treeStack.isNotEmpty()) treeStack.removeLast()
+        refreshTree()
+    }
+
+    /** 渲染当前层节点 + 面包屑路径。 */
+    private fun refreshTree() {
+        val nodes = if (treeStack.isEmpty()) treeRoots else treeStack.last().children
+        treeAdapter.submit(nodes)
+        txtTreePath.text = if (treeStack.isEmpty()) {
+            getString(R.string.root_dir)
+        } else {
+            "‹ " + treeStack.joinToString(" > ") { it.name }
+        }
+        txtTreePath.visibility = if (isTreeMode()) View.VISIBLE else View.GONE
+    }
+
     /** 音乐库歌单展示布局：网格大图标（默认）/ 树形目录，切换时重挂 adapter 并刷新数据。 */
     private fun applyLibLayout() {
         val mode = prefs.getString(KEY_LIB_LAYOUT, "grid")
@@ -2508,7 +2567,9 @@ class MainActivity : AppCompatActivity() {
             if (recyclerPlaylists.adapter !== treeAdapter) {
                 recyclerPlaylists.adapter = treeAdapter
             }
-            treeAdapter.submit(list)
+            treeRoots = LibraryTree.build(list)
+            treeStack.clear()
+            refreshTree()
         } else {
             if (recyclerPlaylists.layoutManager !is GridLayoutManager) {
                 recyclerPlaylists.layoutManager = GridLayoutManager(this, 2)

@@ -141,4 +141,37 @@ class LibraryScannerTest {
         )
         assertNull(LibraryScanner.findLyric(s, lyrics))
     }
+
+    @Test
+    fun `title 带序号前缀时不匹配其他文件夹的同系列歌词`() {
+        // 粉丝案例：音声文件名不带序号、title 带 "02. " 前缀；
+        // 另一个文件夹有 "02. 歌名.vtt"（同系列文件的歌词）——绝不能匹配过来
+        val lyrics = mutableMapOf<String, LyricRef>()
+        register(lyrics, "FolderB", "02. 歌名.vtt")
+        val s = Song(
+            title = "02. 歌名",
+            uri = Uri.parse("content://com.android.externalstorage.documents/document/primary%3AFolderA%2F%E6%AD%8C%E5%90%8D.mp3"),
+            folder = "FolderA",
+            artist = "",
+            fileStem = "歌名"
+        )
+        assertNull("跨文件夹 title 撞名不应匹配", LibraryScanner.findLyric(s, lyrics))
+    }
+
+    @Test
+    fun `title 撞名在同文件夹内仍可精确匹配`() {
+        // 同文件夹内：歌词按 title（带序号）命名，音声 title 与之相同 → 应匹配（同文件夹不算错配）
+        val lyrics = mutableMapOf<String, LyricRef>()
+        register(lyrics, "FolderA", "02. 歌名.vtt")
+        val s = Song(
+            title = "02. 歌名",
+            uri = Uri.parse("content://com.android.externalstorage.documents/document/primary%3AFolderA%2F%E6%AD%8C%E5%90%8D.mp3"),
+            folder = "FolderA",
+            artist = "",
+            fileStem = "歌名"
+        )
+        val hit = LibraryScanner.findLyric(s, lyrics)
+        assertNotNull(hit)
+        assertEquals("02. 歌名.vtt", hit!!.displayName)
+    }
 }

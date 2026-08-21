@@ -8,34 +8,29 @@ import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 
 /**
- * 音乐库文件夹树（Poweramp 式缩进展开树）：
- * - 目录行：点击展开/收起，长按直接打开该文件夹歌单（若自身有歌）
- * - 歌单叶子：点击播放，长按设置封面
+ * 音乐库文件夹浏览（逐级进入，1.27）：
+ * 每行 = 左侧封面 + 右侧名称；目录行右侧 "›"，歌单行右侧歌曲数。
+ * - 点击目录：进入下一级（MainActivity 维护路径栈）
+ * - 点击歌单：打开歌曲列表
+ * - 长按目录（自身有歌）：打开该文件夹歌单；长按歌单：设置封面
  */
 class FolderTreeAdapter(
+    private val onOpenFolder: (TreeNode) -> Unit,
     private val onOpenPlaylist: (Playlist) -> Unit,
     private val onLongClickPlaylist: (Playlist) -> Unit
 ) : RecyclerView.Adapter<FolderTreeAdapter.Holder>() {
 
-    private var roots: List<TreeNode> = emptyList()
-    private val expanded = HashSet<String>()
-    private var visible: List<TreeNode> = emptyList()
+    private var nodes: List<TreeNode> = emptyList()
     private var uiSizeSp = 14f
 
-    fun submit(playlists: List<Playlist>) {
-        roots = LibraryTree.build(playlists)
-        visible = LibraryTree.flatten(roots, expanded)
+    /** 显示当前层节点列表（由 MainActivity 按路径栈提供）。 */
+    fun submit(list: List<TreeNode>) {
+        nodes = list
         notifyDataSetChanged()
     }
 
     fun applyUiSize(sizeSp: Int) {
         uiSizeSp = sizeSp.toFloat()
-        notifyDataSetChanged()
-    }
-
-    private fun toggle(node: TreeNode) {
-        if (!expanded.remove(node.path)) expanded.add(node.path)
-        visible = LibraryTree.flatten(roots, expanded)
         notifyDataSetChanged()
     }
 
@@ -46,23 +41,23 @@ class FolderTreeAdapter(
     }
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
-        val node = visible[position]
-        // 缩进 = 基础 4dp + 层级 * 18dp（顶层也留一点，箭头不贴边）
-        val density = holder.itemView.resources.displayMetrics.density
-        val indent = ((4 + node.depth * 18) * density).toInt()
-        holder.row.setPadding(indent, holder.row.paddingTop, holder.row.paddingEnd, holder.row.paddingBottom)
+        val node = nodes[position]
         holder.name.text = node.name
         holder.name.setTextSize(uiSizeSp)
 
-        val isLeaf = !node.isDir
-        // INVISIBLE 保留箭头占位（24dp），保证叶子行封面与目录行封面垂直对齐（GONE 会错位显乱）
-        holder.arrow.visibility = if (isLeaf) View.INVISIBLE else View.VISIBLE
-        holder.arrow.text = if (expanded.contains(node.path)) "▼" else "▶"
-        holder.count.text = holder.itemView.context
-            .getString(R.string.songs_count, if (isLeaf) node.playlist?.songs?.size ?: 0 else node.totalSongs)
-
-        if (isLeaf) {
-            // 叶子：先占位音符图标，再尝试歌单封面/首曲封面
+        val isDir = node.isDir
+        if (isDir) {
+            // 目录：文件夹图标 + "›" 进入箭头
+            holder.cover.setImageResource(R.drawable.ic_folder_tinted)
+            holder.arrow.visibility = View.VISIBLE
+            holder.arrow.text = "›"
+            holder.count.visibility = View.INVISIBLE
+        } else {
+            // 歌单：封面（自定义/首曲）+ 歌曲数
+            holder.arrow.visibility = View.INVISIBLE
+            holder.count.visibility = View.VISIBLE
+            holder.count.text = holder.itemView.context
+                .getString(R.string.songs_count, node.playlist?.songs?.size ?: 0)
             holder.cover.setImageResource(R.drawable.ic_music_tinted)
             val pl = node.playlist
             if (pl != null) {
@@ -84,20 +79,18 @@ class FolderTreeAdapter(
                     }
                 }
             }
-        } else {
-            holder.cover.setImageResource(R.drawable.ic_folder_tinted)
         }
 
         holder.itemView.setOnClickListener {
-            if (node.isDir) {
-                toggle(node)
+            if (isDir) {
+                onOpenFolder(node)
             } else {
                 node.playlist?.let(onOpenPlaylist)
             }
         }
         holder.itemView.setOnLongClickListener {
-            if (node.isDir) {
-                // 目录自身有歌：长按直接打开该歌单（与短按展开区分）
+            if (isDir) {
+                // 目录自身有歌：长按直接打开该文件夹歌单
                 node.playlist?.let(onOpenPlaylist)
             } else {
                 node.playlist?.let(onLongClickPlaylist)
@@ -106,7 +99,7 @@ class FolderTreeAdapter(
         }
     }
 
-    override fun getItemCount(): Int = visible.size
+    override fun getItemCount(): Int = nodes.size
 
     class Holder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         val row: View = itemView
