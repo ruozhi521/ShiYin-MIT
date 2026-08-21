@@ -56,6 +56,11 @@ class MediaPlaybackService : Service() {
         const val KEY_LAST_URI = "last_uri"
         const val KEY_LAST_POS = "last_pos"
         const val KEY_PER_SONG = "per_song_pos"
+        // 定时开始播放（与 MainActivity 设置对话框共用字符串）
+        const val KEY_ALARM_ON = "alarm_play_on"
+        const val KEY_ALARM_ONCE = "alarm_play_once"
+        const val KEY_ALARM_HOUR = "alarm_play_hour"
+        const val KEY_ALARM_MINUTE = "alarm_play_minute"
         const val KEY_DESKTOP_ON = "desktop_lyrics_on"
         const val KEY_MIX_AUDIO = "mix_audio"
         const val KEY_PLAY_MODE = "play_mode"
@@ -170,6 +175,8 @@ class MediaPlaybackService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 提前前台化：闹钟触发冷启动时立即进入前台，避免后台调度节流导致播放卡顿
+        showForeground()
         when (intent?.action) {
             ACTION_PLAY_PAUSE -> togglePlay()
             ACTION_PREV -> playPrev()
@@ -178,12 +185,56 @@ class MediaPlaybackService : Service() {
             ACTION_ALARM_PLAY -> {
                 android.util.Log.d("ShiYinAlarm", "onStartCommand: ACTION_ALARM_PLAY")
                 playLast()
+                handleAlarmAfterPlay()
             }
         }
         // 服务每次启动（含后台重建）时恢复桌面歌词开关状态
         if (isDesktopLyricsOn()) setDesktopLyrics(true)
-        showForeground()
         return START_NOT_STICKY
+    }
+
+    // ---------- 定时开始播放：仅一次 / 每天 ----------
+
+    /** 闹钟触发后的后续处理：每天 → 重设明天同一时间；仅播放一次 → 取消闹钟。 */
+    private fun handleAlarmAfterPlay() {
+        val p = getSharedPreferences("player", Context.MODE_PRIVATE)
+        if (p.getBoolean(KEY_ALARM_ONCE, false)) {
+            // 仅播放一次：取消闹钟并关闭开关
+            p.edit().putBoolean(KEY_ALARM_ON, false).apply()
+            val pi = PendingIntent.getService(
+                this, 100,
+                Intent(this, MediaPlaybackService::class.java)
+                    .setAction(ACTION_ALARM_PLAY),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            (getSystemService(Context.ALARM_SERVICE) as AlarmManager).cancel(pi)
+        } else {
+            // 每天：重设明天同一时间（PendingIntent 同 requestCode 100，覆盖旧闹钟）
+            val hour = p.getInt(KEY_ALARM_HOUR, 7)
+            val minute = p.getInt(KEY_ALARM_MINUTE, 0)
+            val cal = java.util.Calendar.getInstance().apply {
+                set(java.util.Calendar.HOUR_OF_DAY, hour)
+                set(java.util.Calendar.MINUTE, minute)
+                set(java.util.Calendar.SECOND, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+                if (timeInMillis <= System.currentTimeMillis()) {
+                    add(java.util.Calendar.DAY_OF_YEAR, 1)
+                }
+            }
+            val pi = PendingIntent.getService(
+                this, 100,
+                Intent(this, MediaPlaybackService::class.java)
+                    .setAction(ACTION_ALARM_PLAY),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val showPi = PendingIntent.getActivity(
+                this, 101,
+                Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            (getSystemService(Context.ALARM_SERVICE) as AlarmManager)
+                .setAlarmClock(AlarmManager.AlarmClockInfo(cal.timeInMillis, showPi), pi)
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder = binder

@@ -1608,7 +1608,9 @@ class MainActivity : AppCompatActivity() {
         val rgSeekStep = view.findViewById<RadioGroup>(R.id.rgSeekStep)
         checkByTag(rgSeekStep, prefs.getInt(KEY_SEEK_STEP, 10))
         val chkAlarmPlay = view.findViewById<CheckBox>(R.id.chkAlarmPlay)
-        chkAlarmPlay.isChecked = prefs.getBoolean(KEY_ALARM_ON, false)
+        chkAlarmPlay.isChecked = prefs.getBoolean(MediaPlaybackService.KEY_ALARM_ON, false)
+        val chkAlarmOnce = view.findViewById<CheckBox>(R.id.chkAlarmOnce)
+        chkAlarmOnce.isChecked = prefs.getBoolean(MediaPlaybackService.KEY_ALARM_ONCE, false)
         chkAlarmPlay.setOnClickListener { showAlarmPicker(chkAlarmPlay) }
         chkDesktopLyrics.isChecked = prefs.getBoolean(KEY_DESKTOP_ON, false)
         lyricsGroup.visibility =
@@ -1664,6 +1666,7 @@ class MainActivity : AppCompatActivity() {
                     .putBoolean(KEY_DESKTOP_LOCKED, chkLyricsLocked.isChecked)
                     .putBoolean(KEY_MIX_AUDIO, chkMixAudio.isChecked)
                     .putBoolean(MediaPlaybackService.KEY_PER_SONG, chkPerSong.isChecked)
+                    .putBoolean(MediaPlaybackService.KEY_ALARM_ONCE, chkAlarmOnce.isChecked)
                     .putString(KEY_LIB_LAYOUT, if (tagOf(rgLibLayout) == 1) "tree" else "grid")
                     .putInt(KEY_SEEK_STEP, tagOf(rgSeekStep))
                     .apply()
@@ -2561,10 +2564,8 @@ class MainActivity : AppCompatActivity() {
         val mode = prefs.getString(KEY_LIB_LAYOUT, "grid")
         val list = playlistList()
         if (mode == "tree") {
-            // 注意：GridLayoutManager 继承 LinearLayoutManager，判断必须用 !is GridLayoutManager
-            if (recyclerPlaylists.layoutManager !is GridLayoutManager) {
-                recyclerPlaylists.layoutManager = LinearLayoutManager(this)
-            }
+            // 直接设置，不做 is 判断——GridLayoutManager 继承 LinearLayoutManager，is 判断有陷阱
+            recyclerPlaylists.layoutManager = LinearLayoutManager(this)
             if (recyclerPlaylists.adapter !== treeAdapter) {
                 recyclerPlaylists.adapter = treeAdapter
             }
@@ -2572,14 +2573,13 @@ class MainActivity : AppCompatActivity() {
             treeStack.clear()
             refreshTree()
         } else {
-            if (recyclerPlaylists.layoutManager !is GridLayoutManager) {
-                recyclerPlaylists.layoutManager = GridLayoutManager(this, 2)
-            }
+            recyclerPlaylists.layoutManager = GridLayoutManager(this, 2)
             if (recyclerPlaylists.adapter !== gridAdapter) {
                 recyclerPlaylists.adapter = gridAdapter
             }
             gridAdapter.submit(list)
         }
+        txtTreePath.visibility = if (mode == "tree") View.VISIBLE else View.GONE
     }
 
     /** 封面/主题变更后刷新两种布局的列表（当前可见的立即生效）。 */
