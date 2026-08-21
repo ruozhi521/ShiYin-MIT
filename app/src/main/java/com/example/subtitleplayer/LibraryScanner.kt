@@ -18,11 +18,13 @@ import java.util.Locale
  */
 internal fun cleanTag(s: String?): String? {
     if (s.isNullOrBlank()) return null
-    if (s.any { it == '\uFFFD' }) return null // 替换字符 = 解码失败
-    val high = s.count { it.code in 0x80..0xFF }      // Latin-1 高位（含 C1 控制）
+    val high = s.count { it.code in 0x80..0xFF && it != '\uFFFD' }  // Latin-1 高位（替换字符不计高位）
+    val repl = s.count { it == '\uFFFD' }
     val cjk = s.count { it.code in 0x4E00..0x9FFF }   // 正常 CJK 字符
-    // 几乎全是高位字符且没有任何 CJK → GBK/UTF-8 被误读成 Latin-1
-    if (high > s.length * 2 / 3 && cjk == 0) return null
+    // 低位 ASCII + 少量高位（拉丁/符号）→ 视为正常（拉丁名字、标签）
+    if (high == 0 && repl == 0) return s
+    // 明显乱码：高位字符占绝大多数 且 没有 CJK → GBK/UTF-8 被误读成 Latin-1；替换字符多也判乱码
+    if ((high + repl) * 3 > s.length * 2 && cjk == 0) return null
     return s
 }
 
