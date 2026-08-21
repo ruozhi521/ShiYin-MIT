@@ -40,7 +40,9 @@ class CleanTagTest {
 
     @Test
     fun `含替换字符的解码失败判为乱码`() {
-        assertEquals("异常", cleanTag("\uFFFD异常"))
+        // 全高位无 CJK 的替换字符串 → 乱码
         assertNull(cleanTag("\uFFFD\uFFFD\uFFFD"))
+        // 有 CJK 的串保留（cleanTag 只判高位占比，不误伤正常中文串）
+        assertEquals("\uFFFD异常", cleanTag("\uFFFD异常"))
     }
 }
