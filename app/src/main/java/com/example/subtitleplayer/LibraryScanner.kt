@@ -189,12 +189,20 @@ class LibraryScanner(
         return try {
             val r = MediaMetadataRetriever()
             r.setDataSource(context, uri)
-            val title = cleanTag(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE))
-            val artist = cleanTag(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST))
+            var title = cleanTag(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE))
+            var artist = cleanTag(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST))
             r.release()
+            // MMR 读不出/读出乱码时，用自己解析 ID3 帧（正确处理 UTF-16 BOM）兜底
+            if (title == null || artist == null) {
+                val (it, ia) = Id3TagReader.read(context, uri)
+                if (title == null) title = cleanTag(it)
+                if (artist == null) artist = cleanTag(ia)
+            }
             title to artist
         } catch (e: Exception) {
-            null to null
+            // MMR 异常时也尝试自解析
+            val fallback = try { Id3TagReader.read(context, uri) } catch (_: Exception) { null to null }
+            fallback.first?.let { cleanTag(it) } to fallback.second?.let { cleanTag(it) }
         }
     }
 
