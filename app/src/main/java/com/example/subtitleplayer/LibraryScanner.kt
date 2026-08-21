@@ -11,6 +11,22 @@ import org.json.JSONObject
 import java.util.Locale
 
 /**
+ * 标签编码兜底（顶层函数，扫描与缓存加载共用）：
+ * MediaMetadataRetriever 对 GBK 等非标准编码的 ID3 标签会解出乱码
+ * （每字节变成 Latin-1 高位字符，如 "å¾®ç¬"），直接当歌名会显示乱码。
+ * 特征明显时返回 null，上层回退用文件名（SAF 文件名是 UTF-8，正常）。
+ */
+internal fun cleanTag(s: String?): String? {
+    if (s.isNullOrBlank()) return null
+    if (s.any { it == '\uFFFD' }) return null // 替换字符 = 解码失败
+    val high = s.count { it.code in 0x80..0xFF }      // Latin-1 高位（含 C1 控制）
+    val cjk = s.count { it.code in 0x4E00..0x9FFF }   // 正常 CJK 字符
+    // 几乎全是高位字符且没有任何 CJK → GBK/UTF-8 被误读成 Latin-1
+    if (high > s.length * 2 / 3 && cjk == 0) return null
+    return s
+}
+
+/**
  * 通过 SAF（系统文件选择器授权）递归扫描一个文件夹树：
  * - 每个子文件夹成为一个歌单（根目录散落的音频归入 [DEFAULT_FOLDER]）
  * - 自动记录所有 .lrc/.vtt/.txt 歌词，供按文件名匹配
@@ -171,8 +187,8 @@ class LibraryScanner(
         return try {
             val r = MediaMetadataRetriever()
             r.setDataSource(context, uri)
-            val title = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
-            val artist = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+            val title = cleanTag(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE))
+            val artist = cleanTag(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST))
             r.release()
             title to artist
         } catch (e: Exception) {

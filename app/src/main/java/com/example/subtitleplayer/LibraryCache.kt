@@ -15,6 +15,17 @@ object LibraryCache {
 
     private const val FILE_NAME = "library.json"
 
+    /** 从 SAF 文档 uri 提取文件名（去扩展名），用于乱码标题回退。 */
+    private fun stemFromUri(uriStr: String): String {
+        val raw = uriStr.substringAfterLast('/')
+        val decoded = try {
+            java.net.URLDecoder.decode(raw, "UTF-8")
+        } catch (e: Exception) {
+            raw
+        }
+        return stemOf(decoded)
+    }
+
     fun save(context: Context, lib: MusicLibrary) {
         try {
             val songs = JSONArray()
@@ -56,9 +67,11 @@ object LibraryCache {
             val songs = mutableListOf<Song>()
             for (i in 0 until songsArr.length()) {
                 val o = songsArr.getJSONObject(i)
+                val title = cleanTag(o.optString("title", "")) ?: o.optString("fileStem", "")
+                    .ifBlank { stemFromUri(o.getString("uri")) }
                 songs.add(
                     Song(
-                        o.getString("title"),
+                        title,
                         Uri.parse(o.getString("uri")),
                         o.getString("folder"),
                         o.optString("artist", ""),
