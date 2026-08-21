@@ -17,12 +17,13 @@ class Id3TagReader private constructor(
     uri: Uri
 ) {
     private val resolver = context.contentResolver
+    private val sourceUri = uri
     private val title = readFrame("TIT2")
     private val artist = readFrame("TPE1")
 
     private fun readFrame(wantId: String): String? {
         return try {
-            resolver.openInputStream(uri)?.use { input ->
+            resolver.openInputStream(sourceUri)?.use { input ->
                 val head = ByteArray(10)
                 if (input.read(head) != 10) return null
                 if (String(head, 0, 3, Charsets.ISO_8859_1) != "ID3") return null
@@ -130,7 +131,7 @@ class Id3TagReader private constructor(
                 2 -> String(sub, Charset.forName("UTF-16BE")).trimEnd('\u0000')
                 3 -> String(sub, Charset.forName("UTF-8")).trimEnd('\u0000')
                 else -> null
-            }.takeIf { it.isNotBlank() }
+            }?.takeIf { it.isNotBlank() }
         } catch (e: Exception) {
             null
         }
