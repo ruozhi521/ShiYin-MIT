@@ -2561,7 +2561,8 @@ class MainActivity : AppCompatActivity() {
         val mode = prefs.getString(KEY_LIB_LAYOUT, "grid")
         val list = playlistList()
         if (mode == "tree") {
-            if (recyclerPlaylists.layoutManager !is LinearLayoutManager) {
+            // 注意：GridLayoutManager 继承 LinearLayoutManager，判断必须用 !is GridLayoutManager
+            if (recyclerPlaylists.layoutManager !is GridLayoutManager) {
                 recyclerPlaylists.layoutManager = LinearLayoutManager(this)
             }
             if (recyclerPlaylists.adapter !== treeAdapter) {
