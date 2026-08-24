@@ -375,10 +375,26 @@ class MainActivity : AppCompatActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 最先安装全局崩溃捕获（越早越好），并检测上次未读崩溃日志 → 稍后弹窗
+        CrashCatcher.install(applicationContext)
+        val pendingCrash = CrashCatcher.takeCrashLog(this)
         // 在 Activity 创建前应用保存的深色模式（进程级设置，不调用会回系统默认导致深色失效）
         applyDarkMode(prefs.getBoolean(KEY_DARK, false))
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        if (pendingCrash != null) {
+            AlertDialog.Builder(this)
+                .setTitle("崩溃日志")
+                .setMessage(pendingCrash)
+                .setPositiveButton("复制") { _, _ ->
+                    val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("crash", pendingCrash))
+                    toast("已复制，发给作者即可")
+                }
+                .setNegativeButton("知道了", null)
+                .show()
+        }
 
         viewDiscover = findViewById(R.id.pageDiscover)
         viewLibrary = findViewById(R.id.pageLibrary)
