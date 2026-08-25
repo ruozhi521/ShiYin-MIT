@@ -63,41 +63,54 @@ class LibraryScanner(
     }
 
     /**
-     * 多根目录合并扫描：依次扫描每个根，合并 songs（按 uri 去重）与 lyrics；
-     * 若不止一个根，歌单名加根前缀（如「根名/子文件夹」），避免不同根的
-     * 同名子文件夹串成一个歌单。
+     * 多根目录合并扫描：逐根独立扫描后统一命名合并。
+     * 命名规则：相对路径只在单个根出现 → 直接用原名（观感干净）；
+     * 跨根同名子文件夹 → 各自加根前缀消歧（如「根A/周杰伦」「根B/周杰伦」）。
+     * song.folder 与歌词 key 一律用最终名——findLyric 按 folder 精确匹配，
+     * 两者必须一致（旧实现歌单名带前缀而 Song.folder 不带，多根时歌词全部失配）。
      */
     fun scanAll(roots: List<Uri>): MusicLibrary {
         if (roots.isEmpty()) return MusicLibrary(emptyList(), emptyList(), emptyMap())
         if (roots.size == 1) return scan(roots[0])
+        // 第一遍：逐根扫描，保留相对路径
+        val scans = roots.map { root ->
+            val subSongs = mutableListOf<Song>()
+            val subLyrics = mutableMapOf<String, LyricRef>()
+            scanDir(
+                root, DocumentsContract.getTreeDocumentId(root), null,
+                mutableMapOf(), subLyrics, subSongs
+            )
+            Triple(rootDisplayName(root), subSongs, subLyrics)
+        }
+        // 统计每个相对路径出现在几个根里（>1 才需要消歧）
+        val relCounts = HashMap<String, Int>()
+        for ((_, songs, _) in scans) {
+            for (rel in songs.map { it.folder }.distinct()) {
+                relCounts[rel] = (relCounts[rel] ?: 0) + 1
+            }
+        }
+        // 第二遍：按最终名合并（同一相对路径跨根重命名结果一致，缓存进 renamed）
         val folderSongs = mutableMapOf<String, MutableList<Song>>()
         val lyrics = mutableMapOf<String, LyricRef>()
         val all = mutableListOf<Song>()
         val seenSongs = HashSet<String>()
-        val seenLyrics = HashSet<String>()
-        for (root in roots) {
-            val rootId = DocumentsContract.getTreeDocumentId(root)
-            val rootLabel = rootDisplayName(root)
-            val sub = mutableMapOf<String, MutableList<Song>>()
-            val subLyrics = mutableMapOf<String, LyricRef>()
-            val subAll = mutableListOf<Song>()
-            scanDir(root, rootId, null, sub, subLyrics, subAll)
-            // 合并
-            for (song in subAll) {
-                if (seenSongs.add(song.uri.toString())) {
-                    all.add(song)
-                    val key = "$rootLabel/${song.folder}"
-                    folderSongs.getOrPut(key) { mutableListOf() }.add(song)
-                }
-            }
+        for ((label, songs, subLyrics) in scans) {
+            val renamed = HashMap<String, String>() // 相对路径 -> 最终歌单名
+            fun finalName(rel: String): String =
+                renamed.getOrPut(rel) { mergedFolderName(label, rel, relCounts) }
             for ((k, ref) in subLyrics) {
-                if (seenLyrics.add(k)) {
-                    lyrics["$rootLabel/$k"] = ref
-                }
+                // 歌词 key 格式恒为「相对路径/stem」（scanDir 注册），拆开重拼最终前缀
+                lyrics["${finalName(k.substringBeforeLast('/'))}/${k.substringAfterLast('/')}"] = ref
+            }
+            for (song in songs) {
+                if (!seenSongs.add(song.uri.toString())) continue
+                val fixed = song.copy(folder = finalName(song.folder))
+                all.add(fixed)
+                folderSongs.getOrPut(fixed.folder) { mutableListOf() }.add(fixed)
             }
         }
-        val playlists = folderSongs.map { (name, songs) ->
-            Playlist(name, songs.sortedBy { it.title })
+        val playlists = folderSongs.map { (name, s) ->
+            Playlist(name, s.sortedBy { it.title })
         }.sortedBy { it.name }
         return MusicLibrary(
             playlists = playlists,
@@ -320,6 +333,13 @@ class LibraryScanner(
 
     companion object {
         const val DEFAULT_FOLDER = "根目录"
+
+        /**
+         * 多根合并歌单名：相对路径只在单个根出现 → 直接用原名；
+         * 跨根同名 → 加「根名/」前缀消歧（避免不同根同名子文件夹串成一个歌单）。
+         */
+        internal fun mergedFolderName(label: String, rel: String, relRootCounts: Map<String, Int>): String =
+            if ((relRootCounts[rel] ?: 0) > 1) "$label/$rel" else rel
 
         private fun stemOf(name: String): String {
             val i = name.lastIndexOf('.')

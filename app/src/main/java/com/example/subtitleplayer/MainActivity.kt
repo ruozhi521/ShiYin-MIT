@@ -949,8 +949,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 主题色选择弹窗：预设色板。 */
-    private fun showLyricIdleColorDialog() {
+    /** 当前生效的非当前歌词颜色（未自定义时取主题 text_normal）。 */
+    private fun currentIdleColor(): Int {
+        val saved = prefs.getInt(KEY_LYRIC_IDLE_COLOR, IDLE_DEFAULT)
+        return if (saved == IDLE_DEFAULT) getColor(R.color.text_normal) else saved
+    }
+
+    /** 非当前歌词颜色选择弹窗：预设色板。onPicked 供主题弹窗实时刷新圆点。 */
+    private fun showLyricIdleColorDialog(onPicked: ((Int) -> Unit)? = null) {
         val pad = (16 * resources.displayMetrics.density).toInt()
         val cell = (56 * resources.displayMetrics.density).toInt()
         val box = android.widget.LinearLayout(this).apply {
@@ -994,6 +1000,7 @@ class MainActivity : AppCompatActivity() {
                 cellView.setOnClickListener {
                     prefs.edit().putInt(KEY_LYRIC_IDLE_COLOR, color).apply()
                     applyAppearance()
+                    onPicked?.invoke(color)
                     toast(getString(R.string.lyric_idle_color_saved))
                     dialog.dismiss()
                 }
@@ -1693,9 +1700,6 @@ class MainActivity : AppCompatActivity() {
         checkByTag(rgLibLayout, if (prefs.getString(KEY_LIB_LAYOUT, "grid") == "tree") 1 else 0)
         val rgSeekStep = view.findViewById<RadioGroup>(R.id.rgSeekStep)
         checkByTag(rgSeekStep, prefs.getInt(KEY_SEEK_STEP, 10))
-        view.findViewById<TextView>(R.id.btnLyricIdleColor).setOnClickListener {
-            showLyricIdleColorDialog()
-        }
         val chkAlarmPlay = view.findViewById<CheckBox>(R.id.chkAlarmPlay)
         chkAlarmPlay.isChecked = prefs.getBoolean(MediaPlaybackService.KEY_ALARM_ON, false)
         val chkAlarmOnce = view.findViewById<CheckBox>(R.id.chkAlarmOnce)
@@ -1844,6 +1848,33 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dp(14f), 0, dp(14f))
             setOnClickListener { showBgDialog() }
         })
+
+        // 非当前歌词颜色行（带当前色圆点；长按恢复默认）
+        val idleRow = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(0, dp(14f), 0, dp(14f))
+        }
+        val idleDot = View(this).apply {
+            setBackgroundColor(currentIdleColor())
+            layoutParams = android.widget.LinearLayout.LayoutParams(dp(18f), dp(18f))
+        }
+        idleRow.addView(idleDot)
+        idleRow.addView(android.widget.TextView(this).apply {
+            text = getString(R.string.lyric_idle_color_label)
+            textSize = 16f
+            setTextColor(getColor(R.color.text_primary))
+            setPadding(dp(12f), 0, 0, 0)
+        })
+        idleRow.setOnClickListener { showLyricIdleColorDialog { c -> idleDot.setBackgroundColor(c) } }
+        idleRow.setOnLongClickListener {
+            prefs.edit().putInt(KEY_LYRIC_IDLE_COLOR, IDLE_DEFAULT).apply()
+            applyAppearance()
+            idleDot.setBackgroundColor(currentIdleColor())
+            toast(getString(R.string.lyric_idle_color_reset))
+            true
+        }
+        box.addView(idleRow)
 
         // 深色模式开关（即时应用）
         box.addView(android.widget.Switch(this).apply {

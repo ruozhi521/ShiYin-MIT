@@ -174,4 +174,28 @@ class LibraryScannerTest {
         assertNotNull(hit)
         assertEquals("02. 歌名.vtt", hit!!.displayName)
     }
+
+    // ---- 多根合并歌单命名（1.29：唯一相对路径不加根前缀，跨根同名才消歧）----
+
+    @Test
+    fun `唯一文件夹不加根前缀`() {
+        // 根A 有 Music/Pop，根B 有 Rock —— 各自唯一，直接用原名
+        val counts = mapOf("Music/Pop" to 1, "Rock" to 1)
+        assertEquals("Music/Pop", LibraryScanner.mergedFolderName("根A", "Music/Pop", counts))
+        assertEquals("Rock", LibraryScanner.mergedFolderName("根B", "Rock", counts))
+    }
+
+    @Test
+    fun `跨根同名子文件夹加根前缀消歧`() {
+        // 两个根都有 Music → 各自加前缀；根目录散曲（DEFAULT_FOLDER）同理
+        val counts = mapOf("Music" to 2, "根目录" to 2)
+        assertEquals("根A/Music", LibraryScanner.mergedFolderName("根A", "Music", counts))
+        assertEquals("根B/Music", LibraryScanner.mergedFolderName("根B", "Music", counts))
+        assertEquals("根A/根目录", LibraryScanner.mergedFolderName("根A", "根目录", counts))
+    }
+
+    @Test
+    fun `统计表缺失的相对路径视为唯一`() {
+        assertEquals("Music", LibraryScanner.mergedFolderName("根A", "Music", emptyMap()))
+    }
 }
