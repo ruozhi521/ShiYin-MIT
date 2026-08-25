@@ -13,6 +13,7 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
@@ -307,8 +308,8 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(OpenTreePersistable()) { uri ->
             uri ?: return@registerForActivityResult
             persistRead(uri)
-            prefs.edit().putString(KEY_TREE, uri.toString()).apply()
-            scanLibrary(uri)
+            addTreeUri(uri)
+            scanLibrary()
         }
 
     /** 自定义封面选图（复制到内部存储，无需持久授权）。 */
@@ -718,7 +719,7 @@ class MainActivity : AppCompatActivity() {
             val uri = Uri.parse(saved)
             if (hasPersistRead(uri)) {
                 if (prefs.getBoolean(KEY_AUTO_SCAN, false)) {
-                    scanLibrary(uri)
+                    scanLibrary()
                 } else {
                     loadCachedLibrary()
                 }
@@ -949,6 +950,59 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** 主题色选择弹窗：预设色板。 */
+    private fun showLyricIdleColorDialog() {
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val cell = (56 * resources.displayMetrics.density).toInt()
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(pad, pad, pad, pad)
+        }
+        // 色块列表：纯色 8 个（白/黑/灰/橙/红/青/紫/绿）。每行 3 个。
+        val colors = LYRIC_IDLE_COLORS
+        var row = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL }
+        box.addView(row)
+        for (i in colors.indices) {
+            if (i > 0 && i % 3 == 0) {
+                row = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL }
+                box.addView(row)
+            }
+            val color = colors[i]
+            val v = TextView(this).apply {
+                text = ""
+                setBackgroundColor(color)
+                layoutParams = android.widget.LinearLayout.LayoutParams(cell, cell).apply {
+                    marginEnd = (12 * resources.displayMetrics.density).toInt()
+                    bottomMargin = (12 * resources.displayMetrics.density).toInt()
+                }
+            }
+            row.addView(v)
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.lyric_idle_color_title))
+            .setView(box)
+            .setNegativeButton(R.string.cancel, null)
+            .create()
+        // 给每个色块设点击：选颜色后保存 + 应用 + 关对话框
+        @Suppress("UsePropertyAccessSyntax")
+        var idx = 0
+        outer@ for (i in 0 until box.childCount) {
+            val childRow = box.getChildAt(i) as android.widget.LinearLayout
+            for (c in 0 until childRow.childCount) {
+                val cellView = childRow.getChildAt(c)
+                val color = colors[idx]
+                idx++
+                cellView.setOnClickListener {
+                    prefs.edit().putInt(KEY_LYRIC_IDLE_COLOR, color).apply()
+                    applyAppearance()
+                    toast(getString(R.string.lyric_idle_color_saved))
+                    dialog.dismiss()
+                }
+                if (idx >= colors.size) break@outer
+            }
+        }
+        dialog.show()
+    }
+
     private fun showAccentDialog() {
         val pad = (16 * resources.displayMetrics.density).toInt()
         val cell = (64 * resources.displayMetrics.density).toInt()
@@ -1135,16 +1189,32 @@ class MainActivity : AppCompatActivity() {
     // ---------- 扫描与数据 ----------
 
     private var currentTreeUri: Uri? = null
+    /** 已添加的扫描根目录 uri 列表（多文件夹）。 */
+    private fun savedTreeUris(): List<Uri> =
+        prefs.getString(KEY_TREES, null)
+            ?.split(",")
+            ?.mapNotNull { it.trim().takeIf(String::isNotEmpty)?.let { s -> try { Uri.parse(s) } catch (_: Exception) { null } } }
+            ?.takeIf { it.isNotEmpty() }
+            ?: listOfNotNull(prefs.getString(KEY_TREE, null)?.let { try { Uri.parse(it) } catch (_: Exception) { null } })
 
-    private fun treeUri(): Uri? = currentTreeUri ?: prefs.getString(KEY_TREE, null)?.let { Uri.parse(it) }
+    private fun addTreeUri(uri: Uri) {
+        val list = (savedTreeUris() + uri).distinctBy { it.toString() }
+        prefs.edit()
+            .putString(KEY_TREES, list.joinToString(",") { it.toString() })
+            .remove(KEY_TREE)
+            .apply()
+    }
 
-    private fun scanLibrary(uri: Uri) {
+    private fun treeUri(): Uri? = savedTreeUris().firstOrNull()
+
+    private fun scanLibrary() {
         if (scanning) return
         scanning = true
         toast(getString(R.string.scanning))
         Thread {
+            val roots = savedTreeUris()
             val lib = try {
-                LibraryScanner(this, contentResolver).scan(uri)
+                LibraryScanner(this, contentResolver).scanAll(roots)
             } catch (e: Exception) {
                 null
             }
@@ -1623,6 +1693,9 @@ class MainActivity : AppCompatActivity() {
         checkByTag(rgLibLayout, if (prefs.getString(KEY_LIB_LAYOUT, "grid") == "tree") 1 else 0)
         val rgSeekStep = view.findViewById<RadioGroup>(R.id.rgSeekStep)
         checkByTag(rgSeekStep, prefs.getInt(KEY_SEEK_STEP, 10))
+        view.findViewById<TextView>(R.id.btnLyricIdleColor).setOnClickListener {
+            showLyricIdleColorDialog()
+        }
         val chkAlarmPlay = view.findViewById<CheckBox>(R.id.chkAlarmPlay)
         chkAlarmPlay.isChecked = prefs.getBoolean(MediaPlaybackService.KEY_ALARM_ON, false)
         val chkAlarmOnce = view.findViewById<CheckBox>(R.id.chkAlarmOnce)
@@ -1697,16 +1770,25 @@ class MainActivity : AppCompatActivity() {
 
         view.findViewById<Button>(R.id.btnRescanNow).setOnClickListener {
             settingsDialog?.dismiss()
-            val uri = treeUri()
-            if (uri == null) {
+            if (treeUri() == null) {
                 treePicker.launch(null)
             } else {
-                scanLibrary(uri)
+                scanLibrary()
             }
         }
         view.findViewById<Button>(R.id.btnChangeFolder).setOnClickListener {
             settingsDialog?.dismiss()
             treePicker.launch(null)
+        }
+        // 长按「添加扫描文件夹」：清除全部已添加根，回到空库（下次可重新添加）
+        view.findViewById<Button>(R.id.btnChangeFolder).setOnLongClickListener {
+            prefs.edit()
+                .remove(KEY_TREES)
+                .remove(KEY_TREE)
+                .apply()
+            library = null
+            toast("已清除全部扫描文件夹")
+            true
         }
         view.findViewById<Button>(R.id.btnAbout).setOnClickListener {
             settingsDialog?.dismiss()
@@ -2605,9 +2687,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyAppearance() {
+        val idleColor = prefs.getInt(KEY_LYRIC_IDLE_COLOR, IDLE_DEFAULT)
         lyricAdapter.applyStyle(
             prefs.getInt(KEY_LYRIC_SIZE, 18),
-            prefs.getInt(KEY_LYRIC_FONT, 0)
+            prefs.getInt(KEY_LYRIC_FONT, 0),
+            if (idleColor == IDLE_DEFAULT) -1 else idleColor
         )
         val uiSize = prefs.getInt(KEY_UI_SIZE, 15)
         songAdapter.applyUiSize(uiSize)
@@ -2662,6 +2746,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val KEY_TREE = "tree_uri"
+        private const val KEY_TREES = "tree_uris"
         private const val KEY_AUTO_SCAN = "auto_scan"
         private const val KEY_IMMERSION_SECONDS = "immersion_seconds"
         private const val KEY_IMMERSION_ENABLED = "immersion_enabled"
@@ -2689,6 +2774,13 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_MIX_AUDIO = "mix_audio"
         private const val KEY_LIB_LAYOUT = "lib_layout"
         private const val KEY_SEEK_STEP = "seek_step"
+        private const val KEY_LYRIC_IDLE_COLOR = "lyric_idle_color"
+        private const val IDLE_DEFAULT = 0 // -1 会与"未设"冲突，用 0 表示默认 text_normal
+        private val LYRIC_IDLE_COLORS = intArrayOf(
+            0xFFFFFFFF.toInt(), 0xFF000000.toInt(), 0xFF9CA3AF.toInt(),
+            0xFFF59E0B.toInt(), 0xFFE0245E.toInt(), 0xFF06B6D4.toInt(),
+            0xFF8B5CF6.toInt(), 0xFF4ADE80.toInt()
+        )
         private val SPEED_LIST = floatArrayOf(1f, 1.5f, 2f, 3f, 4f)
         private const val KEY_ALARM_ON = "alarm_play_on"
         private const val KEY_ALARM_HOUR = "alarm_play_hour"

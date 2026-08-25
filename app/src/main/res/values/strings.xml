@@ -3,7 +3,7 @@
     <string name="app_name">拾音</string>
     <string name="choose_folder">选择文件夹</string>
     <string name="rescan">重新扫描</string>
-    <string name="change_folder">更换文件夹</string>
+    <string name="change_folder">添加扫描文件夹</string>
     <string name="about">关于拾音</string>
     <string name="trans_settings">翻译设置</string>
     <string name="eq_entry">音效</string>
@@ -100,7 +100,7 @@
     <string name="auto_trans_confirm_msg">开启后，播放外语歌曲时会自动翻译歌词。\n\n· 只翻译非中文歌词（含中文占比高的歌曲不会触发）\n· 每首歌只翻译一遍，结果本地缓存，不会重复扣费\n\n翻译使用「翻译设置」中配置的 API。</string>
     <string name="auto_trans_ok">已开启自动翻译：仅翻译非中文歌词，每首歌只翻一遍</string>
     <string name="enable">开启</string>
-    <string name="about_version">版本 1.27</string>
+    <string name="about_version">版本 1.28</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>
@@ -178,4 +178,7 @@
     <string name="per_song_hint">开启后切走再切回，从上次位置继续（占用更多存储，建议歌曲多时关闭）</string>
     <string name="alarm_once_label">仅播放一次</string>
     <string name="alarm_once_hint">勾选后定时播放只响一次，触发后自动关闭；不勾选则每天同一时间播放</string>
+    <string name="lyric_idle_color_label">非当前歌词颜色</string>
+    <string name="lyric_idle_color_title">选择非当前歌词颜色</string>
+    <string name="lyric_idle_color_saved">已设置非当前歌词颜色</string>
 </resources>

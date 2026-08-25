@@ -103,6 +103,7 @@ class LyricAdapter(
         private set
     private var lyricSizeSp = 18f
     private var fontMode = 0
+    private var idleColor = -1 // -1 = 默认 text_normal
     private var translations: Map<Int, String> = emptyMap()
 
     fun submit(list: List<SubtitleLine>) {
@@ -116,9 +117,10 @@ class LyricAdapter(
         notifyDataSetChanged()
     }
 
-    fun applyStyle(sizeSp: Int, font: Int) {
+    fun applyStyle(sizeSp: Int, font: Int, idleColorArgb: Int = -1) {
         lyricSizeSp = sizeSp.toFloat()
         fontMode = font
+        idleColor = idleColorArgb
         notifyDataSetChanged()
     }
 
@@ -162,8 +164,12 @@ class LyricAdapter(
             holder.trans.setTextColor(ThemeManager.accentDark(accent))
         } else {
             holder.itemView.setBackgroundResource(0)
-            holder.text.setTextColor(holder.text.context.getColor(R.color.text_normal))
-            holder.trans.setTextColor(holder.text.context.getColor(R.color.text_hint))
+            val ctx = holder.text.context
+            holder.text.setTextColor(
+                if (idleColor != -1) idleColor
+                else ctx.getColor(R.color.text_normal)
+            )
+            holder.trans.setTextColor(ctx.getColor(R.color.text_hint))
         }
         // 当前行淡入，更沉浸
         if (isCurrent) {

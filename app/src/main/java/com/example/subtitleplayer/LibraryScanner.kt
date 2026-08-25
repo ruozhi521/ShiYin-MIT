@@ -62,6 +62,57 @@ class LibraryScanner(
         )
     }
 
+    /**
+     * 多根目录合并扫描：依次扫描每个根，合并 songs（按 uri 去重）与 lyrics；
+     * 若不止一个根，歌单名加根前缀（如「根名/子文件夹」），避免不同根的
+     * 同名子文件夹串成一个歌单。
+     */
+    fun scanAll(roots: List<Uri>): MusicLibrary {
+        if (roots.isEmpty()) return MusicLibrary(emptyList(), emptyList(), emptyMap())
+        if (roots.size == 1) return scan(roots[0])
+        val folderSongs = mutableMapOf<String, MutableList<Song>>()
+        val lyrics = mutableMapOf<String, LyricRef>()
+        val all = mutableListOf<Song>()
+        val seenSongs = HashSet<String>()
+        val seenLyrics = HashSet<String>()
+        for (root in roots) {
+            val rootId = DocumentsContract.getTreeDocumentId(root)
+            val rootLabel = rootDisplayName(root)
+            val sub = mutableMapOf<String, MutableList<Song>>()
+            val subLyrics = mutableMapOf<String, LyricRef>()
+            val subAll = mutableListOf<Song>()
+            scanDir(root, rootId, null, sub, subLyrics, subAll)
+            // 合并
+            for (song in subAll) {
+                if (seenSongs.add(song.uri.toString())) {
+                    all.add(song)
+                    val key = "$rootLabel/${song.folder}"
+                    folderSongs.getOrPut(key) { mutableListOf() }.add(song)
+                }
+            }
+            for ((k, ref) in subLyrics) {
+                if (seenLyrics.add(k)) {
+                    lyrics["$rootLabel/$k"] = ref
+                }
+            }
+        }
+        val playlists = folderSongs.map { (name, songs) ->
+            Playlist(name, songs.sortedBy { it.title })
+        }.sortedBy { it.name }
+        return MusicLibrary(
+            playlists = playlists,
+            allSongs = all.sortedBy { it.title },
+            lyrics = lyrics
+        )
+    }
+
+    /** 多根时歌单前缀：取 SAF 根文档名（如 primary:Download 末段），失败回退 "根i"。 */
+    private fun rootDisplayName(root: Uri): String {
+        val leaf = root.lastPathSegment ?: return "根"
+        return leaf.substringAfterLast(':').ifBlank { "根" }
+    }
+
+
     private fun scanDir(
         treeUri: Uri,
         docId: String,
