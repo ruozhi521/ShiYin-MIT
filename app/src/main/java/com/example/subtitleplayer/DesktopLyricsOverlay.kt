@@ -121,7 +121,8 @@ class DesktopLyricsOverlay(context: Context) {
             val d = appContext.resources.displayMetrics.density
             tv.setShadowLayer(4 * d, d, d, 0x66000000)
         } else {
-            tv.clearShadowLayer()
+            // TextView 无 clearShadowLayer，用全零参数清除
+            tv.setShadowLayer(0f, 0f, 0f, 0)
         }
     }
 
