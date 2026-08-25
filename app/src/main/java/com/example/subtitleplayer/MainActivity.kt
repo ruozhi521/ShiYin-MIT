@@ -1207,6 +1207,61 @@ class MainActivity : AppCompatActivity() {
 
     private fun treeUri(): Uri? = savedTreeUris().firstOrNull()
 
+    /** 扫描文件夹管理：列出已添加目录，逐个删除、或添加新目录。 */
+    private fun showTreeManageDialog() {
+        val roots = savedTreeUris()
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(dp(18f), dp(8f), dp(18f), dp(8f))
+        }
+        if (roots.isEmpty()) {
+            box.addView(android.widget.TextView(this).apply {
+                text = "尚未添加扫描文件夹"
+                textSize = 14f
+                setTextColor(getColor(R.color.text_hint))
+            })
+        } else {
+            for (uri in roots) {
+                val label = uri.lastPathSegment?.substringAfterLast(':').ifBlank { "文件夹" } ?: "文件夹"
+                val row = android.widget.LinearLayout(this).apply {
+                    orientation = android.widget.LinearLayout.HORIZONTAL
+                    gravity = android.view.Gravity.CENTER_VERTICAL
+                }
+                row.addView(android.widget.TextView(this).apply {
+                    text = label
+                    textSize = 15f
+                    setTextColor(getColor(R.color.text_primary))
+                    layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                row.addView(android.widget.TextView(this).apply {
+                    text = "移除"
+                    textSize = 14f
+                    setTextColor(getColor(R.color.text_hint))
+                    setPadding(dp(12f), dp(6f), dp(4f), dp(6f))
+                    setOnClickListener {
+                        val next = roots.filter { it.toString() != uri.toString() }
+                        if (next.isEmpty()) {
+                            prefs.edit().remove(KEY_TREES).remove(KEY_TREE).apply()
+                        } else {
+                            prefs.edit().putString(KEY_TREES, next.joinToString(",") { it.toString() }).apply()
+                        }
+                        library = null
+                        showTreeManageDialog()
+                        scanLibrary()
+                        toast("已移除「$label」")
+                    }
+                })
+                box.addView(row)
+            }
+        }
+        AlertDialog.Builder(this)
+            .setTitle("扫描文件夹")
+            .setView(box)
+            .setPositiveButton("添加文件夹") { _, _ -> treePicker.launch(null) }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
     private fun scanLibrary() {
         if (scanning) return
         scanning = true
@@ -1693,9 +1748,6 @@ class MainActivity : AppCompatActivity() {
         checkByTag(rgLibLayout, if (prefs.getString(KEY_LIB_LAYOUT, "grid") == "tree") 1 else 0)
         val rgSeekStep = view.findViewById<RadioGroup>(R.id.rgSeekStep)
         checkByTag(rgSeekStep, prefs.getInt(KEY_SEEK_STEP, 10))
-        view.findViewById<TextView>(R.id.btnLyricIdleColor).setOnClickListener {
-            showLyricIdleColorDialog()
-        }
         val chkAlarmPlay = view.findViewById<CheckBox>(R.id.chkAlarmPlay)
         chkAlarmPlay.isChecked = prefs.getBoolean(MediaPlaybackService.KEY_ALARM_ON, false)
         val chkAlarmOnce = view.findViewById<CheckBox>(R.id.chkAlarmOnce)
@@ -1778,7 +1830,7 @@ class MainActivity : AppCompatActivity() {
         }
         view.findViewById<Button>(R.id.btnChangeFolder).setOnClickListener {
             settingsDialog?.dismiss()
-            treePicker.launch(null)
+            showTreeManageDialog()
         }
         // 长按「添加扫描文件夹」：清除全部已添加根，回到空库（下次可重新添加）
         view.findViewById<Button>(R.id.btnChangeFolder).setOnLongClickListener {
@@ -1788,6 +1840,7 @@ class MainActivity : AppCompatActivity() {
                 .apply()
             library = null
             toast("已清除全部扫描文件夹")
+            scanLibrary()
             true
         }
         view.findViewById<Button>(R.id.btnAbout).setOnClickListener {
@@ -1856,6 +1909,15 @@ class MainActivity : AppCompatActivity() {
                 prefs.edit().putBoolean(KEY_DARK, checked).apply()
                 applyDarkMode(checked)
             }
+        })
+
+        // 非当前歌词颜色（配自定义背景图时避免看不清）
+        box.addView(android.widget.TextView(this).apply {
+            text = getString(R.string.lyric_idle_color_label)
+            textSize = 16f
+            setTextColor(getColor(R.color.text_primary))
+            setPadding(0, dp(14f), 0, 0)
+            setOnClickListener { showLyricIdleColorDialog() }
         })
 
         // 导航栏自定义
