@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import org.json.JSONObject
 import java.io.File
+import java.util.Locale
 import java.util.concurrent.Executors
 
 /**
@@ -58,11 +59,20 @@ object ArtistLoader {
                         if (artistCache.containsKey(uriStr)) return@synchronized
                     }
                     val artist = try {
-                        val retriever = MediaMetadataRetriever()
-                        retriever.setDataSource(appContext, song.uri)
-                        val a = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
-                        retriever.release()
-                        a
+                        // MP3 用自解析读 ARTIST（MMR 对坏 UTF-8 metadata 会 JNI abort 闪退）；
+                        // 其他格式 metadata 标准，MMR 安全
+                        val ext = song.uri.lastPathSegment
+                            ?.substringAfterLast('.', "")
+                            ?.lowercase(Locale.getDefault())
+                        if (ext == "mp3") {
+                            Id3TagReader.read(appContext, song.uri).second
+                        } else {
+                            val retriever = MediaMetadataRetriever()
+                            retriever.setDataSource(appContext, song.uri)
+                            val a = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                            retriever.release()
+                            a
+                        }
                     } catch (e: Exception) {
                         null
                     }

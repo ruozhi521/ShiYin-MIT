@@ -104,7 +104,7 @@ class LibraryScanner(
                             if (extOf(name) == "m4s") {
                                 m4sCandidates.add(Triple(uri, name, folder))
                             } else {
-                                val (tagTitle, tagArtist) = readTags(uri)
+                                val (tagTitle, tagArtist) = readTags(uri, name)
                                 // folderPath 为相对根目录完整路径（同名子文件夹不再合并）
                                 songsHere.add(
                                     Song(
@@ -147,7 +147,7 @@ class LibraryScanner(
             if (audioOnlyM4s.isNotEmpty()) audioOnlyM4s
             else m4sCandidates.filter { hasAudioTrack(it.first) }
         for ((uri, name, folder) in pickedM4s) {
-            val (tagTitle, tagArtist) = readTags(uri)
+            val (tagTitle, tagArtist) = readTags(uri, name)
             songsHere.add(
                 Song(
                     title = tagTitle?.takeIf { it.isNotBlank() } ?: stemOf(name),
@@ -184,18 +184,17 @@ class LibraryScanner(
         return extOf(name) in audioExts
     }
 
-    /** 读取内嵌标题/艺术家（读文件头，不整读）。失败返回 null，回退文件名/文件夹名。 */
-    private fun readTags(uri: Uri): Pair<String?, String?> {
-        // 优先用自己解析的 ID3 帧：严格按帧内 encoding 解码（UTF-16 自动 BOM）。
-        // MediaMetadataRetriever 对部分 UTF-16 标签会解出"部分乱码"（如序号数字地区），
-        // cleanTag 高占比判定可能被正常中文稀释判不出 → 必须先走自解析。
-        val parsed = try { Id3TagReader.read(context, uri) } catch (_: Exception) { null to null }
-        val pTitle = cleanTag(parsed.first)
-        val pArtist = cleanTag(parsed.second)
-        if (pTitle != null || pArtist != null) {
-            return pTitle to pArtist
+    /**
+     * 读取内嵌标题/艺术家。
+     * - **MP3 一律用 Id3TagReader 自解析**：MediaMetadataRetriever 对含非法 UTF-8 字节的
+     *   metadata 会触发 JNI NewStringUTF abort（SIGABRT，进程直接崩，try/catch 拦不住，
+     *   粉丝实测闪退即此）。自解析按帧字节解码，永不崩溃。
+     * - 其他格式（M4A/FLAC/WAV/AAC/OGG/m4s）metadata 为标准 UTF-8，MMR 风险低，保持原路径。
+     */
+    private fun readTags(uri: Uri, name: String): Pair<String?, String?> {
+        if (extOf(name) == "mp3") {
+            return Id3TagReader.read(context, uri)
         }
-        // 自解析读不到（非 ID3/mp3 用别格式内嵌标签）时，退回 MediaMetadataRetriever
         return try {
             val r = MediaMetadataRetriever()
             r.setDataSource(context, uri)
