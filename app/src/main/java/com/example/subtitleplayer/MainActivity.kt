@@ -2048,6 +2048,8 @@ class MainActivity : AppCompatActivity() {
     // ---------- 均衡器（调音） ----------
 
     private fun showEqualizerDialog() {
+        // 打开面板即确保 EQ 挂载（用户明确要调音），未配置过也能调；未播时仍需先放
+        playbackService?.ensureEqAttached()
         if (!AudioFxManager.isAttached) {
             toast(getString(R.string.eq_need_play))
             return

@@ -548,6 +548,20 @@ class MediaPlaybackService : Service() {
     /** 外部（播放页红心等）获取 Service 当前歌曲，不依赖 Activity 队列。 */
     fun currentSongSafe(): Song? = currentSong()
 
+    /** 用户打开均衡器面板时调用：确保 EQ 已挂载到当前播放器（即便未保存配置）。 */
+    fun ensureEqAttached() {
+        val mp = mediaPlayer ?: return
+        if (mp.audioSessionId == 0) return
+        try {
+            if (!AudioFxManager.isAttached) {
+                if (AudioFxManager.attach(mp.audioSessionId)) {
+                    AudioFxManager.restoreSaved(this)
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
     private fun playCurrent() {
         val song = currentSong() ?: return
         releasePlayer()
@@ -659,10 +673,14 @@ class MediaPlaybackService : Service() {
             }
             mp.prepareAsync()
             mediaPlayer = mp
-            // 挂载均衡器（每次新建播放器都需重新挂载）并恢复上次曲线
+            // 挂载均衡器（每次新建播放器都需重新挂载）并恢复上次曲线。
+            // 仅当用户配置过均衡器才 attach，否则全 0 的 audiofx.Equalizer 也会挂在 DAC
+            // 链路上，部分 DAC 机型低音量时引入可闻杂音。
             try {
-                if (AudioFxManager.attach(mp.audioSessionId)) {
-                    AudioFxManager.restoreSaved(this)
+                if (AudioFxManager.hasConfig(this)) {
+                    if (AudioFxManager.attach(mp.audioSessionId)) {
+                        AudioFxManager.restoreSaved(this)
+                    }
                 }
             } catch (_: Exception) {
             }

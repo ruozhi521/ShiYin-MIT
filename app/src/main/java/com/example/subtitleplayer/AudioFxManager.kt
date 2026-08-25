@@ -134,6 +134,15 @@ object AudioFxManager {
 
     fun currentPreset(c: Context): String = sp(c).getString(KEY_PRESET, "") ?: ""
 
+    /** 用户是否配置过均衡器（有保存曲线或选过预设）。未配置时不应 attach EQ，
+     *  否则一个全 0 的 audiofx.Equalizer 也会挂在 DAC 链路上，某些机型低音量引入噪声。 */
+    fun hasConfig(c: Context): Boolean {
+        val sp = sp(c)
+        val cur = sp.getString(KEY_CUR, "") ?: ""
+        val preset = sp.getString(KEY_PRESET, "") ?: ""
+        return cur.isNotBlank() || preset.isNotBlank()
+    }
+
     fun applyPreset(c: Context, name: String) {
         val g = PRESETS[name] ?: return
         val bands = resampleToDevice(g)
