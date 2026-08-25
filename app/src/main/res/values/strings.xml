@@ -75,6 +75,11 @@
     <string name="desktop_lyrics_alpha_0">不透明</string>
     <string name="desktop_lyrics_alpha_1">半透明</string>
     <string name="desktop_lyrics_alpha_2">更透明</string>
+    <string name="desktop_lyrics_alpha_3">全透明（无背景）</string>
+    <string name="desktop_lyrics_color">歌词文字颜色</string>
+    <string name="desktop_lyrics_color_title">选择桌面歌词文字颜色</string>
+    <string name="desktop_lyrics_color_saved">已设置桌面歌词文字颜色</string>
+    <string name="desktop_lyrics_color_reset">已恢复白色文字</string>
     <string name="mix_audio_label">与其他音频同时播放</string>
     <string name="mix_audio_hint">开启后不会因其他应用（视频/广告等）播放而暂停，适合边听歌边刷视频</string>
     <string name="alarm_play">定时开始播放</string>

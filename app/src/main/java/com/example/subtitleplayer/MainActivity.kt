@@ -1010,6 +1010,59 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
+    /** 桌面歌词文字颜色选择弹窗：与非当前歌词色板同一套预设。onPicked 供设置弹窗刷新按钮态。 */
+    private fun showDesktopLyricColorDialog(onPicked: ((Int) -> Unit)? = null) {
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val cell = (56 * resources.displayMetrics.density).toInt()
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(pad, pad, pad, pad)
+        }
+        val colors = LYRIC_IDLE_COLORS
+        var row = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL }
+        box.addView(row)
+        for (i in colors.indices) {
+            if (i > 0 && i % 3 == 0) {
+                row = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL }
+                box.addView(row)
+            }
+            val color = colors[i]
+            val v = TextView(this).apply {
+                text = ""
+                setBackgroundColor(color)
+                layoutParams = android.widget.LinearLayout.LayoutParams(cell, cell).apply {
+                    marginEnd = (12 * resources.displayMetrics.density).toInt()
+                    bottomMargin = (12 * resources.displayMetrics.density).toInt()
+                }
+            }
+            row.addView(v)
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.desktop_lyrics_color_title))
+            .setView(box)
+            .setNegativeButton(R.string.cancel, null)
+            .create()
+        @Suppress("UsePropertyAccessSyntax")
+        var idx = 0
+        outer@ for (i in 0 until box.childCount) {
+            val childRow = box.getChildAt(i) as android.widget.LinearLayout
+            for (c in 0 until childRow.childCount) {
+                val cellView = childRow.getChildAt(c)
+                val color = colors[idx]
+                idx++
+                cellView.setOnClickListener {
+                    prefs.edit().putInt(KEY_DESKTOP_COLOR, color).apply()
+                    playbackService?.refreshDesktopLyricsStyle()
+                    onPicked?.invoke(color)
+                    toast(getString(R.string.desktop_lyrics_color_saved))
+                    dialog.dismiss()
+                }
+                if (idx >= colors.size) break@outer
+            }
+        }
+        dialog.show()
+    }
+
     private fun showAccentDialog() {
         val pad = (16 * resources.displayMetrics.density).toInt()
         val cell = (64 * resources.displayMetrics.density).toInt()
@@ -1711,6 +1764,17 @@ class MainActivity : AppCompatActivity() {
         checkByTag(rgDesktopSize, prefs.getInt(KEY_DESKTOP_SIZE, 1))
         checkByTag(rgDesktopAlpha, prefs.getInt(KEY_DESKTOP_ALPHA, 1))
         chkLyricsLocked.isChecked = prefs.getBoolean(KEY_DESKTOP_LOCKED, false)
+        // 桌面歌词文字颜色：短按选色（即时生效），长按恢复默认白色
+        val btnDesktopColor = view.findViewById<Button>(R.id.btnDesktopColor)
+        btnDesktopColor.setOnClickListener {
+            showDesktopLyricColorDialog()
+        }
+        btnDesktopColor.setOnLongClickListener {
+            prefs.edit().putInt(KEY_DESKTOP_COLOR, DESKTOP_COLOR_DEFAULT).apply()
+            playbackService?.refreshDesktopLyricsStyle()
+            toast(getString(R.string.desktop_lyrics_color_reset))
+            true
+        }
         // 勾选/取消即时生效（含悬浮窗权限引导），避免用户忘了点确定
         chkDesktopLyrics.setOnCheckedChangeListener { _, checked ->
             lyricsGroup.visibility = if (checked) View.VISIBLE else View.GONE
@@ -2814,6 +2878,8 @@ class MainActivity : AppCompatActivity() {
             0xFFF59E0B.toInt(), 0xFFE0245E.toInt(), 0xFF06B6D4.toInt(),
             0xFF8B5CF6.toInt(), 0xFF4ADE80.toInt()
         )
+        private const val KEY_DESKTOP_COLOR = "desktop_lyrics_color"
+        private const val DESKTOP_COLOR_DEFAULT = -1 // 白色
         private val SPEED_LIST = floatArrayOf(1f, 1.5f, 2f, 3f, 4f)
         private const val KEY_ALARM_ON = "alarm_play_on"
         private const val KEY_ALARM_HOUR = "alarm_play_hour"

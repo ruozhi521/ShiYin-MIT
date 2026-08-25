@@ -154,7 +154,24 @@
                     android:tag="2"
                     android:text="@string/desktop_lyrics_alpha_2"
                     android:textColor="@color/text_primary" />
+
+                <RadioButton
+                    android:id="@+id/rbDesktopAlpha3"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:tag="3"
+                    android:text="@string/desktop_lyrics_alpha_3"
+                    android:textColor="@color/text_primary" />
             </RadioGroup>
+
+            <Button
+                android:id="@+id/btnDesktopColor"
+                style="@style/BtnStyle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/desktop_lyrics_color" />
 
             <CheckBox
                 android:id="@+id/chkLyricsLocked"

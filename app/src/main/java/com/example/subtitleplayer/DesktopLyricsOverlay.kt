@@ -14,7 +14,7 @@ import android.widget.TextView
 
 /**
  * 桌面歌词悬浮窗：在其他应用上层显示当前歌词行。
- * 支持拖动（未锁定时）、字号、背景透明度、位置记忆。
+ * 支持拖动（未锁定时）、字号、背景透明度、文字颜色、位置记忆。
  */
 class DesktopLyricsOverlay(context: Context) {
 
@@ -32,15 +32,20 @@ class DesktopLyricsOverlay(context: Context) {
         const val KEY_LOCKED = "desktop_lyrics_locked"
         const val KEY_SIZE = "desktop_lyrics_size"
         const val KEY_ALPHA = "desktop_lyrics_alpha"
+        const val KEY_COLOR = "desktop_lyrics_color"
         const val KEY_X = "desktop_lyrics_x"
         const val KEY_Y = "desktop_lyrics_y"
 
-        /** 背景透明度档位对应的背景色（0 不透明 / 1 半透明 / 2 更透明）。 */
+        /** 背景透明度档位对应的背景色（0 不透明 / 1 半透明 / 2 更透明 / 3 完全透明）。 */
         fun bgColor(alphaLevel: Int): Int = when (alphaLevel) {
             1 -> (0x99 shl 24) or 0x1E1E1E
             2 -> (0x66 shl 24) or 0x1E1E1E
+            3 -> Color.TRANSPARENT
             else -> -0x00E1E1E2 // 0xFF1E1E1E
         }
+
+        /** 文字颜色：-1 默认白色，其余为用户自选色值。 */
+        fun textColor(saved: Int): Int = if (saved == -1) Color.WHITE else saved
 
         fun sizeSp(level: Int): Float = when (level) {
             1 -> 15f
@@ -107,8 +112,17 @@ class DesktopLyricsOverlay(context: Context) {
     }
 
     private fun applyStyle(tv: TextView) {
+        val alphaLevel = prefs.getInt(KEY_ALPHA, 1)
         tv.setTextSize(sizeSp(prefs.getInt(KEY_SIZE, 0)))
-        tv.setBackgroundColor(bgColor(prefs.getInt(KEY_ALPHA, 1)))
+        tv.setBackgroundColor(bgColor(alphaLevel))
+        tv.setTextColor(textColor(prefs.getInt(KEY_COLOR, -1)))
+        if (alphaLevel >= 3) {
+            // 全透明背景：加淡阴影保证浅色壁纸上仍可读
+            val d = appContext.resources.displayMetrics.density
+            tv.setShadowLayer(4 * d, d, d, 0x66000000)
+        } else {
+            tv.clearShadowLayer()
+        }
     }
 
     private fun dp(v: Int): Int = (v * appContext.resources.displayMetrics.density).toInt()

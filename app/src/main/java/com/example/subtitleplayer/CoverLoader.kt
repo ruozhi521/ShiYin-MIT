@@ -11,8 +11,9 @@ import android.provider.MediaStore
 import java.util.concurrent.Executors
 
 /**
- * 读取音频内嵌封面（MediaMetadataRetriever.embeddedPicture）。
- * 后台线程加载 + 简单内存缓存，避免重复解码。
+ * 读取音频内嵌封面。
+ * 链路：APIC/FLAC 字节级解析（安全）→ MMR embeddedPicture（仅非 MP3，防 JNI abort）→
+ * MediaStore 专辑封面 → 歌单自定义封面。后台线程加载 + 简单内存缓存，避免重复解码。
  */
 object CoverLoader {
 
@@ -50,7 +51,11 @@ object CoverLoader {
         loadEmbeddedFallback(context, uri, targetSize, folder, cacheKey, callback)
     }
 
-    /** 常规封面链：内嵌 → APIC/FLAC → 专辑封面 → 歌单自定义封面兜底。 */
+    /**
+     * 常规封面链：APIC/FLAC 字节级解析 → MMR 内嵌（仅非 MP3）→ 专辑封面 → 歌单自定义封面。
+     * MP3 一律不走 MediaMetadataRetriever（乱码 metadata 会触发 native JNI abort，
+     * 与 Scanner/ArtistLoader 同一套规避约定）；字节级解析对无 ID3 头的格式快速返回 null，开销可忽略。
+     */
     private fun loadEmbeddedFallback(
         context: Context,
         uri: Uri,
@@ -62,35 +67,64 @@ object CoverLoader {
         val appContext = context.applicationContext
         pool.execute {
             val bmp = try {
-                val retriever = MediaMetadataRetriever()
-                retriever.setDataSource(appContext, uri)
-                val data = retriever.embeddedPicture
-                retriever.release()
-                if (data != null) {
-                    decodeScaled(data, targetSize)
+                val pic = Id3LyricsParser.extractEmbeddedPicture(appContext, uri)
+                    ?: Id3LyricsParser.extractFlacPicture(appContext, uri)
+                if (pic != null) {
+                    decodeScaled(pic, targetSize)
+                } else if (isMp3(uri)) {
+                    android.util.Log.d("ShiYinCover", "no apic/flac pic, skip mmr for mp3 uri=$uri")
+                    null
                 } else {
-                    // 高分辨率封面 embeddedPicture 可能返回 null：ID3v2 APIC / FLAC PICTURE 兜底
-                    val pic = Id3LyricsParser.extractEmbeddedPicture(appContext, uri)
-                        ?: Id3LyricsParser.extractFlacPicture(appContext, uri)
-                    if (pic != null) {
-                        decodeScaled(pic, targetSize)
-                    } else {
-                        // 专辑封面（文件夹 cover.jpg）兜底
-                        albumArtFallback(appContext, uri, targetSize)
-                            // 歌单自定义封面兜底：文件夹设置了封面，里面歌曲同样显示
-                            ?: folder?.let { f ->
-                                CoverManager.playlistCover(appContext, f)
-                                    ?.path?.let { path -> decodeFileScaled(path, targetSize) }
-                            }
-                    }
+                    mmrEmbedded(appContext, uri, targetSize)
                 }
+                    // 专辑封面（文件夹 cover.jpg）兜底
+                    ?: albumArtFallback(appContext, uri, targetSize)
+                        // 歌单自定义封面兜底：文件夹设置了封面，里面歌曲同样显示
+                        ?: folder?.let { f ->
+                            CoverManager.playlistCover(appContext, f)
+                                ?.path?.let { path -> decodeFileScaled(path, targetSize) }
+                        }
             } catch (e: Exception) {
+                android.util.Log.d("ShiYinCover", "embedded fallback error uri=$uri err=${e.message}")
                 null
+            }
+            if (bmp == null) {
+                android.util.Log.d("ShiYinCover", "cover not found uri=$uri folder=$folder")
             }
             if (bmp != null) {
                 synchronized(cache) { cache[cacheKey] = bmp }
             }
             mainHandler.post { callback(bmp) }
+        }
+    }
+
+    /** uri 指向的文件是否为 mp3（document uri 末段带扩展名；解码失败按不匹配处理）。 */
+    private fun isMp3(uri: Uri): Boolean {
+        return try {
+            val seg = java.net.URLDecoder.decode(
+                uri.lastPathSegment ?: return false, "UTF-8"
+            ).lowercase()
+            seg.substringBefore('?').endsWith(".mp3")
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** MMR 提取内嵌封面：release 放 finally 防泄漏（泄漏会耗尽 fd 导致后续封面全部失败）。 */
+    private fun mmrEmbedded(context: Context, uri: Uri, targetSize: Int): Bitmap? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, uri)
+            val data = retriever.embeddedPicture
+            if (data != null) decodeScaled(data, targetSize) else null
+        } catch (e: Exception) {
+            android.util.Log.d("ShiYinCover", "mmrEmbedded failed uri=$uri err=${e.message}")
+            null
+        } finally {
+            try {
+                retriever.release()
+            } catch (e: Exception) {
+            }
         }
     }
 
