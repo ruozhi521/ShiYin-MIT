@@ -713,11 +713,11 @@ class MainActivity : AppCompatActivity() {
         selectModule(defaultModule())
         applyAppearance()
 
-        // 恢复上次选择的文件夹
-        val saved = prefs.getString(KEY_TREE, null)
-        if (saved != null) {
-            val uri = Uri.parse(saved)
-            if (hasPersistRead(uri)) {
+        // 恢复上次选择的文件夹（多文件夹 KEY_TREES；savedTreeUris 兼容旧单文件夹 KEY_TREE。
+        // 注意不能直接读 KEY_TREE——addTreeUri 写入 KEY_TREES 后会清掉它，读旧 key 会漏掉全部恢复）
+        val roots = savedTreeUris()
+        if (roots.isNotEmpty()) {
+            if (roots.all { hasPersistRead(it) }) {
                 if (prefs.getBoolean(KEY_AUTO_SCAN, false)) {
                     scanLibrary()
                 } else {
