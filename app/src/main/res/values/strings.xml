@@ -97,6 +97,11 @@
     <string name="trans_partial_fail">部分歌词未能翻译（%1$d 行），可重试</string>
     <string name="trans_all_fail">翻译失败，请检查 API 配置或网络</string>
     <string name="trans_ok">翻译完成</string>
+    <string name="trans_delete_confirm">删除这首歌的全部翻译？删除后可重新翻译</string>
+    <string name="trans_deleted">已删除本歌翻译</string>
+    <string name="trans_none">这首歌还没有保存过翻译</string>
+    <string name="trans_busy">正在翻译中，请稍后再试</string>
+    <string name="delete">删除</string>
     <string name="trans_privacy">API Key 仅保存在本机，不会上传或写入代码。翻译为逐行输出，个别行可能因模型策略缺失，会自动跳过其余行。</string>
     <string name="trans_saved">已保存翻译配置</string>
     <string name="auto_trans">自动翻译非中文歌词</string>
@@ -105,7 +110,7 @@
     <string name="auto_trans_confirm_msg">开启后，播放外语歌曲时会自动翻译歌词。\n\n· 只翻译非中文歌词（含中文占比高的歌曲不会触发）\n· 每首歌只翻译一遍，结果本地缓存，不会重复扣费\n\n翻译使用「翻译设置」中配置的 API。</string>
     <string name="auto_trans_ok">已开启自动翻译：仅翻译非中文歌词，每首歌只翻一遍</string>
     <string name="enable">开启</string>
-    <string name="about_version">版本 1.29</string>
+    <string name="about_version">版本 1.30</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>
@@ -187,4 +192,12 @@
     <string name="lyric_idle_color_title">选择非当前歌词颜色</string>
     <string name="lyric_idle_color_saved">已设置非当前歌词颜色</string>
     <string name="lyric_idle_color_reset">已恢复默认颜色</string>
+    <string name="lyric_cur_color_label">播放中歌词颜色</string>
+    <string name="lyric_cur_color_title">选择播放中歌词颜色（12 色）</string>
+    <string name="lyric_cur_color_saved">已设置播放中歌词颜色</string>
+    <string name="lyric_cur_color_reset">已恢复跟随主题色</string>
+    <string name="seekbar_color_label">进度条颜色</string>
+    <string name="seekbar_color_title">选择进度条颜色（12 色）</string>
+    <string name="seekbar_color_saved">已设置进度条颜色</string>
+    <string name="seekbar_color_reset">已恢复跟随主题色</string>
 </resources>

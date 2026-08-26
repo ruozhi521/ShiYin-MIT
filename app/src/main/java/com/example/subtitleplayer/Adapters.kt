@@ -104,6 +104,7 @@ class LyricAdapter(
     private var lyricSizeSp = 18f
     private var fontMode = 0
     private var idleColor = -1 // -1 = 默认 text_normal
+    private var curColor = -1 // -1 = 跟随主题色（1.30）
     private var translations: Map<Int, String> = emptyMap()
 
     fun submit(list: List<SubtitleLine>) {
@@ -117,10 +118,11 @@ class LyricAdapter(
         notifyDataSetChanged()
     }
 
-    fun applyStyle(sizeSp: Int, font: Int, idleColorArgb: Int = -1) {
+    fun applyStyle(sizeSp: Int, font: Int, idleColorArgb: Int = -1, curColorArgb: Int = -1) {
         lyricSizeSp = sizeSp.toFloat()
         fontMode = font
         idleColor = idleColorArgb
+        curColor = curColorArgb
         notifyDataSetChanged()
     }
 
@@ -159,7 +161,8 @@ class LyricAdapter(
         }
         if (isCurrent) {
             holder.itemView.setBackgroundResource(R.drawable.bg_current_line)
-            val accent = ThemeManager.accent(holder.text.context)
+            // 1.30：自定义播放中歌词色优先，未设置时跟随主题色
+            val accent = if (curColor != -1) curColor else ThemeManager.accent(holder.text.context)
             holder.text.setTextColor(accent)
             holder.trans.setTextColor(ThemeManager.accentDark(accent))
         } else {

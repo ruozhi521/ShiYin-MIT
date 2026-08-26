@@ -237,9 +237,11 @@ class MainActivity : AppCompatActivity() {
             updateNowLyric(-1)
             lastSong = song
             transFailedLines = emptyList()
-            translating = false
-            btnTranslate.isEnabled = true
-            btnTranslate.text = getString(R.string.translate)
+            // 翻译请求在途时不重置 translating / 按钮，防止跨歌并发翻译导致译文串歌（1.30）
+            if (!translating) {
+                btnTranslate.isEnabled = true
+                btnTranslate.text = getString(R.string.translate)
+            }
             // 切歌后倍速按钮回到 1x（Service 已重置播放速度）
             btnSpeed.text = "1x"
             val cachedTrans = song?.let { translationCache[it.uri.toString()] } ?: emptyMap()
@@ -624,6 +626,11 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnTranslate).setOnClickListener {
             translateCurrentLyric()
         }
+        // 长按翻译按钮：删除当前歌曲的翻译（1.30）
+        findViewById<Button>(R.id.btnTranslate).setOnLongClickListener {
+            deleteCurrentTranslation()
+            true
+        }
         findViewById<ImageButton>(R.id.btnPrev).setOnClickListener {
             playbackService?.playPrev()
         }
@@ -919,10 +926,15 @@ class MainActivity : AppCompatActivity() {
     private fun applyAccent() {
         val a = ThemeManager.accent(this)
         val list = android.content.res.ColorStateList.valueOf(a)
-        seekBar.progressTintList = list
-        seekBar.thumbTintList = list
-        miniSeekBar.progressTintList = list
-        miniSeekBar.thumbTintList = list
+        // 1.30：进度条独立配色，未设置时跟随主题色
+        val sb = prefs.getInt(KEY_SEEKBAR_COLOR, SB_DEFAULT)
+        val sbList = android.content.res.ColorStateList.valueOf(if (sb == SB_DEFAULT) a else sb)
+        seekBar.progressTintList = sbList
+        seekBar.thumbTintList = sbList
+        miniSeekBar.progressTintList = sbList
+        miniSeekBar.thumbTintList = sbList
+        seekVideo.progressTintList = sbList
+        seekVideo.thumbTintList = sbList
         // 播放键图标保持白色（背景由全局遍历 tint，图标 tint 会与背景同色消失）
         // CD 圆形底（bg_play_circle）与全局按钮跟随主题色
         imgCd.backgroundTintList = list
@@ -955,16 +967,29 @@ class MainActivity : AppCompatActivity() {
         return if (saved == IDLE_DEFAULT) getColor(R.color.text_normal) else saved
     }
 
-    /** 非当前歌词颜色选择弹窗：预设色板。onPicked 供主题弹窗实时刷新圆点。 */
-    private fun showLyricIdleColorDialog(onPicked: ((Int) -> Unit)? = null) {
+    /** 当前生效的播放中歌词颜色（未自定义时跟随主题色）。 */
+    private fun currentCurColor(): Int {
+        val saved = prefs.getInt(KEY_LYRIC_CUR_COLOR, CUR_DEFAULT)
+        return if (saved == CUR_DEFAULT) ThemeManager.accent(this) else saved
+    }
+
+    /** 当前生效的进度条颜色（未自定义时跟随主题色）。 */
+    private fun currentSeekColor(): Int {
+        val saved = prefs.getInt(KEY_SEEKBAR_COLOR, SB_DEFAULT)
+        return if (saved == SB_DEFAULT) ThemeManager.accent(this) else saved
+    }
+
+    /**
+     * 通用色板网格弹窗（1.30 抽公共实现）：每行 3 个色块，
+     * 点击回调 onPicked（保存/应用/关弹窗由调用方决定）。
+     */
+    private fun showColorGridDialog(titleRes: Int, colors: IntArray, onPicked: (Int) -> Unit) {
         val pad = (16 * resources.displayMetrics.density).toInt()
         val cell = (56 * resources.displayMetrics.density).toInt()
         val box = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
             setPadding(pad, pad, pad, pad)
         }
-        // 色块列表：纯色 8 个（白/黑/灰/橙/红/青/紫/绿）。每行 3 个。
-        val colors = LYRIC_IDLE_COLORS
         var row = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL }
         box.addView(row)
         for (i in colors.indices) {
@@ -972,10 +997,9 @@ class MainActivity : AppCompatActivity() {
                 row = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL }
                 box.addView(row)
             }
-            val color = colors[i]
             val v = TextView(this).apply {
                 text = ""
-                setBackgroundColor(color)
+                setBackgroundColor(colors[i])
                 layoutParams = android.widget.LinearLayout.LayoutParams(cell, cell).apply {
                     marginEnd = (12 * resources.displayMetrics.density).toInt()
                     bottomMargin = (12 * resources.displayMetrics.density).toInt()
@@ -984,11 +1008,10 @@ class MainActivity : AppCompatActivity() {
             row.addView(v)
         }
         val dialog = AlertDialog.Builder(this)
-            .setTitle(getString(R.string.lyric_idle_color_title))
+            .setTitle(getString(titleRes))
             .setView(box)
             .setNegativeButton(R.string.cancel, null)
             .create()
-        // 给每个色块设点击：选颜色后保存 + 应用 + 关对话框
         @Suppress("UsePropertyAccessSyntax")
         var idx = 0
         outer@ for (i in 0 until box.childCount) {
@@ -998,10 +1021,7 @@ class MainActivity : AppCompatActivity() {
                 val color = colors[idx]
                 idx++
                 cellView.setOnClickListener {
-                    prefs.edit().putInt(KEY_LYRIC_IDLE_COLOR, color).apply()
-                    applyAppearance()
-                    onPicked?.invoke(color)
-                    toast(getString(R.string.lyric_idle_color_saved))
+                    onPicked(color)
                     dialog.dismiss()
                 }
                 if (idx >= colors.size) break@outer
@@ -1010,57 +1030,44 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
+    /** 非当前歌词颜色选择弹窗。onPicked 供主题弹窗实时刷新圆点。 */
+    private fun showLyricIdleColorDialog(onPicked: ((Int) -> Unit)? = null) {
+        showColorGridDialog(R.string.lyric_idle_color_title, LYRIC_IDLE_COLORS) { color ->
+            prefs.edit().putInt(KEY_LYRIC_IDLE_COLOR, color).apply()
+            applyAppearance()
+            onPicked?.invoke(color)
+            toast(getString(R.string.lyric_idle_color_saved))
+        }
+    }
+
+    /** 播放中歌词颜色选择弹窗：加宽色板，避免自定义背景下看不清（1.30）。 */
+    private fun showLyricCurColorDialog(onPicked: ((Int) -> Unit)? = null) {
+        showColorGridDialog(R.string.lyric_cur_color_title, PALETTE_12) { color ->
+            prefs.edit().putInt(KEY_LYRIC_CUR_COLOR, color).apply()
+            applyAppearance()
+            onPicked?.invoke(color)
+            toast(getString(R.string.lyric_cur_color_saved))
+        }
+    }
+
+    /** 进度条颜色选择弹窗：12 色板，长按可恢复跟随主题色（1.30）。 */
+    private fun showSeekbarColorDialog(onPicked: ((Int) -> Unit)? = null) {
+        showColorGridDialog(R.string.seekbar_color_title, PALETTE_12) { color ->
+            prefs.edit().putInt(KEY_SEEKBAR_COLOR, color).apply()
+            applyAccent()
+            onPicked?.invoke(color)
+            toast(getString(R.string.seekbar_color_saved))
+        }
+    }
+
     /** 桌面歌词文字颜色选择弹窗：与非当前歌词色板同一套预设。onPicked 供设置弹窗刷新按钮态。 */
     private fun showDesktopLyricColorDialog(onPicked: ((Int) -> Unit)? = null) {
-        val pad = (16 * resources.displayMetrics.density).toInt()
-        val cell = (56 * resources.displayMetrics.density).toInt()
-        val box = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            setPadding(pad, pad, pad, pad)
+        showColorGridDialog(R.string.desktop_lyrics_color_title, LYRIC_IDLE_COLORS) { color ->
+            prefs.edit().putInt(KEY_DESKTOP_COLOR, color).apply()
+            playbackService?.refreshDesktopLyricsStyle()
+            onPicked?.invoke(color)
+            toast(getString(R.string.desktop_lyrics_color_saved))
         }
-        val colors = LYRIC_IDLE_COLORS
-        var row = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL }
-        box.addView(row)
-        for (i in colors.indices) {
-            if (i > 0 && i % 3 == 0) {
-                row = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL }
-                box.addView(row)
-            }
-            val color = colors[i]
-            val v = TextView(this).apply {
-                text = ""
-                setBackgroundColor(color)
-                layoutParams = android.widget.LinearLayout.LayoutParams(cell, cell).apply {
-                    marginEnd = (12 * resources.displayMetrics.density).toInt()
-                    bottomMargin = (12 * resources.displayMetrics.density).toInt()
-                }
-            }
-            row.addView(v)
-        }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(getString(R.string.desktop_lyrics_color_title))
-            .setView(box)
-            .setNegativeButton(R.string.cancel, null)
-            .create()
-        @Suppress("UsePropertyAccessSyntax")
-        var idx = 0
-        outer@ for (i in 0 until box.childCount) {
-            val childRow = box.getChildAt(i) as android.widget.LinearLayout
-            for (c in 0 until childRow.childCount) {
-                val cellView = childRow.getChildAt(c)
-                val color = colors[idx]
-                idx++
-                cellView.setOnClickListener {
-                    prefs.edit().putInt(KEY_DESKTOP_COLOR, color).apply()
-                    playbackService?.refreshDesktopLyricsStyle()
-                    onPicked?.invoke(color)
-                    toast(getString(R.string.desktop_lyrics_color_saved))
-                    dialog.dismiss()
-                }
-                if (idx >= colors.size) break@outer
-            }
-        }
-        dialog.show()
     }
 
     private fun showAccentDialog() {
@@ -1940,6 +1947,60 @@ class MainActivity : AppCompatActivity() {
         }
         box.addView(idleRow)
 
+        // 播放中歌词颜色行（带当前色圆点；长按恢复跟随主题色，1.30）
+        val curRow = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(0, dp(14f), 0, dp(14f))
+        }
+        val curDot = View(this).apply {
+            setBackgroundColor(currentCurColor())
+            layoutParams = android.widget.LinearLayout.LayoutParams(dp(18f), dp(18f))
+        }
+        curRow.addView(curDot)
+        curRow.addView(android.widget.TextView(this).apply {
+            text = getString(R.string.lyric_cur_color_label)
+            textSize = 16f
+            setTextColor(getColor(R.color.text_primary))
+            setPadding(dp(12f), 0, 0, 0)
+        })
+        curRow.setOnClickListener { showLyricCurColorDialog { c -> curDot.setBackgroundColor(c) } }
+        curRow.setOnLongClickListener {
+            prefs.edit().putInt(KEY_LYRIC_CUR_COLOR, CUR_DEFAULT).apply()
+            applyAppearance()
+            curDot.setBackgroundColor(currentCurColor())
+            toast(getString(R.string.lyric_cur_color_reset))
+            true
+        }
+        box.addView(curRow)
+
+        // 进度条颜色行（带当前色圆点；长按恢复跟随主题色，1.30）
+        val sbRow = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(0, dp(14f), 0, dp(14f))
+        }
+        val sbDot = View(this).apply {
+            setBackgroundColor(currentSeekColor())
+            layoutParams = android.widget.LinearLayout.LayoutParams(dp(18f), dp(18f))
+        }
+        sbRow.addView(sbDot)
+        sbRow.addView(android.widget.TextView(this).apply {
+            text = getString(R.string.seekbar_color_label)
+            textSize = 16f
+            setTextColor(getColor(R.color.text_primary))
+            setPadding(dp(12f), 0, 0, 0)
+        })
+        sbRow.setOnClickListener { showSeekbarColorDialog { c -> sbDot.setBackgroundColor(c) } }
+        sbRow.setOnLongClickListener {
+            prefs.edit().putInt(KEY_SEEKBAR_COLOR, SB_DEFAULT).apply()
+            applyAccent()
+            sbDot.setBackgroundColor(currentSeekColor())
+            toast(getString(R.string.seekbar_color_reset))
+            true
+        }
+        box.addView(sbRow)
+
         // 深色模式开关（即时应用）
         box.addView(android.widget.Switch(this).apply {
             isChecked = prefs.getBoolean(KEY_DARK, false)
@@ -2590,8 +2651,8 @@ class MainActivity : AppCompatActivity() {
         btnTranslate.isEnabled = false
         btnTranslate.text = getString(R.string.translating)
 
-        val uriKey = lastSong?.uri?.toString() ?: ""
-        val cache = translationCache.getOrPut(uriKey) { HashMap() }
+        val reqKey = lastSong?.uri?.toString() ?: ""
+        val cache = translationCache.getOrPut(reqKey) { HashMap() }
         val toTranslate = if (transFailedLines.isNotEmpty()) {
             transFailedLines
         } else {
@@ -2615,23 +2676,25 @@ class MainActivity : AppCompatActivity() {
                 translating = false
                 btnTranslate.isEnabled = true
                 btnTranslate.text = getString(R.string.translate)
+                // 译文永远写进发起请求那首歌的缓存（reqKey），与当前播放哪首无关
                 cache.putAll(result.translations)
                 LyricTranslationCache.save(applicationContext, translationCache)
-                transFailedLines = toTranslate.filter { it.first !in result.translations }
-                lyricAdapter.setTranslations(
-                    translationCache[lastSong?.uri?.toString()] ?: emptyMap()
-                )
-                playbackService?.reloadLyricTranslations()
-                when {
-                    result.translations.isEmpty() && result.error != null ->
-                        showTransError("翻译失败：${result.error}")
-                    result.translations.isEmpty() ->
-                        toast(getString(R.string.trans_all_fail))
-                    transFailedLines.isNotEmpty() && result.error != null ->
-                        showTransError("部分翻译失败：${result.error}")
-                    transFailedLines.isNotEmpty() ->
-                        toast(getString(R.string.trans_partial_fail, transFailedLines.size))
-                    else -> toast(getString(R.string.trans_ok))
+                // 只有请求发起时的歌仍是当前歌，才刷新界面状态，避免旧歌数据串进新歌（1.30）
+                if (lastSong?.uri?.toString() == reqKey) {
+                    transFailedLines = toTranslate.filter { it.first !in result.translations }
+                    lyricAdapter.setTranslations(translationCache[reqKey] ?: emptyMap())
+                    playbackService?.reloadLyricTranslations()
+                    when {
+                        result.translations.isEmpty() && result.error != null ->
+                            showTransError("翻译失败：${result.error}")
+                        result.translations.isEmpty() ->
+                            toast(getString(R.string.trans_all_fail))
+                        transFailedLines.isNotEmpty() && result.error != null ->
+                            showTransError("部分翻译失败：${result.error}")
+                        transFailedLines.isNotEmpty() ->
+                            toast(getString(R.string.trans_partial_fail, transFailedLines.size))
+                        else -> toast(getString(R.string.trans_ok))
+                    }
                 }
             }
         }.start()
@@ -2643,6 +2706,33 @@ class MainActivity : AppCompatActivity() {
             .setTitle(R.string.translate)
             .setMessage(msg)
             .setPositiveButton(R.string.close, null)
+            .show()
+    }
+
+    /** 删除当前歌曲已保存的翻译（长按翻译按钮触发，1.30）。 */
+    private fun deleteCurrentTranslation() {
+        val song = lastSong ?: return
+        val uriKey = song.uri.toString()
+        if (translationCache[uriKey].isNullOrEmpty()) {
+            toast(getString(R.string.trans_none))
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.translate)
+            .setMessage(R.string.trans_delete_confirm)
+            .setPositiveButton(R.string.delete) { _, _ ->
+                if (translating) {
+                    toast(getString(R.string.trans_busy))
+                    return@setPositiveButton
+                }
+                translationCache.remove(uriKey)
+                LyricTranslationCache.save(applicationContext, translationCache)
+                transFailedLines = emptyList()
+                lyricAdapter.setTranslations(emptyMap())
+                playbackService?.reloadLyricTranslations()
+                toast(getString(R.string.trans_deleted))
+            }
+            .setNegativeButton(R.string.cancel, null)
             .show()
     }
 
@@ -2785,10 +2875,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyAppearance() {
         val idleColor = prefs.getInt(KEY_LYRIC_IDLE_COLOR, IDLE_DEFAULT)
+        val curColor = prefs.getInt(KEY_LYRIC_CUR_COLOR, CUR_DEFAULT)
         lyricAdapter.applyStyle(
             prefs.getInt(KEY_LYRIC_SIZE, 18),
             prefs.getInt(KEY_LYRIC_FONT, 0),
-            if (idleColor == IDLE_DEFAULT) -1 else idleColor
+            if (idleColor == IDLE_DEFAULT) -1 else idleColor,
+            if (curColor == CUR_DEFAULT) -1 else curColor
         )
         val uiSize = prefs.getInt(KEY_UI_SIZE, 15)
         songAdapter.applyUiSize(uiSize)
@@ -2873,10 +2965,22 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_SEEK_STEP = "seek_step"
         private const val KEY_LYRIC_IDLE_COLOR = "lyric_idle_color"
         private const val IDLE_DEFAULT = 0 // -1 会与"未设"冲突，用 0 表示默认 text_normal
+        // 1.30：新增主题靛蓝（八种主题色的第一种），共 9 色，每行 3 个正好三行
         private val LYRIC_IDLE_COLORS = intArrayOf(
             0xFFFFFFFF.toInt(), 0xFF000000.toInt(), 0xFF9CA3AF.toInt(),
             0xFFF59E0B.toInt(), 0xFFE0245E.toInt(), 0xFF06B6D4.toInt(),
-            0xFF8B5CF6.toInt(), 0xFF4ADE80.toInt()
+            0xFF8B5CF6.toInt(), 0xFF4ADE80.toInt(), 0xFF4A6CF7.toInt()
+        )
+        private const val KEY_LYRIC_CUR_COLOR = "lyric_cur_color"
+        private const val CUR_DEFAULT = 0 // 0 = 未自定义，跟随主题色
+        private const val KEY_SEEKBAR_COLOR = "seekbar_color"
+        private const val SB_DEFAULT = 0 // 0 = 未自定义，跟随主题色
+        // 1.30：加宽 12 色板（非当前歌词 9 色 + 蓝/绿/粉三个主题色），播放中歌词与进度条共用
+        private val PALETTE_12 = intArrayOf(
+            0xFFFFFFFF.toInt(), 0xFF000000.toInt(), 0xFF9CA3AF.toInt(),
+            0xFFF59E0B.toInt(), 0xFFE0245E.toInt(), 0xFF06B6D4.toInt(),
+            0xFF8B5CF6.toInt(), 0xFF4ADE80.toInt(), 0xFF4A6CF7.toInt(),
+            0xFF1976D2.toInt(), 0xFF0E9F6E.toInt(), 0xFFEC4899.toInt()
         )
         private const val KEY_DESKTOP_COLOR = "desktop_lyrics_color"
         private const val DESKTOP_COLOR_DEFAULT = -1 // 白色
