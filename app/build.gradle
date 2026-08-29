@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
 }
@@ -22,8 +22,8 @@ android {
         applicationId "com.example.subtitleplayer"
         minSdk 26
         targetSdk 34
-        versionCode 19
-        versionName "1.30"
+        versionCode 20
+        versionName "1.31"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 

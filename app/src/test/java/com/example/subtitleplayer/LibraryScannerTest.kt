@@ -198,4 +198,34 @@ class LibraryScannerTest {
     fun `统计表缺失的相对路径视为唯一`() {
         assertEquals("Music", LibraryScanner.mergedFolderName("根A", "Music", emptyMap()))
     }
+
+    // ---- 文件夹路径后缀对齐（1.31：多根前缀重命名前后混用仍可匹配）----
+
+    @Test
+    fun `歌单带根前缀而歌词 key 不带时仍可匹配`() {
+        // 新扫描后歌单名变 "Download/周杰伦"，歌词 map 还是旧 key "周杰伦/歌名"
+        val lyrics = mutableMapOf<String, LyricRef>()
+        register(lyrics, "周杰伦", "歌名.mp3.vtt")
+        val hit = LibraryScanner.findLyric(song("歌名.mp3", "Download/周杰伦"), lyrics)
+        assertNotNull(hit)
+        assertEquals("歌名.mp3.vtt", hit!!.displayName)
+    }
+
+    @Test
+    fun `歌词 key 带根前缀而歌单不带时仍可匹配`() {
+        val lyrics = mutableMapOf<String, LyricRef>()
+        register(lyrics, "Download/周杰伦", "歌名.mp3.vtt")
+        val hit = LibraryScanner.findLyric(song("歌名.mp3", "周杰伦"), lyrics)
+        assertNotNull(hit)
+        assertEquals("歌名.mp3.vtt", hit!!.displayName)
+    }
+
+    @Test
+    fun `后缀对齐命中多份时拒绝匹配不串行`() {
+        // 两个根的同名子文件夹消歧后各有一份同名歌词，folder 只给 "Music" 无法区分 → 拒配
+        val lyrics = mutableMapOf<String, LyricRef>()
+        register(lyrics, "根A/Music", "歌名.mp3.vtt")
+        register(lyrics, "根B/Music", "歌名.mp3.vtt")
+        assertNull(LibraryScanner.findLyric(song("歌名.mp3", "Music"), lyrics))
+    }
 }

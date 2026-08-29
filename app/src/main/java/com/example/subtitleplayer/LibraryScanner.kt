@@ -376,9 +376,17 @@ class LibraryScanner(
             fileNameFromUri(song.uri).takeIf { it.isNotBlank() }?.let { nameStems.add(it) }
             if (song.fileStem.isNotBlank()) nameStems.add(song.fileStem)
             val lowerNameStems = nameStems.map { lower(it) }
-            // 同一歌词的双 key（歌名.mp3 + 歌名 指向同一 ref）先去重再计数
+            // 同一歌词的双 key（歌名.mp3 + 歌名 指向同一 ref）先去重再计数。
+            // 文件夹按路径后缀对齐（1.31）：多根合并会给歌单加「根名/」前缀，重命名前后
+            // 新旧数据可能一边带前缀一边不带（歌单名已改、歌词 key 未跟上，或反之）。
+            // key 的文件夹与 song.folder 呈路径后缀关系即视为同一文件夹；
+            // 仍要求全局唯一命中，跨根同名文件夹各有一份时数量 > 1 拒配，绝不串行。
             val matches = lyrics.filterKeys { k ->
-                val inFolder = k.startsWith("$folder/") || !k.contains('/')
+                val kf = if (k.contains('/')) k.substringBeforeLast('/') else ""
+                val inFolder = kf.isEmpty() ||
+                    kf == folder ||
+                    kf.endsWith("/$folder") ||
+                    folder.endsWith("/$kf")
                 inFolder && lowerNameStems.any { st -> k == st || k.endsWith("/$st") }
             }.values.distinct()
             return if (matches.size == 1) matches.first() else null

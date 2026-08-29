@@ -156,6 +156,8 @@ class MainActivity : AppCompatActivity() {
     private var lastSong: Song? = null
     private var translating = false
     private var transFailedLines: List<Pair<Int, String>> = emptyList()
+    /** 本次会话是否已执行过断点续播（后台静默重扫不再重复拉起）。 */
+    private var resumedLastSong = false
     private val translationCache by lazy {
         LyricTranslationCache.load(this)
     }
@@ -445,6 +447,10 @@ class MainActivity : AppCompatActivity() {
             override fun onSurfaceTextureSizeChanged(
                 st: android.graphics.SurfaceTexture, width: Int, height: Int
             ) {
+                // 方向切换/布局变化后画面区域尺寸变了，必须重新适配（1.31）。
+                // 之前留空导致沿用旧 matrix：打开视频页时系统先按竖屏布局回调 available，
+                // 随即转横屏，旧 matrix 把画面缩放平移到已不存在的区域——只看到视频最上方的部分。
+                fitVideoSurface(width, height)
             }
 
             override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean {
@@ -729,6 +735,8 @@ class MainActivity : AppCompatActivity() {
                     scanLibrary()
                 } else {
                     loadCachedLibrary()
+                    // 缓存秒开后后台静默重扫：已导入文件夹新加的文件自动出现（1.31）
+                    scanLibrary(silent = true)
                 }
             } else {
                 toast(getString(R.string.choose_folder_again))
@@ -1142,6 +1150,12 @@ class MainActivity : AppCompatActivity() {
      */
     private fun showPage(p: Page, slide: Int = 0) {
         page = p
+        if (p == Page.LYRICS) {
+            // 进入歌词页直接定位到当前播放行（1.31）：
+            // 清掉手动滑动冷却，否则刚滑过就切页会停在原处
+            lastLyricUserScroll = 0
+            scrollToLyric(currentLyricHighlight)
+        }
         if (p == Page.PLAYER) {
             exitImmersion()
             scheduleImmersion()
@@ -1274,10 +1288,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun treeUri(): Uri? = savedTreeUris().firstOrNull()
 
-    private fun scanLibrary() {
+    /**
+     * 扫描音乐库。
+     * @param silent 静默模式（启动时后台刷新）：不弹「扫描中」，仅当库内容有变化才提示，
+     *               让「已导入文件夹新增的文件」不用手动重新扫描就能出现（1.31）
+     */
+    private fun scanLibrary(silent: Boolean = false) {
         if (scanning) return
         scanning = true
-        toast(getString(R.string.scanning))
+        if (!silent) toast(getString(R.string.scanning))
         Thread {
             val roots = savedTreeUris()
             val lib = try {
@@ -1291,22 +1310,37 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 scanning = false
                 when {
-                    lib == null -> toast(getString(R.string.choose_folder_again))
-                    lib.allSongs.isEmpty() -> toast(getString(R.string.no_audio))
+                    lib == null -> if (!silent) toast(getString(R.string.choose_folder_again))
+                    lib.allSongs.isEmpty() -> if (!silent) toast(getString(R.string.no_audio))
                     else -> {
+                        val changed = library?.allSongs?.size != lib.allSongs.size ||
+                            library?.playlists?.size != lib.playlists.size
                         library = lib
-                        toast(
-                            getString(
-                                R.string.loaded_summary,
-                                lib.allSongs.size,
-                                lib.playlists.size
+                        if (!silent || changed) {
+                            toast(
+                                getString(
+                                    R.string.loaded_summary,
+                                    lib.allSongs.size,
+                                    lib.playlists.size
+                                )
                             )
-                        )
+                        }
                         onLibraryReady()
+                        refreshOpenViews()
                     }
                 }
             }
         }.start()
+    }
+
+    /** 扫描完成后刷新已打开的列表页，让新增/改名立即生效（1.31）。 */
+    private fun refreshOpenViews() {
+        if (page == Page.PLAYLIST) {
+            val name = txtPlaylistTitle.text.toString()
+            playlistList().firstOrNull { it.name == name }?.let { openPlaylist(it) }
+        } else if (page == Page.FAVORITES) {
+            openFavorites()
+        }
     }
 
     private fun onLibraryReady() {
@@ -1493,6 +1527,9 @@ class MainActivity : AppCompatActivity() {
     // ---------- 播放（委托服务） ----------
 
     private fun maybeResumeLastSong() {
+        // 每次会话只恢复一次：后台静默重扫替换 library 时不能再拉起播放（1.31）
+        if (resumedLastSong) return
+        resumedLastSong = true
         val lib = library ?: return
         val sp = getSharedPreferences("play_state", Context.MODE_PRIVATE)
         val uriStr = sp.getString(MediaPlaybackService.KEY_LAST_URI, null) ?: return
@@ -2510,6 +2547,14 @@ class MainActivity : AppCompatActivity() {
             requestedOrientation = target
         }
         if (changed && videoSurfaceAttached) {
+            // post 到下一帧：旋转刚触发时 view 尺寸可能还没完成重排，
+            // 立刻取 width/height 会拿到旧值（1.31 错位修复）
+            videoSurface.post {
+                if (videoSurfaceAttached && page == Page.VIDEO) {
+                    fitVideoSurface(videoSurface.width, videoSurface.height)
+                }
+            }
+        } else if (videoSurfaceAttached) {
             fitVideoSurface(videoSurface.width, videoSurface.height)
         }
     }

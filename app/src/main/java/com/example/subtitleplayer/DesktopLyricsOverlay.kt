@@ -80,11 +80,12 @@ class DesktopLyricsOverlay(context: Context) {
         p.gravity = Gravity.TOP or Gravity.START
         p.x = prefs.getInt(KEY_X, 0)
         p.y = prefs.getInt(KEY_Y, 0)
-        tv.setOnTouchListener(DragListener(tv, p))
-        wm.addView(tv, p)
         this.wm = wm
         this.view = tv
         this.params = p
+        applyLockFlags()
+        tv.setOnTouchListener(DragListener(tv, p))
+        wm.addView(tv, p)
         visible = true
     }
 
@@ -109,6 +110,30 @@ class DesktopLyricsOverlay(context: Context) {
     /** 字号/透明度设置变更后刷新样式（悬浮窗已显示时）。 */
     fun refreshStyle() {
         view?.let { applyStyle(it) }
+        applyLockFlags()
+    }
+
+    private fun locked(): Boolean = prefs.getBoolean(KEY_LOCKED, false)
+
+    /**
+     * 锁定状态同步到窗口触摸属性（1.31）：
+     * 锁定时加 FLAG_NOT_TOUCHABLE，手指点在歌词上直接穿透给下层应用；
+     * 解锁后恢复可触摸，才能重新拖动定位。
+     */
+    private fun applyLockFlags() {
+        val p = params ?: return
+        val tv = view ?: return
+        val want = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            (if (locked()) WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE else 0)
+        if (p.flags != want) {
+            p.flags = want
+            try {
+                wm?.updateViewLayout(tv, p)
+            } catch (e: Exception) {
+                // 窗口可能已移除
+            }
+        }
     }
 
     private fun applyStyle(tv: TextView) {
