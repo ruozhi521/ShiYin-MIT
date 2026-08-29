@@ -147,6 +147,8 @@ class MainActivity : AppCompatActivity() {
     private var videoDownX = 0f
     private var videoW = 0
     private var videoH = 0
+    /** 视频页是否处于全屏（系统栏已隐藏）。 */
+    private var videoImmersive = false
     private val videoLongPressHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var cdAnimator: ObjectAnimator? = null
 
@@ -1150,6 +1152,8 @@ class MainActivity : AppCompatActivity() {
      */
     private fun showPage(p: Page, slide: Int = 0) {
         page = p
+        // 视频页沉浸全屏：隐藏系统栏，把画面区域让给视频，收窄四周留白（1.31 优化）
+        if (p == Page.VIDEO) enterVideoImmersive() else exitVideoImmersive()
         if (p == Page.LYRICS) {
             // 进入歌词页直接定位到当前播放行（1.31）：
             // 清掉手动滑动冷却，否则刚滑过就切页会停在原处
@@ -1730,6 +1734,31 @@ class MainActivity : AppCompatActivity() {
             }
         }
         txtImmersiveLyric.text = parts.joinToString("\n")
+    }
+
+    /** 视频页全屏：隐藏系统状态栏/导航栏，画面区域最大化（1.31 收窄视频四周留白）。 */
+    private fun enterVideoImmersive() {
+        if (videoImmersive) return
+        videoImmersive = true
+        try {
+            androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)?.apply {
+                systemBarsBehavior =
+                    androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    /** 离开视频页：恢复系统栏。 */
+    private fun exitVideoImmersive() {
+        if (!videoImmersive) return
+        videoImmersive = false
+        try {
+            androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+                ?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        } catch (_: Exception) {
+        }
     }
 
     // ---------- 定时 / 设置 ----------
