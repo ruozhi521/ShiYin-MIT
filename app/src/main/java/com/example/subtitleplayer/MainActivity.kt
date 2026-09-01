@@ -604,7 +604,9 @@ class MainActivity : AppCompatActivity() {
         recyclerSearch.adapter = searchAdapter
 
         favoritesAdapter = SongAdapter(
-            hasLyric = { s -> library?.lyrics?.containsKey(s.uri.toString()) == true },
+            hasLyric = { s ->
+                library?.let { LibraryScanner.findLyric(s, it.lyrics) != null } ?: false
+            },
             onClick = { pos -> playSong(favoriteSongs, pos) },
             onLongClick = { showSongMenu(it) }
         )
@@ -1273,7 +1275,6 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- 扫描与数据 ----------
 
-    private var currentTreeUri: Uri? = null
     /** 已添加的扫描根目录 uri 列表（多文件夹）。 */
     private fun savedTreeUris(): List<Uri> =
         prefs.getString(KEY_TREES, null)
@@ -1818,6 +1819,7 @@ class MainActivity : AppCompatActivity() {
         val rgDesktopSize = view.findViewById<RadioGroup>(R.id.rgDesktopSize)
         val rgDesktopAlpha = view.findViewById<RadioGroup>(R.id.rgDesktopAlpha)
         val chkLyricsLocked = view.findViewById<CheckBox>(R.id.chkLyricsLocked)
+        val chkDesktopCenter = view.findViewById<CheckBox>(R.id.chkDesktopCenter)
         val chkMixAudio = view.findViewById<CheckBox>(R.id.chkMixAudio)
         chkMixAudio.isChecked = prefs.getBoolean(KEY_MIX_AUDIO, false)
         val chkPerSong = view.findViewById<CheckBox>(R.id.chkPerSong)
@@ -1837,6 +1839,7 @@ class MainActivity : AppCompatActivity() {
         checkByTag(rgDesktopSize, prefs.getInt(KEY_DESKTOP_SIZE, 1))
         checkByTag(rgDesktopAlpha, prefs.getInt(KEY_DESKTOP_ALPHA, 1))
         chkLyricsLocked.isChecked = prefs.getBoolean(KEY_DESKTOP_LOCKED, false)
+        chkDesktopCenter.isChecked = prefs.getBoolean(KEY_DESKTOP_CENTER, false)
         // 桌面歌词文字颜色：短按选色（即时生效），长按恢复默认白色
         val btnDesktopColor = view.findViewById<Button>(R.id.btnDesktopColor)
         btnDesktopColor.setOnClickListener {
@@ -1894,6 +1897,7 @@ class MainActivity : AppCompatActivity() {
                     .putInt(KEY_DESKTOP_SIZE, tagOf(rgDesktopSize))
                     .putInt(KEY_DESKTOP_ALPHA, tagOf(rgDesktopAlpha))
                     .putBoolean(KEY_DESKTOP_LOCKED, chkLyricsLocked.isChecked)
+                    .putBoolean(KEY_DESKTOP_CENTER, chkDesktopCenter.isChecked)
                     .putBoolean(KEY_MIX_AUDIO, chkMixAudio.isChecked)
                     .putBoolean(MediaPlaybackService.KEY_PER_SONG, chkPerSong.isChecked)
                     .putBoolean(MediaPlaybackService.KEY_ALARM_ONCE, chkAlarmOnce.isChecked)
@@ -2153,7 +2157,9 @@ class MainActivity : AppCompatActivity() {
         val rv = layoutInflater.inflate(R.layout.dialog_queue, null) as androidx.recyclerview.widget.RecyclerView
         var queueAdapter: SongAdapter? = null
         queueAdapter = SongAdapter(
-            hasLyric = { s -> library?.lyrics?.containsKey(s.uri.toString()) == true },
+            hasLyric = { s ->
+                library?.let { LibraryScanner.findLyric(s, it.lyrics) != null } ?: false
+            },
             onClick = { pos ->
                 playSong(currentSongs, pos)
                 queueAdapter?.setCurrentIndex(pos)
@@ -2696,17 +2702,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun translationConfig(): LyricTranslator.Config? {
-        val key = prefs.getString(KEY_TRANS_KEY, "")?.trim()
-        if (key.isNullOrEmpty()) return null
-        val base = prefs.getString(KEY_TRANS_BASE, "")?.trim().orEmpty()
-        val model = prefs.getString(KEY_TRANS_MODEL, "")?.trim().orEmpty()
-        return LyricTranslator.Config(
-            baseUrl = base.ifEmpty { DEFAULT_TRANS_BASE },
-            apiKey = key,
-            model = model.ifEmpty { DEFAULT_TRANS_MODEL }
+    private fun translationConfig(): LyricTranslator.Config? =
+        LyricTranslator.configFrom(
+            prefs.getString(KEY_TRANS_BASE, null),
+            prefs.getString(KEY_TRANS_KEY, null),
+            prefs.getString(KEY_TRANS_MODEL, null)
         )
-    }
 
     private fun translateCurrentLyric() {
         val lines = lyricLines
@@ -2821,30 +2822,8 @@ class MainActivity : AppCompatActivity() {
         if (translationConfig() == null) return
         val uriKey = song.uri.toString()
         if (translationCache.containsKey(uriKey)) return
-        if (isChineseLyric(lines)) return
+        if (LyricTranslator.isChinesePrimarily(lines)) return
         translateCurrentLyric()
-    }
-
-    /** 判断歌词是否为中文为主：含明显假名（日文）判定非中文；否则汉字占比 ≥ 30% 视为中文，不自动翻译。 */
-    private fun isChineseLyric(lines: List<SubtitleLine>): Boolean {
-        var cjk = 0
-        var kana = 0
-        var total = 0
-        for (line in lines) {
-            for (ch in line.text) {
-                if (ch.isWhitespace()) continue
-                total++
-                if (ch in '\u3040'..'\u30ff') {
-                    kana++ // 平假名/片假名
-                } else if (ch in '\u4e00'..'\u9fff') {
-                    cjk++
-                }
-            }
-        }
-        if (total == 0) return true
-        // 假名占比 ≥ 5% → 判定为日语（日汉字再多也照常翻译；日语歌假名通常占 30%+）
-        if (kana.toFloat() / total >= 0.05f) return false
-        return cjk.toFloat() / total >= 0.3f
     }
 
     private fun showAboutDialog() {
@@ -3034,6 +3013,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_DESKTOP_SIZE = "desktop_lyrics_size"
         private const val KEY_DESKTOP_ALPHA = "desktop_lyrics_alpha"
         private const val KEY_DESKTOP_LOCKED = "desktop_lyrics_locked"
+        private const val KEY_DESKTOP_CENTER = "desktop_lyrics_center"
         private const val KEY_MIX_AUDIO = "mix_audio"
         private const val KEY_LIB_LAYOUT = "lib_layout"
         private const val KEY_SEEK_STEP = "seek_step"
@@ -3062,8 +3042,6 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_ALARM_ON = "alarm_play_on"
         private const val KEY_ALARM_HOUR = "alarm_play_hour"
         private const val KEY_ALARM_MINUTE = "alarm_play_minute"
-        private const val DEFAULT_TRANS_BASE = "https://api.deepseek.com/v1"
-        private const val DEFAULT_TRANS_MODEL = "deepseek-v4-flash"
         private const val SUPPORT_URL = "https://www.ifdian.net/a/ruozhi521"
     }
 

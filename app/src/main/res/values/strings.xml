@@ -72,6 +72,7 @@
     <string name="desktop_lyrics_size_label">歌词字号</string>
     <string name="desktop_lyrics_alpha_label">背景透明度</string>
     <string name="desktop_lyrics_locked">锁定位置（不可拖动）</string>
+    <string name="desktop_lyrics_center">居中显示（水平始终居中，可上下拖动；修复横屏跑出屏幕）</string>
     <string name="desktop_lyrics_alpha_0">不透明</string>
     <string name="desktop_lyrics_alpha_1">半透明</string>
     <string name="desktop_lyrics_alpha_2">更透明</string>
@@ -110,7 +111,7 @@
     <string name="auto_trans_confirm_msg">开启后，播放外语歌曲时会自动翻译歌词。\n\n· 只翻译非中文歌词（含中文占比高的歌曲不会触发）\n· 每首歌只翻译一遍，结果本地缓存，不会重复扣费\n\n翻译使用「翻译设置」中配置的 API。</string>
     <string name="auto_trans_ok">已开启自动翻译：仅翻译非中文歌词，每首歌只翻一遍</string>
     <string name="enable">开启</string>
-    <string name="about_version">版本 1.31</string>
+    <string name="about_version">版本 1.32</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>

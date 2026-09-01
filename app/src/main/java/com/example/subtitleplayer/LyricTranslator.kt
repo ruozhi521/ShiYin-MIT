@@ -27,6 +27,47 @@ object LyricTranslator {
         val error: String?
     )
 
+    const val DEFAULT_BASE = "https://api.deepseek.com/v1"
+    const val DEFAULT_MODEL = "deepseek-v4-flash"
+
+    /**
+     * 从用户设置组装翻译配置（1.32 从 MainActivity 抽出）。
+     * key 未配置返回 null（调用方提示去设置）。
+     */
+    fun configFrom(base: String?, key: String?, model: String?): Config? {
+        if (key.isNullOrEmpty() || key.isBlank()) return null
+        return Config(
+            baseUrl = base?.trim().orEmpty().ifEmpty { DEFAULT_BASE },
+            apiKey = key.trim(),
+            model = model?.trim().orEmpty().ifEmpty { DEFAULT_MODEL }
+        )
+    }
+
+    /**
+     * 判断歌词是否以中文为主（1.32 从 MainActivity 抽出，纯逻辑便于单测）：
+     * 含明显假名（日文）判定非中文；否则汉字占比 ≥ 30% 视为中文。
+     */
+    fun isChinesePrimarily(lines: List<SubtitleLine>): Boolean {
+        var cjk = 0
+        var kana = 0
+        var total = 0
+        for (line in lines) {
+            for (ch in line.text) {
+                if (ch.isWhitespace()) continue
+                total++
+                if (ch in '\u3040'..'\u30ff') {
+                    kana++ // 平假名/片假名
+                } else if (ch in '\u4e00'..'\u9fff') {
+                    cjk++
+                }
+            }
+        }
+        if (total == 0) return true
+        // 假名占比 ≥ 5% → 判定为日语（日汉字再多也照常翻译；日语歌假名通常占 30%+）
+        if (kana.toFloat() / total >= 0.05f) return false
+        return cjk.toFloat() / total >= 0.3f
+    }
+
     private const val BATCH_SIZE = 15
     private const val CONNECT_TIMEOUT = 10000
     private const val READ_TIMEOUT = 60000

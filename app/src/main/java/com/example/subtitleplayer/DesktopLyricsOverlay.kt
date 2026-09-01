@@ -30,6 +30,7 @@ class DesktopLyricsOverlay(context: Context) {
     companion object {
         const val PREFS_NAME = "player"
         const val KEY_LOCKED = "desktop_lyrics_locked"
+        const val KEY_CENTER = "desktop_lyrics_center"
         const val KEY_SIZE = "desktop_lyrics_size"
         const val KEY_ALPHA = "desktop_lyrics_alpha"
         const val KEY_COLOR = "desktop_lyrics_color"
@@ -77,16 +78,16 @@ class DesktopLyricsOverlay(context: Context) {
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         )
-        p.gravity = Gravity.TOP or Gravity.START
-        p.x = prefs.getInt(KEY_X, 0)
         p.y = prefs.getInt(KEY_Y, 0)
         this.wm = wm
         this.view = tv
         this.params = p
+        applyCenterMode()
         applyLockFlags()
         tv.setOnTouchListener(DragListener(tv, p))
         wm.addView(tv, p)
         visible = true
+        clampIntoScreen()
     }
 
     fun hide() {
@@ -110,10 +111,70 @@ class DesktopLyricsOverlay(context: Context) {
     /** 字号/透明度设置变更后刷新样式（悬浮窗已显示时）。 */
     fun refreshStyle() {
         view?.let { applyStyle(it) }
+        applyCenterMode()
         applyLockFlags()
     }
 
     private fun locked(): Boolean = prefs.getBoolean(KEY_LOCKED, false)
+
+    private fun centered(): Boolean = prefs.getBoolean(KEY_CENTER, false)
+
+    /**
+     * 居中显示模式（1.32）：窗口水平居中于屏幕，歌词行宽变化时始终居中，
+     * 拖动只改纵向位置；横竖屏切换都不会跑出屏幕（横屏 bug 的根源就是
+     * 自由模式下记忆的 x 超出了旋转后的屏宽）。
+     */
+    private fun applyCenterMode() {
+        val p = params ?: return
+        val tv = view ?: return
+        val g = if (centered()) {
+            Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        } else {
+            Gravity.TOP or Gravity.START
+        }
+        val x = if (centered()) 0 else prefs.getInt(KEY_X, 0)
+        if (p.gravity != g || p.x != x) {
+            p.gravity = g
+            p.x = x
+            try {
+                wm?.updateViewLayout(tv, p)
+            } catch (e: Exception) {
+                // 窗口可能已移除
+            }
+        }
+    }
+
+    /**
+     * 显示后把窗口夹回屏幕范围内（1.32 横屏 bug 修复）：
+     * 竖屏记住的位置在横屏可能超出屏宽，反之亦然；居中模式无横向偏移不需要夹。
+     */
+    private fun clampIntoScreen() {
+        val tv = view ?: return
+        tv.post {
+            if (!visible) return@post
+            val p = params ?: return@post
+            val dm = appContext.resources.displayMetrics
+            var nx = p.x
+            var ny = p.y
+            if (centered()) {
+                nx = 0
+            } else if (tv.width > 0) {
+                nx = p.x.coerceIn(0, (dm.widthPixels - tv.width).coerceAtLeast(0))
+            }
+            if (tv.height > 0) {
+                ny = p.y.coerceIn(0, (dm.heightPixels - tv.height).coerceAtLeast(0))
+            }
+            if (nx != p.x || ny != p.y) {
+                p.x = nx
+                p.y = ny
+                try {
+                    wm?.updateViewLayout(tv, p)
+                } catch (e: Exception) {
+                }
+                prefs.edit().putInt(KEY_X, nx).putInt(KEY_Y, ny).apply()
+            }
+        }
+    }
 
     /**
      * 锁定状态同步到窗口触摸属性（1.31）：
@@ -153,7 +214,10 @@ class DesktopLyricsOverlay(context: Context) {
 
     private fun dp(v: Int): Int = (v * appContext.resources.displayMetrics.density).toInt()
 
-    /** 拖动监听：锁定开关关闭时可拖动，松手记忆位置。 */
+    /**
+     * 拖动监听：锁定开关关闭时可拖动，松手记忆位置。
+     * 居中模式下只允许上下拖（横向始终居中），只记忆 y。
+     */
     @SuppressLint("ClickableViewAccessibility")
     private inner class DragListener(
         private val tv: TextView,
@@ -181,7 +245,7 @@ class DesktopLyricsOverlay(context: Context) {
                     val dy = (e.rawY - downY).toInt()
                     if (Math.abs(dx) > 8 || Math.abs(dy) > 8) moved = true
                     if (moved) {
-                        p.x = startX + dx
+                        if (!centered()) p.x = startX + dx
                         p.y = startY + dy
                         wm?.updateViewLayout(tv, p)
                     }
@@ -189,7 +253,10 @@ class DesktopLyricsOverlay(context: Context) {
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (moved) {
-                        prefs.edit().putInt(KEY_X, p.x).putInt(KEY_Y, p.y).apply()
+                        prefs.edit()
+                            .putInt(KEY_X, if (centered()) 0 else p.x)
+                            .putInt(KEY_Y, p.y)
+                            .apply()
                     }
                     moved = false
                     return true
