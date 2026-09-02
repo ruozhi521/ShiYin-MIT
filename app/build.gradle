@@ -65,6 +65,10 @@ dependencies {
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'androidx.recyclerview:recyclerview:1.3.2'
+    // ExoPlayer（Media3）兜底播放引擎：个别 Android 16 机型 MediaPlayer 出声即报
+    // -19(ENODEV)（实测 vivo V2324HA），自动切 ExoPlayer 可正常播放；正常机型不触发
+    implementation 'androidx.media3:media3-exoplayer:1.5.1'
+    implementation 'androidx.media3:media3-common:1.5.1'
     // 词幕（LyricOn）状态栏歌词 Provider SDK（Apache-2.0）
     implementation 'io.github.proify.lyricon:provider:0.1.70'
 

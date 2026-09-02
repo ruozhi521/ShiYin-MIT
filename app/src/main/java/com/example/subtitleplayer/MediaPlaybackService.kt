@@ -76,6 +76,13 @@ class MediaPlaybackService : Service() {
     private var listener: Listener? = null
 
     private var mediaPlayer: MediaPlayer? = null
+    /**
+     * ExoPlayer 兜底引擎（1.33）：个别 Android 16 机型 MediaPlayer 出声即报
+     * -19(ENODEV)（均衡器/音频属性均已排除），切 ExoPlayer 恢复正常。
+     * 仅在 MediaPlayer 自愈失败后启用（useExo），正常机型永不触碰，行为不变。
+     */
+    private var exoPlayer: androidx.media3.exoplayer.ExoPlayer? = null
+    private var useExo = false
     /** 视频 surface（视频页绑定时记录；切歌/循环后新播放器需重新绑定画面）。 */
     private var attachedVideoSurface: android.view.Surface? = null
     /** 解码后的真实视频尺寸（含旋转修正，区别于 MediaMetadataRetriever 的存储方向）。 */
@@ -134,9 +141,8 @@ class MediaPlaybackService : Service() {
 
     private val progressRunnable = object : Runnable {
         override fun run() {
-            val mp = mediaPlayer
-            if (mp != null && isPrepared) {
-                val pos = mp.currentPosition
+            if (isPrepared) {
+                val pos = enginePosition()
                 listener?.onProgress(pos, durationMs, lyricIndexAt(pos))
                 desktopLyrics?.updateText(lyricTextAt(pos))
                 tick++
@@ -266,8 +272,7 @@ class MediaPlaybackService : Service() {
         handler.removeCallbacks(progressRunnable)
         desktopLyrics?.hide()
         abandonFocus()
-        mediaPlayer?.release()
-        mediaPlayer = null
+        releasePlayer()
         mediaSession?.release()
         mediaSession = null
         super.onDestroy()
@@ -323,8 +328,30 @@ class MediaPlaybackService : Service() {
 
     fun currentIndex(): Int = index
 
+    /** 当前引擎是否正在出声（两引擎通用）。 */
+    private fun engineIsPlaying(): Boolean = try {
+        if (useExo) exoPlayer?.isPlaying == true else mediaPlayer?.isPlaying == true
+    } catch (e: Exception) {
+        false
+    }
+
+    /** 当前引擎的播放位置（毫秒）。 */
+    private fun enginePosition(): Int = try {
+        if (useExo) (exoPlayer?.currentPosition ?: 0L).toInt()
+        else mediaPlayer?.currentPosition ?: 0
+    } catch (e: Exception) {
+        0
+    }
+
+    /** 当前引擎的音频会话 id（均衡器挂载用；未初始化返回 null）。 */
+    private fun engineAudioSessionId(): Int? = try {
+        if (useExo) exoPlayer?.audioSessionId else mediaPlayer?.audioSessionId
+    } catch (e: Exception) {
+        null
+    }
+
     fun togglePlay() {
-        if (mediaPlayer?.isPlaying == true) pause() else play()
+        if (engineIsPlaying()) pause() else play()
     }
 
     fun playPrev() {
@@ -368,10 +395,14 @@ class MediaPlaybackService : Service() {
     }
 
     fun seekTo(ms: Int) {
-        val mp = mediaPlayer ?: return
         if (!isPrepared) return
         try {
-            mp.seekTo(ms.coerceIn(0, durationMs))
+            if (useExo) {
+                exoPlayer?.seekTo(ms.coerceIn(0, durationMs).toLong())
+            } else {
+                val mp = mediaPlayer ?: return
+                mp.seekTo(ms.coerceIn(0, durationMs))
+            }
             // 刷新会话 position，通知进度与播放器同步（否则暂停时 seek 后通知停在旧位置）
             updateMediaSession(isPlaying())
         } catch (e: Exception) {
@@ -388,18 +419,23 @@ class MediaPlaybackService : Service() {
     /** 视频页：绑定画面 surface；传 null 表示脱离画面（setSurface(null) 后继续纯音频播放）。 */
     fun attachVideoSurface(surface: android.view.Surface?) {
         attachedVideoSurface = surface
-        val mp = mediaPlayer ?: return
         try {
-            if (surface != null) {
-                // 先清空再重设：强制重建渲染通道让画面输出。
-                // 注意：不在此处 pause/seek（seek 在部分设备会卡住解码器导致进度冻结），
-                // 播放/暂停一律走 Service 的 play()/pause() 保持状态一致。
-                mp.setSurface(null)
-                mp.setSurface(surface)
-                android.util.Log.d("ShiYinVideo", "attachVideoSurface: rebind surface")
+            if (useExo) {
+                // Exo 接受 null 表示脱离画面
+                exoPlayer?.setVideoSurface(surface)
             } else {
-                mp.setSurface(null)
-                android.util.Log.d("ShiYinVideo", "attachVideoSurface: detach")
+                val mp = mediaPlayer ?: return
+                if (surface != null) {
+                    // 先清空再重设：强制重建渲染通道让画面输出。
+                    // 注意：不在此处 pause/seek（seek 在部分设备会卡住解码器导致进度冻结），
+                    // 播放/暂停一律走 Service 的 play()/pause() 保持状态一致。
+                    mp.setSurface(null)
+                    mp.setSurface(surface)
+                    android.util.Log.d("ShiYinVideo", "attachVideoSurface: rebind surface")
+                } else {
+                    mp.setSurface(null)
+                    android.util.Log.d("ShiYinVideo", "attachVideoSurface: detach")
+                }
             }
         } catch (e: Exception) {
             android.util.Log.e("ShiYinVideo", "attachVideoSurface failed: ${e.message}")
@@ -409,10 +445,14 @@ class MediaPlaybackService : Service() {
     /** 播放速度（倍速用；1f 正常）。切歌/换播放器时重置为 1f。 */
     fun setSpeed(speed: Float) {
         this.speed = speed
-        val mp = mediaPlayer ?: return
         try {
             if (speed >= 0.5f && speed <= 16f) {
-                mp.playbackParams = android.media.PlaybackParams().setSpeed(speed)
+                if (useExo) {
+                    exoPlayer?.playbackSpeed = speed
+                } else {
+                    val mp = mediaPlayer ?: return
+                    mp.playbackParams = android.media.PlaybackParams().setSpeed(speed)
+                }
             }
         } catch (e: Exception) {
         }
@@ -420,11 +460,7 @@ class MediaPlaybackService : Service() {
 
     fun currentSpeed(): Float = speed
 
-    fun currentPosition(): Int = try {
-        mediaPlayer?.currentPosition ?: 0
-    } catch (e: Exception) {
-        0
-    }
+    fun currentPosition(): Int = enginePosition()
 
     fun currentDuration(): Int = durationMs
 
@@ -500,17 +536,17 @@ class MediaPlaybackService : Service() {
 
     /** 持久化当前歌曲与进度，供下次启动断点续播。 */
     private fun savePosition() {
-        val mp = mediaPlayer ?: return
         if (!isPrepared) return
         val song = currentSong() ?: return
+        val pos = enginePosition()
         statePrefs.edit()
             .putString(KEY_LAST_URI, song.uri.toString())
-            .putInt(KEY_LAST_POS, mp.currentPosition)
+            .putInt(KEY_LAST_POS, pos)
             .apply()
         // 每首歌独立进度（设置开启时）：记录 + 持久化
         if (perSongEnabled()) {
             loadPerSongPositions()
-            perSongPositions[song.uri.toString()] = mp.currentPosition
+            perSongPositions[song.uri.toString()] = pos
             persistPerSongPositions()
         }
     }
@@ -576,9 +612,9 @@ class MediaPlaybackService : Service() {
     /** 让新绑定的客户端立即拿到当前完整状态。 */
     fun pushState() {
         listener?.onSongChanged(currentSong(), lyricLines, lyricName)
-        val mp = mediaPlayer
-        if (mp != null && isPrepared) {
-            listener?.onProgress(mp.currentPosition, durationMs, lyricIndexAt(mp.currentPosition))
+        if (isPrepared) {
+            val pos = enginePosition()
+            listener?.onProgress(pos, durationMs, lyricIndexAt(pos))
         }
         listener?.onPlayStateChanged(isPlaying())
     }
@@ -592,11 +628,11 @@ class MediaPlaybackService : Service() {
 
     /** 用户打开均衡器面板时调用：确保 EQ 已挂载到当前播放器（即便未保存配置）。 */
     fun ensureEqAttached() {
-        val mp = mediaPlayer ?: return
-        if (mp.audioSessionId == 0) return
+        val sid = engineAudioSessionId() ?: return
+        if (sid == 0) return
         try {
             if (!AudioFxManager.isAttached) {
-                if (AudioFxManager.attach(mp.audioSessionId)) {
+                if (AudioFxManager.attach(sid)) {
                     AudioFxManager.restoreSaved(this)
                 }
             }
@@ -608,13 +644,20 @@ class MediaPlaybackService : Service() {
         val song = currentSong() ?: return
         releasePlayer()
         speed = 1f // 切歌/换播放器后倍速重置
-        PlaybackLog.log("playCurrent #$index ${song.uri.lastPathSegment}")
+        PlaybackLog.log(
+            "playCurrent #$index engine=${if (useExo) "exo" else "media"} ${song.uri.lastPathSegment}"
+        )
 
         loadLyric(song)
         lyriconBridge.syncSong(song, lyricLines, lyricTrans, 0)
         loadNotificationArtwork(song)
         listener?.onSongChanged(song, lyricLines, lyricName)
 
+        if (useExo) startExo(song) else startMp(song)
+    }
+
+    /** MediaPlayer 主引擎：所有正常机型的默认路径，行为与历史版本一致。 */
+    private fun startMp(song: Song) {
         val mp = MediaPlayer()
         try {
             // 显式声明音频用途：部分 Android 16 机型不设 Attributes 时 AudioTrack 打不开
@@ -641,39 +684,12 @@ class MediaPlaybackService : Service() {
             mp.setOnPreparedListener { player ->
                 isPrepared = true
                 // 注意：prepare 成功不代表能播放（部分机型 start 后解码才报错，
-                // 如 OriginOS 6 反馈），失败计数不在清零——由真正 start 成功时清零
+                // 如 OriginOS 6 反馈），失败计数不在清零——由稳定播放 3 秒后清零
                 // fMP4（m4s）duration 可能为 -1/0，兜底为 0（界面显示未知时长）
                 durationMs = player.duration.coerceAtLeast(0)
                 PlaybackLog.log("onPrepared dur=$durationMs uri=${currentSong()?.uri?.lastPathSegment}")
                 lyriconBridge.syncSong(currentSong(), lyricLines, lyricTrans, durationMs)
-                var resume = pendingResumeMs
-                pendingResumeMs = 0
-                // 每首歌独立进度：调用方没指定位置时，用该歌自己的记录（接近结尾不恢复）
-                var fromPerSong = false
-                if (resume <= 0) {
-                    val saved = perSongPos(currentSong())
-                    if (saved > 0 && durationMs > 5000 && saved < durationMs - 5000) {
-                        resume = saved
-                        fromPerSong = true
-                    }
-                }
-                if (resume > 0 && resume < durationMs) {
-                    player.seekTo(resume)
-                    if (forcePlayAfterSeek) {
-                        // 定时开始播放（闹钟）：恢复进度后直接响，不等用户点播放
-                        forcePlayAfterSeek = false
-                        play()
-                    } else if (fromPerSong) {
-                        // 每首歌进度记忆：切回时直接继续播放（不是断点续播的"恢复后暂停"），
-                        // 走 play() 才能重启 progressRunnable 刷新时长/进度 UI
-                        play()
-                    } else {
-                        updateAll(false)
-                    }
-                } else {
-                    forcePlayAfterSeek = false
-                    play()
-                }
+                handlePreparedResume()
             }
             mp.setOnVideoSizeChangedListener { _, w, h ->
                 android.util.Log.d("ShiYinVideo", "onVideoSizeChanged: ${w}x$h")
@@ -744,7 +760,20 @@ class MediaPlaybackService : Service() {
                     releasePlayer()
                     val cur = index
                     handler.postDelayed({
-                        if (index == cur && mediaPlayer == null) playCurrent()
+                        if (index == cur && mediaPlayer == null && exoPlayer == null) playCurrent()
+                    }, 250)
+                    return@setOnErrorListener true
+                }
+                // 自愈重试后仍 -19：MediaPlayer 在该机型上无法出声（Android 16 实测），
+                // 整个会话切到 ExoPlayer 兜底引擎，立即重试当前歌（不计失败）
+                if (extra == -19 && !useExo) {
+                    useExo = true
+                    deviceErrorRetriedUri = null
+                    PlaybackLog.log("ENODEV(-19) persists -> switch to ExoPlayer engine")
+                    releasePlayer()
+                    val cur = index
+                    handler.postDelayed({
+                        if (index == cur && mediaPlayer == null && exoPlayer == null) playCurrent()
                     }, 250)
                     return@setOnErrorListener true
                 }
@@ -789,8 +818,142 @@ class MediaPlaybackService : Service() {
         }
     }
 
+    /** ExoPlayer 兜底引擎（Media3）：MediaPlayer 出声即 -19 的机型上自动启用。 */
+    private fun startExo(song: Song) {
+        val p = try {
+            androidx.media3.exoplayer.ExoPlayer.Builder(this).build()
+        } catch (e: Exception) {
+            PlaybackLog.log("exo build THREW: ${e.javaClass.simpleName}: ${e.message}")
+            val failedUri = song.uri.toString()
+            handler.post {
+                if (currentSong()?.uri?.toString() == failedUri) handlePlaybackError()
+            }
+            return
+        }
+        exoPlayer = p
+        try {
+            // handleAudioFocus=false：焦点由 Service 的 requestFocus 统一管理
+            p.setAudioAttributes(
+                androidx.media3.common.AudioAttributes.Builder()
+                    .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                    .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .build(),
+                false
+            )
+        } catch (_: Exception) {
+        }
+        p.addListener(object : androidx.media3.common.Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (p !== exoPlayer) return // 迟到的旧引擎事件，忽略
+                when (state) {
+                    androidx.media3.common.Player.STATE_READY -> {
+                        if (isPrepared) return // READY 只处理一次（seek 不触发新 READY）
+                        isPrepared = true
+                        // fMP4 时长 -1/0 兜底为 0
+                        durationMs = p.duration.coerceAtLeast(0)
+                        PlaybackLog.log(
+                            "exo READY dur=$durationMs uri=${currentSong()?.uri?.lastPathSegment}"
+                        )
+                        lyriconBridge.syncSong(currentSong(), lyricLines, lyricTrans, durationMs)
+                        handlePreparedResume()
+                    }
+                    androidx.media3.common.Player.STATE_ENDED -> {
+                        PlaybackLog.log("exo ENDED song=${currentSong()?.uri?.lastPathSegment}")
+                        // 听完了：清除该歌的独立进度记录（下次从头播）
+                        if (perSongEnabled()) {
+                            loadPerSongPositions()
+                            currentSong()?.let { perSongPositions.remove(it.uri.toString()) }
+                            persistPerSongPositions()
+                        }
+                        when (getPlayMode()) {
+                            MODE_REPEAT_ONE -> {
+                                seekTo(0)
+                                play()
+                            }
+                            MODE_SHUFFLE -> {
+                                if (songs.size > 1) {
+                                    index = randomIndex()
+                                    playCurrent()
+                                }
+                            }
+                            else -> playNext()
+                        }
+                    }
+                    else -> {}
+                }
+            }
+
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                if (p !== exoPlayer) return
+                PlaybackLog.log(
+                    "exo error ${error.errorCodeName} song=${currentSong()?.uri?.lastPathSegment}"
+                )
+                handlePlaybackError()
+            }
+
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                if (videoSize.width > 0 && videoSize.height > 0) {
+                    videoWidth = videoSize.width
+                    videoHeight = videoSize.height
+                    onVideoSizeChanged?.invoke(videoSize.width, videoSize.height)
+                }
+            }
+        })
+        // 视频页打开中：新引擎重新绑定画面
+        attachedVideoSurface?.let { surf ->
+            try {
+                p.setVideoSurface(surf)
+            } catch (e: Exception) {
+                PlaybackLog.log("exo surface rebind failed: ${e.message}")
+            }
+        }
+        p.setMediaItem(androidx.media3.common.MediaItem.fromUri(song.uri))
+        p.prepare()
+        // 挂载均衡器（因 -19 卸载过则本会话不再挂）
+        try {
+            if (AudioFxManager.hasConfig(this) && !fxSuppressedByDeviceError) {
+                val sid = p.audioSessionId
+                if (sid != 0 && AudioFxManager.attach(sid)) {
+                    AudioFxManager.restoreSaved(this)
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    /** 引擎就绪（MediaPlayer onPrepared / Exo STATE_READY）共用的断点恢复逻辑。 */
+    private fun handlePreparedResume() {
+        var resume = pendingResumeMs
+        pendingResumeMs = 0
+        // 每首歌独立进度：调用方没指定位置时，用该歌自己的记录（接近结尾不恢复）
+        var fromPerSong = false
+        if (resume <= 0) {
+            val saved = perSongPos(currentSong())
+            if (saved > 0 && durationMs > 5000 && saved < durationMs - 5000) {
+                resume = saved
+                fromPerSong = true
+            }
+        }
+        if (resume > 0 && resume < durationMs) {
+            seekTo(resume)
+            if (forcePlayAfterSeek) {
+                // 定时开始播放（闹钟）：恢复进度后直接响，不等用户点播放
+                forcePlayAfterSeek = false
+                play()
+            } else if (fromPerSong) {
+                // 每首歌进度记忆：切回时直接继续播放（不是断点续播的"恢复后暂停"），
+                // 走 play() 才能重启 progressRunnable 刷新时长/进度 UI
+                play()
+            } else {
+                updateAll(false)
+            }
+        } else {
+            forcePlayAfterSeek = false
+            play()
+        }
+    }
+
     private fun play() {
-        val mp = mediaPlayer ?: return
         if (!isPrepared) {
             PlaybackLog.log("play: not prepared, ignored")
             return
@@ -801,10 +964,14 @@ class MediaPlaybackService : Service() {
             return
         }
         try {
-            if (durationMs > 0 && mp.currentPosition >= durationMs) {
-                mp.seekTo(0)
+            if (durationMs > 0 && enginePosition() >= durationMs) {
+                seekTo(0)
             }
-            mp.start()
+            if (useExo) {
+                exoPlayer?.play()
+            } else {
+                mediaPlayer?.start()
+            }
         } catch (e: Exception) {
             // 播放器已进 Error 状态（旧版本在这里直接抛 IllegalStateException 闪退）：
             // 走与 onError 相同的自动切歌，而不是崩溃（1.32 修复 OriginOS 闪退反馈）
@@ -816,7 +983,7 @@ class MediaPlaybackService : Service() {
         // 真正播响了：失败记录不清空（等稳定播放 3 秒后在进度循环里清，
         // 否则 start 后立刻到达的 onError 会被清空的记录绕过熔断）
         android.util.Log.d("ShiYinAlarm", "play: started")
-        PlaybackLog.log("play: started OK")
+        PlaybackLog.log("play: started OK (${if (useExo) "exo" else "media"})")
         lyriconBridge.syncPlaybackState(true)
         updateAll(true)
     }
@@ -825,7 +992,7 @@ class MediaPlaybackService : Service() {
         savePosition()
         cancelSleepTimer()
         try {
-            mediaPlayer?.pause()
+            if (useExo) exoPlayer?.pause() else mediaPlayer?.pause()
         } catch (_: Exception) {
             // Error 状态调用 pause 会抛异常，忽略
         }
@@ -834,7 +1001,7 @@ class MediaPlaybackService : Service() {
         updateAll(false)
     }
 
-    private fun isPlaying(): Boolean = mediaPlayer?.isPlaying ?: false
+    private fun isPlaying(): Boolean = engineIsPlaying()
 
     fun isPlayingSafe(): Boolean = isPlaying()
 
@@ -851,8 +1018,16 @@ class MediaPlaybackService : Service() {
     private fun releasePlayer() {
         handler.removeCallbacks(progressRunnable)
         isPrepared = false
-        mediaPlayer?.release()
+        try {
+            mediaPlayer?.release()
+        } catch (_: Exception) {
+        }
         mediaPlayer = null
+        try {
+            exoPlayer?.release()
+        } catch (_: Exception) {
+        }
+        exoPlayer = null
         durationMs = 0
     }
 
@@ -929,7 +1104,7 @@ class MediaPlaybackService : Service() {
         } catch (e: Exception) {
             emptyMap()
         }
-        desktopLyrics?.updateText(lyricTextAt(mediaPlayer?.currentPosition ?: 0))
+        desktopLyrics?.updateText(lyricTextAt(enginePosition()))
     }
 
     // ---------- 桌面歌词 ----------
@@ -961,7 +1136,7 @@ class MediaPlaybackService : Service() {
             }
             val overlay = desktopLyrics ?: DesktopLyricsOverlay(this).also { desktopLyrics = it }
             overlay.show()
-            overlay.updateText(lyricTextAt(mediaPlayer?.currentPosition ?: 0))
+            overlay.updateText(lyricTextAt(enginePosition()))
             sp.edit().putBoolean(KEY_DESKTOP_ON, true).apply()
         } else {
             desktopLyrics?.hide()
@@ -1129,7 +1304,7 @@ class MediaPlaybackService : Service() {
                     PlaybackState.ACTION_SKIP_TO_PREVIOUS or
                     PlaybackState.ACTION_SEEK_TO
             )
-            .setState(state, (mediaPlayer?.currentPosition ?: 0).toLong(), if (playing) 1f else 0f)
+            .setState(state, enginePosition().toLong(), if (playing) 1f else 0f)
             .build()
         mediaSession?.setPlaybackState(ps)
 
