@@ -94,6 +94,13 @@ class MediaPlaybackService : Service() {
      * 真正播响（start 成功）或换播放列表时清空。
      */
     private val playFailedUris = HashSet<String>()
+    /**
+     * -19 (ENODEV) 自愈：该 uri 已重试过一次。按 uri 记（不随播放器重建丢失），
+     * 稳定播放 3 秒后或换列表时清空。同一首最多自愈一次，防死循环。
+     */
+    private var deviceErrorRetriedUri: String? = null
+    /** 因 -19 卸载过均衡器后，本会话不再自动挂载（避免每首歌都要失败重试一轮）。 */
+    private var fxSuppressedByDeviceError = false
     /** 每首歌独立进度记忆（默认关，设置开）。uri -> positionMs。 */
     private val perSongPositions = HashMap<String, Int>()
     private var perSongLoaded = false
@@ -135,6 +142,13 @@ class MediaPlaybackService : Service() {
                 tick++
                 if (tick % 4 == 0) lyriconBridge.syncPosition(pos)
                 if (tick % 30 == 0) savePosition()
+                // 播放稳定超过 3 秒才算「真成功」：清空失败记录（1.33 日志实锤——
+                // start 后立刻 clear 会被 20ms 后到达的 onError 打穿，熔断永不累积）
+                if (pos > 3000 && playFailedUris.isNotEmpty()) {
+                    PlaybackLog.log("playback stable >3s: clear failed (${playFailedUris.size})")
+                    playFailedUris.clear()
+                    deviceErrorRetriedUri = null
+                }
                 handler.postDelayed(this, 300)
             }
         }
@@ -283,6 +297,7 @@ class MediaPlaybackService : Service() {
         this.pendingResumeMs = resumeMs
         this.forcePlayAfterSeek = forcePlay
         playFailedUris.clear() // 换列表：之前的失败记录作废
+        deviceErrorRetriedUri = null
         PlaybackLog.log(
             "startPlaylist size=${songs.size} index=$index resume=$resumeMs " +
                 "uri=${songs.getOrNull(index)?.uri?.lastPathSegment}"
@@ -602,6 +617,16 @@ class MediaPlaybackService : Service() {
 
         val mp = MediaPlayer()
         try {
+            // 显式声明音频用途：部分 Android 16 机型不设 Attributes 时 AudioTrack 打不开
+            try {
+                mp.setAudioAttributes(
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                )
+            } catch (_: Exception) {
+            }
             mp.setDataSource(this, song.uri)
             // 视频页打开中：新播放器重新绑定画面（否则循环/切歌后画面不动）
             attachedVideoSurface?.let { surf ->
@@ -703,6 +728,26 @@ class MediaPlaybackService : Service() {
                     "onError what=$what extra=$extra song=${currentSong()?.uri?.lastPathSegment} " +
                         "failed=${playFailedUris.size + 1}/${songs.size}"
                 )
+                // -19 = ENODEV：音频输出设备打开失败（Android 16 部分机型实测，如 vivo
+                // V2324HA 全列表必现）。嫌疑：挂在会话上的均衡器 effect 或瞬时设备状态。
+                // 自愈：卸掉均衡器（本会话不再自动挂载）+ 250ms 后重建同一首重试一次，
+                // 不计失败；同曲只自愈一次，再失败走正常失败流程
+                val curUri = currentSong()?.uri?.toString()
+                if (extra == -19 && curUri != null && deviceErrorRetriedUri != curUri) {
+                    deviceErrorRetriedUri = curUri
+                    if (AudioFxManager.isAttached) {
+                        AudioFxManager.release()
+                        fxSuppressedByDeviceError = true
+                        PlaybackLog.log("ENODEV(-19): detached equalizer")
+                    }
+                    PlaybackLog.log("ENODEV(-19): retry same song once in 250ms")
+                    releasePlayer()
+                    val cur = index
+                    handler.postDelayed({
+                        if (index == cur && mediaPlayer == null) playCurrent()
+                    }, 250)
+                    return@setOnErrorListener true
+                }
                 // 播放失败（fMP4 无 moov 等异常文件）：自动切下一首，避免卡死在无声文件。
                 // 按「失败过的歌」计数而非连续计数（1.32 修复 OriginOS 无限切歌）：
                 // 部分机型 prepare 成功但 start 后解码立即报错，旧逻辑在 onPrepared 清零
@@ -715,8 +760,9 @@ class MediaPlaybackService : Service() {
             // 挂载均衡器（每次新建播放器都需重新挂载）并恢复上次曲线。
             // 仅当用户配置过均衡器才 attach，否则全 0 的 audiofx.Equalizer 也会挂在 DAC
             // 链路上，部分 DAC 机型低音量时引入可闻杂音。
+            // 因 -19 卸载过则本会话不再挂（fxSuppressedByDeviceError），防每首都失败一轮
             try {
-                if (AudioFxManager.hasConfig(this)) {
+                if (AudioFxManager.hasConfig(this) && !fxSuppressedByDeviceError) {
                     if (AudioFxManager.attach(mp.audioSessionId)) {
                         AudioFxManager.restoreSaved(this)
                     }
@@ -767,8 +813,8 @@ class MediaPlaybackService : Service() {
             handlePlaybackError()
             return
         }
-        // 真正播响了：清空失败记录，熔断计数重新开始
-        playFailedUris.clear()
+        // 真正播响了：失败记录不清空（等稳定播放 3 秒后在进度循环里清，
+        // 否则 start 后立刻到达的 onError 会被清空的记录绕过熔断）
         android.util.Log.d("ShiYinAlarm", "play: started")
         PlaybackLog.log("play: started OK")
         lyriconBridge.syncPlaybackState(true)
