@@ -86,8 +86,14 @@ class MediaPlaybackService : Service() {
     private var isPrepared = false
     private var durationMs = 0
     private var speed = 1f
-    /** 连续播放失败计数（onError 自动切歌防死循环）。 */
-    private var playErrorStreak = 0
+    /**
+     * 播放失败过的歌（uri）。onError 自动切歌的熔断依据：
+     * 整轮列表全部失败过才停止，而不是「连续失败」——部分机型
+     * prepare 成功但 start 后解码报错，连续计数会被 onPrepared 之外
+     * 的成功表象绕过，造成无限切歌（OriginOS 6 反馈，1.32）。
+     * 真正播响（start 成功）或换播放列表时清空。
+     */
+    private val playFailedUris = HashSet<String>()
     /** 每首歌独立进度记忆（默认关，设置开）。uri -> positionMs。 */
     private val perSongPositions = HashMap<String, Int>()
     private var perSongLoaded = false
@@ -276,7 +282,22 @@ class MediaPlaybackService : Service() {
         this.lyricMap = lyricMap
         this.pendingResumeMs = resumeMs
         this.forcePlayAfterSeek = forcePlay
+        playFailedUris.clear() // 换列表：之前的失败记录作废
         playCurrent()
+    }
+
+    /**
+     * 播放失败统一处理（onError 与 play() 异常共用）：
+     * 记下失败的歌并自动切下一首；整轮全失败过才停下并清空状态，防无限切歌。
+     */
+    private fun handlePlaybackError() {
+        currentSong()?.uri?.toString()?.let { playFailedUris.add(it) }
+        if (songs.size > 1 && playFailedUris.size < songs.size) {
+            playNext()
+        } else {
+            playFailedUris.clear()
+            listener?.onSongChanged(null, emptyList(), null)
+        }
     }
 
     fun currentIndex(): Int = index
@@ -587,7 +608,8 @@ class MediaPlaybackService : Service() {
             mp.setWakeMode(this, PowerManager.PARTIAL_WAKE_LOCK)
             mp.setOnPreparedListener { player ->
                 isPrepared = true
-                playErrorStreak = 0 // 播放成功：重置连续失败计数
+                // 注意：prepare 成功不代表能播放（部分机型 start 后解码才报错，
+                // 如 OriginOS 6 反馈），失败计数不在清零——由真正 start 成功时清零
                 // fMP4（m4s）duration 可能为 -1/0，兜底为 0（界面显示未知时长）
                 durationMs = player.duration.coerceAtLeast(0)
                 lyriconBridge.syncSong(currentSong(), lyricLines, lyricTrans, durationMs)
@@ -658,17 +680,21 @@ class MediaPlaybackService : Service() {
                     else -> playNext()
                 }
             }
-            mp.setOnErrorListener { _, what, extra ->
-                playErrorStreak++
-                android.util.Log.w("ShiYinPlay", "onError what=$what extra=$extra streak=$playErrorStreak")
-                // 播放失败（fMP4 无 moov 等异常文件）：自动切下一首，避免卡死在无声文件；
-                // 连续失败超过歌曲数（整轮全坏）或单曲列表才清空，防死循环。
-                if (songs.size > 1 && playErrorStreak < songs.size) {
-                    playNext()
-                } else {
-                    playErrorStreak = 0
-                    listener?.onSongChanged(null, emptyList(), null)
+            mp.setOnErrorListener { p, what, extra ->
+                // 迟到的旧播放器错误：playCurrent 已换新播放器，若不拦会连环切歌
+                if (p !== mediaPlayer) {
+                    android.util.Log.w("ShiYinPlay", "onError from stale player: what=$what extra=$extra")
+                    return@setOnErrorListener true
                 }
+                android.util.Log.w(
+                    "ShiYinPlay",
+                    "onError what=$what extra=$extra failed=${playFailedUris.size + 1}/${songs.size}"
+                )
+                // 播放失败（fMP4 无 moov 等异常文件）：自动切下一首，避免卡死在无声文件。
+                // 按「失败过的歌」计数而非连续计数（1.32 修复 OriginOS 无限切歌）：
+                // 部分机型 prepare 成功但 start 后解码立即报错，旧逻辑在 onPrepared 清零
+                // 导致熔断永远不触发；现在整轮列表全失败过才停。
+                handlePlaybackError()
                 true
             }
             mp.prepareAsync()
@@ -700,10 +726,20 @@ class MediaPlaybackService : Service() {
             android.util.Log.d("ShiYinAlarm", "play: audio focus denied")
             return
         }
-        if (durationMs > 0 && mp.currentPosition >= durationMs) {
-            mp.seekTo(0)
+        try {
+            if (durationMs > 0 && mp.currentPosition >= durationMs) {
+                mp.seekTo(0)
+            }
+            mp.start()
+        } catch (e: Exception) {
+            // 播放器已进 Error 状态（旧版本在这里直接抛 IllegalStateException 闪退）：
+            // 走与 onError 相同的自动切歌，而不是崩溃（1.32 修复 OriginOS 闪退反馈）
+            android.util.Log.e("ShiYinPlay", "play() failed: ${e.message}")
+            handlePlaybackError()
+            return
         }
-        mp.start()
+        // 真正播响了：清空失败记录，熔断计数重新开始
+        playFailedUris.clear()
         android.util.Log.d("ShiYinAlarm", "play: started")
         lyriconBridge.syncPlaybackState(true)
         updateAll(true)
@@ -712,7 +748,11 @@ class MediaPlaybackService : Service() {
     private fun pause() {
         savePosition()
         cancelSleepTimer()
-        mediaPlayer?.pause()
+        try {
+            mediaPlayer?.pause()
+        } catch (_: Exception) {
+            // Error 状态调用 pause 会抛异常，忽略
+        }
         abandonFocus()
         lyriconBridge.syncPlaybackState(false)
         updateAll(false)
