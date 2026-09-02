@@ -448,7 +448,7 @@ class MediaPlaybackService : Service() {
         try {
             if (speed >= 0.5f && speed <= 16f) {
                 if (useExo) {
-                    exoPlayer?.playbackSpeed = speed
+                    exoPlayer?.setPlaybackSpeed(speed)
                 } else {
                     val mp = mediaPlayer ?: return
                     mp.playbackParams = android.media.PlaybackParams().setSpeed(speed)
@@ -849,8 +849,8 @@ class MediaPlaybackService : Service() {
                     androidx.media3.common.Player.STATE_READY -> {
                         if (isPrepared) return // READY 只处理一次（seek 不触发新 READY）
                         isPrepared = true
-                        // fMP4 时长 -1/0 兜底为 0
-                        durationMs = p.duration.coerceAtLeast(0)
+                        // fMP4 时长 -1/0 兜底为 0（Exo duration 为 Long，TIME_UNSET 为极大负数）
+                        durationMs = p.duration.coerceAtLeast(0L).toInt()
                         PlaybackLog.log(
                             "exo READY dur=$durationMs uri=${currentSong()?.uri?.lastPathSegment}"
                         )
