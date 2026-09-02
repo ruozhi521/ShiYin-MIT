@@ -1935,6 +1935,9 @@ class MainActivity : AppCompatActivity() {
             toast("已清除全部扫描文件夹")
             true
         }
+        view.findViewById<Button>(R.id.btnExportLog).setOnClickListener {
+            showPlaybackLogDialog()
+        }
         view.findViewById<Button>(R.id.btnAbout).setOnClickListener {
             settingsDialog?.dismiss()
             showAboutDialog()
@@ -2838,6 +2841,30 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setView(view)
             .setPositiveButton(R.string.ok, null)
+            .show()
+    }
+
+    /** 导出播放运行日志（1.34）：滚动窗口展示 + 一键复制，用户发给作者定位播放异常。 */
+    private fun showPlaybackLogDialog() {
+        val text = PlaybackLog.dump(this)
+        PlaybackLog.persist(this)
+        val scroll = android.widget.ScrollView(this)
+        val tv = TextView(this)
+        tv.text = text
+        tv.textSize = 11f
+        tv.typeface = Typeface.MONOSPACE
+        val d = resources.displayMetrics.density
+        tv.setPadding((16 * d).toInt(), (12 * d).toInt(), (16 * d).toInt(), (12 * d).toInt())
+        scroll.addView(tv)
+        AlertDialog.Builder(this)
+            .setTitle("运行日志")
+            .setView(scroll)
+            .setPositiveButton("复制") { _, _ ->
+                val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("shiyin_log", text))
+                toast(getString(R.string.playback_log_copied))
+            }
+            .setNegativeButton(R.string.close, null)
             .show()
     }
 

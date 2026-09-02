@@ -512,6 +512,14 @@
         </LinearLayout>
 
         <Button
+            android:id="@+id/btnExportLog"
+            style="@style/BtnStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="@string/playback_log_btn" />
+
+        <Button
             android:id="@+id/btnAbout"
             style="@style/BtnStyle"
             android:layout_width="match_parent"
