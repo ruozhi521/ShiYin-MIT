@@ -483,9 +483,9 @@ class MainActivity : AppCompatActivity() {
         })
         (viewPlayer as SwipeFrameLayout).onHorizontalSwipe = { dir, downY -> handleSwipe(dir, downY) }
         (viewLyrics as SwipeFrameLayout).onHorizontalSwipe = { dir, downY -> handleSwipe(dir, downY) }
-        // 播放页上下滑切歌（1.33）：上滑下一首、下滑上一首（歌词页不启用）
+        // 播放页上下滑切歌（1.33）：上滑下一首、下滑上一首（歌词页不启用），带过渡动画
         (viewPlayer as SwipeFrameLayout).onVerticalSwipe = { dir ->
-            if (dir > 0) playbackService?.playNext() else playbackService?.playPrev()
+            swipeSwitchSong(up = dir > 0)
         }
 
         miniPlayer = findViewById(R.id.miniPlayer)
@@ -1260,6 +1260,55 @@ class MainActivity : AppCompatActivity() {
             // 右滑：歌词页 → 播放页
             if (page == Page.LYRICS) showPage(Page.PLAYER, -1)
         }
+    }
+
+    // ---------- 播放页上下滑切歌（1.33）----------
+
+    private var playerSwipeAnimating = false
+    private val swipeAnimHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /**
+     * 上下滑切歌 + 过渡动画：页面内容向滑动方向滑出淡出 → 切歌（onSongChanged
+     * 同步刷新文案/封面）→ 从反方向滑入淡入。动画只作用于内容子控件，
+     * 页面背景（封面渐变/主题）保持不动，不会闪底色。
+     */
+    private fun swipeSwitchSong(up: Boolean) {
+        if (playerSwipeAnimating) return
+        playerSwipeAnimating = true
+        // 动画被其他动画打断时（ViewPropertyAnimator 的 withEndAction 不会回调），
+        // 用固定时序 + 兜底解锁保证手势始终可用
+        val unlock = Runnable { playerSwipeAnimating = false }
+        val container = viewPlayer as? android.view.ViewGroup
+        val children = if (container == null) {
+            emptyList()
+        } else {
+            (0 until container.childCount).mapNotNull { container.getChildAt(it) }
+                .filter { it.visibility == View.VISIBLE }
+        }
+        if (children.isEmpty()) {
+            if (up) playbackService?.playNext() else playbackService?.playPrev()
+            swipeAnimHandler.postDelayed(unlock, 300)
+            return
+        }
+        val off = resources.displayMetrics.heightPixels * 0.22f
+        val outY = if (up) -off else off
+        val inY = if (up) off else -off
+        // 滑出淡出（140ms）
+        children.forEach { v ->
+            v.animate().translationY(outY).alpha(0f).setDuration(140).start()
+        }
+        swipeAnimHandler.postDelayed({
+            // 此刻内容已不可见：切歌（onSongChanged 在 playNext 内同步刷新界面）
+            if (up) playbackService?.playNext() else playbackService?.playPrev()
+            // 从反方向滑入淡入（200ms）
+            children.forEach { c ->
+                if (c.visibility == View.VISIBLE) {
+                    c.translationY = inY
+                    c.animate().translationY(0f).alpha(1f).setDuration(200).start()
+                }
+            }
+            swipeAnimHandler.postDelayed(unlock, 260)
+        }, 150)
     }
 
     override fun onBackPressed() {
