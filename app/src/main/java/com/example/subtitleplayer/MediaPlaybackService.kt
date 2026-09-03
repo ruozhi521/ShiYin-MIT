@@ -6,8 +6,10 @@ import android.app.NotificationManager
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -192,6 +194,27 @@ class MediaPlaybackService : Service() {
         // 词幕开关（设置里可关，默认关闭）
         lyriconBridge.enabled = getSharedPreferences("player", Context.MODE_PRIVATE)
             .getBoolean(KEY_LYRICON, false)
+        // 耳机拔出/蓝牙断开（1.33）：系统广播「即将变吵」→ 自动暂停防外放
+        val noisyFilter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+        androidx.core.content.ContextCompat.registerReceiver(
+            this, becomingNoisyReceiver, noisyFilter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+    }
+
+    /**
+     * 耳机断开自动暂停（1.33）。
+     * 决策：混合播放模式下同样暂停——混合模式「无视」的是其他应用抢音频焦点的
+     * 暂停命令；拔耳机是物理事件，继续播会突然外放扰民，属于防尴尬保护。
+     * 暂停后点播放即可继续，混合模式特性（不抢焦点、不被其他应用打断）不受影响。
+     */
+    private val becomingNoisyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != AudioManager.ACTION_AUDIO_BECOMING_NOISY) return
+            if (engineIsPlaying()) {
+                PlaybackLog.log("headphones disconnected (becoming noisy) -> pause")
+                pause()
+            }
+        }
     }
 
     /** 设置页开关：开启/关闭状态栏歌词推送（词幕）。 */
@@ -272,6 +295,10 @@ class MediaPlaybackService : Service() {
         handler.removeCallbacks(progressRunnable)
         desktopLyrics?.hide()
         abandonFocus()
+        try {
+            unregisterReceiver(becomingNoisyReceiver)
+        } catch (_: Exception) {
+        }
         releasePlayer()
         mediaSession?.release()
         mediaSession = null

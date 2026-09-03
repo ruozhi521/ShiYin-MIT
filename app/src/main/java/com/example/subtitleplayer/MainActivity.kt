@@ -483,6 +483,10 @@ class MainActivity : AppCompatActivity() {
         })
         (viewPlayer as SwipeFrameLayout).onHorizontalSwipe = { dir, downY -> handleSwipe(dir, downY) }
         (viewLyrics as SwipeFrameLayout).onHorizontalSwipe = { dir, downY -> handleSwipe(dir, downY) }
+        // 播放页上下滑切歌（1.33）：上滑下一首、下滑上一首（歌词页不启用）
+        (viewPlayer as SwipeFrameLayout).onVerticalSwipe = { dir ->
+            if (dir > 0) playbackService?.playNext() else playbackService?.playPrev()
+        }
 
         miniPlayer = findViewById(R.id.miniPlayer)
         txtMiniTitle = findViewById(R.id.txtMiniTitle)
