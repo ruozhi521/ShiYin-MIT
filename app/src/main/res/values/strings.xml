@@ -113,7 +113,7 @@
     <string name="enable">开启</string>
     <string name="playback_log_btn">导出运行日志（播放异常时点这个，复制发给作者）</string>
     <string name="playback_log_copied">已复制运行日志，发给作者即可</string>
-    <string name="about_version">版本 1.33</string>
+    <string name="about_version">版本 1.33.1</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>

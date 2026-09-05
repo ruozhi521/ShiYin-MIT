@@ -1514,7 +1514,9 @@ class MainActivity : AppCompatActivity() {
                 val from = viewHolder.bindingAdapterPosition
                 val to = target.bindingAdapterPosition
                 if (from >= 0 && to >= 0) {
-                    songAdapter.move(from, to)
+                    // 关键：用 adapter 返回的新列表同步 currentSongs——
+                    // 否则排序只改了界面，保存的仍是旧顺序、播放队列也不跟随
+                    currentSongs = songAdapter.move(from, to)
                 }
                 return true
             }

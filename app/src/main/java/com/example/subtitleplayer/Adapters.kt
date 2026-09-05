@@ -27,14 +27,20 @@ class SongAdapter(
         notifyDataSetChanged()
     }
 
-    /** 歌单拖拽排序：移动指定项并刷新。 */
-    fun move(from: Int, to: Int) {
-        if (from !in items.indices || to !in items.indices) return
+    /**
+     * 歌单拖拽排序：移动指定项并刷新。
+     * @return 移动后的新列表——调用方必须用它同步自己的数据源
+     * （此前版本不返回新列表，页面外的 currentSongs 仍是旧顺序，
+     * 导致排序保存的是旧顺序、播放队列也不跟随，重进歌单即还原）。
+     */
+    fun move(from: Int, to: Int): List<Song> {
+        if (from !in items.indices || to !in items.indices) return items
         val list = items.toMutableList()
         val item = list.removeAt(from)
         list.add(to, item)
         items = list
         notifyItemMoved(from, to)
+        return list
     }
 
     fun setCurrentIndex(index: Int) {
