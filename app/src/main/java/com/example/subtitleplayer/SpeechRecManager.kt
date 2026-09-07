@@ -514,7 +514,7 @@ object SpeechRecManager {
                 emit((s0 + ((s1 - s0) * frac).toInt()).toShort())
                 nextPos += step
             }
-            val keep = floor(nextPos).toInt() - base
+            val keep = (floor(nextPos).toInt() - base).coerceIn(0, len)
             if (keep > 0) {
                 System.arraycopy(buf, keep, buf, 0, len - keep)
                 len -= keep
