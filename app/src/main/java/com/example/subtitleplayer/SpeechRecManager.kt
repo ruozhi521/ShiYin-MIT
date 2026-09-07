@@ -87,7 +87,6 @@ object SpeechRecManager {
         return true
     }
 
-
     /**
      * 下载模型（后台线程）。onProgress(第几个文件 0-based, 当前文件百分比)。
      * 每个文件按 候选名 × 镜像源 全组合尝试；单个源限时防挂死。
@@ -157,7 +156,7 @@ object SpeechRecManager {
                                 tmp.delete()
                             }
                             downloaded = target
-                            PlaybackLog.log("asr model OK $roleTag(mf.role) <- $base$name")
+                            PlaybackLog.log("asr model OK ${mf.role} <- $base$name")
                             break@outer
                         } catch (e: Exception) {
                             lastErr = "${e.javaClass.simpleName}: ${e.message}"
@@ -176,8 +175,7 @@ object SpeechRecManager {
         }.start()
     }
 
-    private fun roleTag(role: String) = "[$role]"
-
+    
     /** 测试钩子（仅单测用）：置 true 可提前中止下载循环。 */
     @Volatile
     var cancelFlagForTest: Boolean = false
@@ -701,7 +699,7 @@ object SpeechRecManager {
         content: String
     ): String? {
         val target = createLrcTarget(context, audioUri, treeUris)
-        return if (writeLrc(target, content)) target.desc else null
+        return if (writeLrc(context, target, content)) target.desc else null
     }
 }
 

@@ -18,6 +18,7 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.DocumentsContract
 import android.provider.Settings
 import android.os.IBinder
 import android.text.Editable
@@ -333,7 +334,7 @@ class MainActivity : AppCompatActivity() {
     private var asrCancelled = false
     private val asrAudioPicker =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri != null) startAsrTranscribe(uri)
+            if (uri != null) startAsrTranscribe(uri, null)
         }
     private val coverPicker =
         registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
