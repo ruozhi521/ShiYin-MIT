@@ -106,61 +106,72 @@ object SpeechRecManager {
                 }
                 var downloaded: File? = null
                 var lastErr: String? = null
-                outer@ for (base in modelSources) {
-                    for (name in mf.candidates) {
-                        if (isCancelledHook()) break@outer
-                        try {
-                            val conn = URL(base + name).openConnection() as HttpURLConnection
-                            conn.connectTimeout = 12_000
-                            conn.readTimeout = 45_000
-                            conn.instanceFollowRedirects = true
-                            conn.setRequestProperty("User-Agent", "ShiYin/2.0")
-                            val code = conn.responseCode
-                            if (code !in 200..299) {
-                                lastErr = "$name HTTP $code"
-                                conn.disconnect()
-                                continue
-                            }
-                            val total = conn.contentLengthLong
-                            val tmp = File(dir, "$name.tmp")
-                            var acc = 0L
-                            var sane = true
-                            conn.inputStream.use { input ->
-                                tmp.outputStream().use { out ->
-                                    val buf = ByteArray(64 * 1024)
-                                    var first = true
-                                    while (true) {
-                                        val n = input.read(buf)
-                                        if (n < 0) break
-                                        if (first && n > 0 && buf[0] == '<'.code.toByte()) {
-                                            sane = false
-                                            break
-                                        }
-                                        first = false
-                                        out.write(buf, 0, n)
-                                        acc += n
-                                        if (total > 0) {
-                                            onProgress(idx, ((acc * 100) / total).toInt().coerceIn(0, 100))
+                // 整体重试 2 轮：瞬时网络抖动一次失败不至于全盘失败
+                attempt@ for (attempt in 0 until 2) {
+                    if (attempt > 0) {
+                        PlaybackLog.log("asr model retry #${attempt + 1} for ${mf.role}")
+                        Thread.sleep(2000)
+                    }
+                    for (base in modelSources) {
+                        for (name in mf.candidates) {
+                            if (isCancelledHook()) break@attempt
+                            try {
+                                val conn = URL(base + name).openConnection() as HttpURLConnection
+                                conn.connectTimeout = 12_000
+                                conn.readTimeout = 45_000
+                                conn.instanceFollowRedirects = true
+                                conn.setRequestProperty("User-Agent", "ShiYin/2.0")
+                                val code = conn.responseCode
+                                if (code !in 200..299) {
+                                    lastErr = "$name HTTP $code"
+                                    conn.disconnect()
+                                    continue
+                                }
+                                val total = conn.contentLengthLong
+                                val tmp = File(dir, "$name.tmp")
+                                var acc = 0L
+                                var sane = true
+                                conn.inputStream.use { input ->
+                                    tmp.outputStream().use { out ->
+                                        val buf = ByteArray(64 * 1024)
+                                        var first = true
+                                        while (true) {
+                                            // 收满 Content-Length 立即结束：hf-mirror 等代理
+                                            // 不会主动断流，等 EOF 会卡到读超时（2.0 实测）
+                                            if (total > 0 && acc >= total) break
+                                            val n = input.read(buf)
+                                            if (n < 0) break
+                                            if (first && n > 0 && buf[0] == '<'.code.toByte()) {
+                                                sane = false
+                                                break
+                                            }
+                                            first = false
+                                            out.write(buf, 0, n)
+                                            acc += n
+                                            if (total > 0) {
+                                                onProgress(idx, ((acc * 100) / total).toInt().coerceIn(0, 100))
+                                            }
                                         }
                                     }
                                 }
+                                if (!sane || acc < 1024) {
+                                    tmp.delete()
+                                    lastErr = "$name 内容异常（可能 404 页面）"
+                                    continue
+                                }
+                                val target = File(dir, name)
+                                if (!tmp.renameTo(target)) {
+                                    tmp.copyTo(target, overwrite = true)
+                                    tmp.delete()
+                                }
+                                downloaded = target
+                                onProgress(idx, 100)
+                                PlaybackLog.log("asr model OK ${mf.role} <- $base$name")
+                                break@attempt
+                            } catch (e: Exception) {
+                                lastErr = "${e.javaClass.simpleName}: ${e.message}"
+                                File(dir, "$name.tmp").delete()
                             }
-                            if (!sane || acc < 1024) {
-                                tmp.delete()
-                                lastErr = "$name 内容异常（可能 404 页面）"
-                                continue
-                            }
-                            val target = File(dir, name)
-                            if (!tmp.renameTo(target)) {
-                                tmp.copyTo(target, overwrite = true)
-                                tmp.delete()
-                            }
-                            downloaded = target
-                            PlaybackLog.log("asr model OK ${mf.role} <- $base$name")
-                            break@outer
-                        } catch (e: Exception) {
-                            lastErr = "${e.javaClass.simpleName}: ${e.message}"
-                            File(dir, "$name.tmp").delete()
                         }
                     }
                 }
