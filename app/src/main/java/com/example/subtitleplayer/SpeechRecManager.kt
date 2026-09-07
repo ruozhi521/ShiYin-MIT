@@ -304,16 +304,26 @@ object SpeechRecManager {
                     onDone(false, "已取消", null, null)
                     return@Thread
                 }
-                // lrc 目标在识别开始前建好：每窗写入，边识别边落盘（取消也保留已识别部分）
-                val target = createLrcTarget(context, audioUri, treeUris)
-                writeLrc(context, target, "")
+                // lrc 目标在识别开始前建好：每窗写入，边识别边落盘（取消也保留已识别部分）。
+                // SAF 写失败时自动切换应用内兜底，绝不静默丢歌词
+                var target = createLrcTarget(context, audioUri, treeUris)
+                if (!writeLrc(context, target, "")) {
+                    PlaybackLog.log("asr SAF target unusable -> fallback internal")
+                    target = internalLrcTarget(context, audioUri)
+                    writeLrc(context, target, "")
+                }
                 val lines = recognize(
                     modelDir(context), pcm, totalSec,
                     scriptText?.let { writeHotwords(context, it) },
                     onProgress,
                     { linesSoFar ->
                         // 实时：每窗完成即写盘 + 上抛（UI 预览 / 逐窗翻译联动）
-                        writeLrc(context, target, buildLrc(linesSoFar))
+                        if (!writeLrc(context, target, buildLrc(linesSoFar))) {
+                            // 写失败（如 SAF 中途失效）：切应用内兜底
+                            PlaybackLog.log("asr writeLrc fail -> fallback internal")
+                            target = internalLrcTarget(context, audioUri)
+                            writeLrc(context, target, buildLrc(linesSoFar))
+                        }
                         onWindowDone(linesSoFar)
                     },
                     isCancelled
@@ -321,6 +331,11 @@ object SpeechRecManager {
                     onDone(false, errMsg, null, null)
                 }
                 if (lines == null) return@Thread
+                // 收尾：最终内容确认写入（失败切兜底重写）
+                if (!writeLrc(context, target, buildLrc(lines))) {
+                    target = internalLrcTarget(context, audioUri)
+                    writeLrc(context, target, buildLrc(lines))
+                }
                 val where = describeTarget(context, audioUri, target)
                 PlaybackLog.log("asr done: ${lines.size} lines -> $where")
                 onDone(true, null, where, lines)
@@ -690,11 +705,19 @@ object SpeechRecManager {
 
     private data class LrcTarget(val safUri: Uri?, val file: File?, val desc: String)
 
+    private fun internalLrcTarget(context: Context, audioUri: Uri): LrcTarget {
+        val stem = (audioUri.lastPathSegment ?: "lyrics")
+            .substringAfterLast('/').substringBeforeLast('.')
+        val dir = File(context.filesDir, "asr_lrc").apply { mkdirs() }
+        return LrcTarget(null, File(dir, "$stem.lrc"), "应用内 asr_lrc/$stem.lrc")
+    }
+
     /** 识别开始前创建 lrc 目标：SAF 同目录优先（自动入歌词库），兜底应用私有目录。 */
     private fun createLrcTarget(context: Context, audioUri: Uri, treeUris: List<Uri>): LrcTarget {
         val docId = try {
             DocumentsContract.getDocumentId(audioUri)
         } catch (e: Exception) {
+            PlaybackLog.log("asr lrc target: getDocumentId failed ${e.message}")
             null
         }
         val stem = (docId ?: audioUri.lastPathSegment ?: "lyrics")
@@ -711,13 +734,25 @@ object SpeechRecManager {
                     val lrcUri = DocumentsContract.createDocument(
                         context.contentResolver, parentUri, "text/plain", "$stem.lrc"
                     )
-                    if (lrcUri != null) return LrcTarget(lrcUri, null, "音频同目录 $stem.lrc")
+                    if (lrcUri != null) {
+                        // 创建后立刻试写一次：确认可写，不可写走兜底
+                        context.contentResolver.openOutputStream(lrcUri)?.use {
+                            it.write(" ".toByteArray())
+                        }
+                        PlaybackLog.log("asr lrc target OK (SAF) $stem.lrc")
+                        return LrcTarget(lrcUri, null, "音频同目录 $stem.lrc")
+                    }
+                    PlaybackLog.log("asr lrc target: createDocument null")
                 } catch (e: Exception) {
+                    PlaybackLog.log("asr lrc target THREW: ${e.message}")
                 }
             }
+        } else {
+            PlaybackLog.log("asr lrc target: non-document uri -> internal")
         }
-        val dir = File(context.filesDir, "asr_lrc").apply { mkdirs() }
-        return LrcTarget(null, File(dir, "$stem.lrc"), "应用内 asr_lrc/$stem.lrc")
+        val fb = internalLrcTarget(context, audioUri)
+        PlaybackLog.log("asr lrc target fallback -> ${fb.desc}")
+        return fb
     }
 
     private fun writeLrc(context: Context, target: LrcTarget, content: String): Boolean {

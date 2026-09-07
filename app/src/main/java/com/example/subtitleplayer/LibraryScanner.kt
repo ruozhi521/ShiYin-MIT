@@ -63,6 +63,23 @@ class LibraryScanner(
     }
 
     /**
+     * 只扫描一个子文件夹（含其子目录），用于歌词识别后的局部刷新（2.0）。
+     * folderName 必须与该文件夹在现有曲库中的歌单名一致（含多根前缀），
+     * 否则歌单归类会与整体扫描结果不一致。
+     */
+    fun scanFolder(
+        treeUri: Uri,
+        folderDocId: String,
+        folderName: String
+    ): Pair<List<Song>, Map<String, LyricRef>> {
+        val folderSongs = mutableMapOf<String, MutableList<Song>>()
+        val lyrics = mutableMapOf<String, LyricRef>()
+        val all = mutableListOf<Song>()
+        scanDir(treeUri, folderDocId, folderName, folderSongs, lyrics, all, useFileNameTitle())
+        return all to lyrics
+    }
+
+    /**
      * 多根目录合并扫描：逐根独立扫描后统一命名合并。
      * 命名规则：相对路径只在单个根出现 → 直接用原名（观感干净）；
      * 跨根同名子文件夹 → 各自加根前缀消歧（如「根A/周杰伦」「根B/周杰伦」）。

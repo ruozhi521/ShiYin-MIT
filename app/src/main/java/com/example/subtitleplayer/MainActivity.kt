@@ -3256,16 +3256,10 @@ class MainActivity : AppCompatActivity() {
                             translateGeneratedLyrics(uriKey, lines)
                         }
                         toast(getString(R.string.asr_done, savedWhere ?: ""))
-                        scanLibrary(silent = true)
-                        // 正在播放这首歌：识别完用正式歌词替换实时预览（含译文）
-                        if (lastSong?.uri?.toString() == uriKey) {
-                            asrLiveUri = uriKey
-                            playbackService?.refreshLyricMap(library?.lyrics ?: emptyMap())
-                            lyricAdapter.setTranslations(translationCache[uriKey] ?: emptyMap())
-                            playbackService?.reloadLyricTranslations()
-                            val spd = playbackService?.currentSpeed() ?: 1f
-                            btnSpeed.text = if (spd == 1f) "1x" else "${spd}x"
-                        }
+                        // 只重扫所在文件夹（2.0）：秒级完成，比整库重扫快得多
+                        rescanFolderForAsr(uri)
+                        val spd = playbackService?.currentSpeed() ?: 1f
+                        btnSpeed.text = if (spd == 1f) "1x" else "${spd}x"
                     } else if (msg == "已取消") {
                         toast("已取消识别")
                     } else {
@@ -3328,6 +3322,92 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    /**
+     * 只重扫识别歌曲所在的文件夹并局部合并进曲库（2.0）。
+     * 比整库重扫快得多；树权限匹配不上时回退整库重扫。
+     */
+    private fun rescanFolderForAsr(audioUri: Uri) {
+        val docId = try {
+            DocumentsContract.getDocumentId(audioUri)
+        } catch (e: Exception) {
+            null
+        }
+        val tree = if (docId == null) null else savedTreeUris().firstOrNull { t ->
+            val td = try {
+                DocumentsContract.getTreeDocumentId(t)
+            } catch (e: Exception) {
+                null
+            }
+            td != null && (docId == td || docId.startsWith("$td/"))
+        }
+        if (docId == null || tree == null) {
+            scanLibrary(silent = true)
+            return
+        }
+        val treeDocId = DocumentsContract.getTreeDocumentId(tree)
+        val parentDocId = if (docId.contains('/')) docId.substringBeforeLast('/') else treeDocId
+        Thread {
+            try {
+                val prefix = "$parentDocId/"
+                // 复用现有曲库里这个文件夹的歌单名（含多根前缀，保证归类一致）
+                val folderName = library?.allSongs?.firstOrNull { s ->
+                    try {
+                        DocumentsContract.getDocumentId(s.uri).startsWith(prefix)
+                    } catch (e: Exception) {
+                        false
+                    }
+                }?.folder ?: parentDocId.substringAfterLast('/')
+                val (newSongs, newLyrics) = LibraryScanner(this, contentResolver)
+                    .scanFolder(tree, parentDocId, folderName)
+                runOnUiThread {
+                    mergeScannedFolder(parentDocId, folderName, newSongs, newLyrics)
+                }
+            } catch (e: Exception) {
+                PlaybackLog.log("asr folder rescan THREW: ${e.message}")
+                runOnUiThread { scanLibrary(silent = true) }
+            }
+        }.start()
+    }
+
+    /** 把单文件夹扫描结果合并进曲库并全面刷新界面与播放服务。 */
+    private fun mergeScannedFolder(
+        parentDocId: String,
+        folderName: String,
+        newSongs: List<Song>,
+        newLyrics: Map<String, LyricRef>
+    ) {
+        val lib = library
+        if (lib == null) {
+            scanLibrary(silent = true)
+            return
+        }
+        val prefix = "$parentDocId/"
+        fun inFolder(s: Song): Boolean = try {
+            DocumentsContract.getDocumentId(s.uri).startsWith(prefix)
+        } catch (e: Exception) {
+            false
+        }
+        val kept = lib.allSongs.filterNot { inFolder(it) }
+        val all = (kept + newSongs).sortedBy { it.title }
+        // 歌词 key 按「完整文件夹路径」精确清除（不能前缀匹配，防误删子文件夹歌词）
+        val lyrics = lib.lyrics
+            .filterKeys { k -> k.substringBeforeLast('/') != folderName }
+            .toMutableMap()
+        newLyrics.forEach { (k, v) -> lyrics[k] = v }
+        val playlists = all.groupBy { it.folder }
+            .map { Playlist(it.key, it.value.sortedBy { s -> s.title }) }
+            .sortedBy { it.name }
+        val newLib = MusicLibrary(playlists, all, lyrics)
+        LibraryCache.save(applicationContext, newLib)
+        library = newLib
+        onLibraryReady()
+        refreshOpenViews()
+        // 新 lrc 已在歌词映射里：当前歌无需切歌立即显示
+        playbackService?.refreshLyricMap(newLib.lyrics)
+        val spd = playbackService?.currentSpeed() ?: 1f
+        btnSpeed.text = if (spd == 1f) "1x" else "${spd}x"
     }
 
     private fun showPlaybackLogDialog() {
