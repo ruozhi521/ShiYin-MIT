@@ -21,6 +21,15 @@
             android:textSize="15sp" />
 
         <CheckBox
+            android:id="@+id/chkTitleFromFilename"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/title_from_filename"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp" />
+
+        <CheckBox
             android:id="@+id/chkAutoTrans"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -510,6 +519,14 @@
                 android:layout_weight="1"
                 android:text="@string/change_folder" />
         </LinearLayout>
+
+        <Button
+            android:id="@+id/btnAsrEntry"
+            style="@style/BtnStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="@string/asr_entry" />
 
         <Button
             android:id="@+id/btnExportLog"

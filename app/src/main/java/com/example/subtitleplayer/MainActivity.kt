@@ -322,6 +322,14 @@ class MainActivity : AppCompatActivity() {
     private var pendingCoverTarget: String? = null
     /** 批量封面模式：非空时 coverPicker 回调对这批 uri 批量写单曲封面。 */
     private var pendingBatchSongs: List<String>? = null
+
+    // ---- 歌词识别（1.33.1 实验）----
+    @Volatile
+    private var asrCancelled = false
+    private val asrAudioPicker =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) startAsrTranscribe(uri)
+        }
     private val coverPicker =
         registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
             val target = pendingCoverTarget
@@ -637,6 +645,20 @@ class MainActivity : AppCompatActivity() {
         }
         updatePlayModeButton(playbackService?.getPlayMode() ?: 0)
         findViewById<Button>(R.id.btnBackLyrics).setOnClickListener { showPage(Page.PLAYER, -1) }
+        findViewById<Button>(R.id.btnGenLyric).setOnClickListener {
+            // 为当前播放的歌生成歌词（需已下载识别模型）
+            val song = lastSong
+            when {
+                song == null -> toast(getString(R.string.no_song))
+                !SpeechRecManager.isModelReady(this) -> showAsrDialog()
+                else -> AlertDialog.Builder(this)
+                    .setTitle(R.string.asr_gen_short)
+                    .setMessage(R.string.asr_gen_confirm)
+                    .setPositiveButton(R.string.ok) { _, _ -> startAsrTranscribe(song.uri) }
+                    .setNegativeButton(R.string.cancel, null)
+                    .show()
+            }
+        }
         findViewById<Button>(R.id.btnTranslate).setOnClickListener {
             translateCurrentLyric()
         }
@@ -1385,6 +1407,11 @@ class MainActivity : AppCompatActivity() {
                         }
                         onLibraryReady()
                         refreshOpenViews()
+                        // 歌词映射同步到服务：ASR 新生成的 lrc 无需切歌立即可用（1.33.1）。
+                        // refreshLyricMap 走 onSongChanged 会把倍速按钮重置为 1x，需回写真实速度
+                        playbackService?.refreshLyricMap(lib.lyrics)
+                        val spd = playbackService?.currentSpeed() ?: 1f
+                        btnSpeed.text = if (spd == 1f) "1x" else "${spd}x"
                     }
                 }
             }
@@ -1850,12 +1877,14 @@ class MainActivity : AppCompatActivity() {
         tintAccentViews(view, android.content.res.ColorStateList.valueOf(ThemeManager.accent(this)))
         val chkAutoScan = view.findViewById<CheckBox>(R.id.chkAutoScan)
         val chkAutoTrans = view.findViewById<CheckBox>(R.id.chkAutoTrans)
+        val chkTitleFromFilename = view.findViewById<CheckBox>(R.id.chkTitleFromFilename)
         val rgLyric = view.findViewById<RadioGroup>(R.id.rgLyricSize)
         val rgUi = view.findViewById<RadioGroup>(R.id.rgUiSize)
         val rgFont = view.findViewById<RadioGroup>(R.id.rgFont)
 
         chkAutoScan.isChecked = prefs.getBoolean(KEY_AUTO_SCAN, false)
         chkAutoTrans.isChecked = prefs.getBoolean(KEY_AUTO_TRANS, false)
+        chkTitleFromFilename.isChecked = prefs.getBoolean(KEY_TITLE_FROM_FILENAME, false)
         checkByTag(rgLyric, prefs.getInt(KEY_LYRIC_SIZE, 18))
         checkByTag(rgUi, prefs.getInt(KEY_UI_SIZE, 15))
         checkByTag(rgFont, prefs.getInt(KEY_LYRIC_FONT, 0))
@@ -1943,9 +1972,12 @@ class MainActivity : AppCompatActivity() {
             .setTitle(R.string.settings)
             .setView(view)
             .setPositiveButton(R.string.ok) { _, _ ->
+                val titleFromFileNameChanged =
+                    prefs.getBoolean(KEY_TITLE_FROM_FILENAME, false) != chkTitleFromFilename.isChecked
                 prefs.edit()
                     .putBoolean(KEY_AUTO_SCAN, chkAutoScan.isChecked)
                     .putBoolean(KEY_AUTO_TRANS, chkAutoTrans.isChecked)
+                    .putBoolean(KEY_TITLE_FROM_FILENAME, chkTitleFromFilename.isChecked)
                     .putInt(KEY_LYRIC_SIZE, tagOf(rgLyric))
                     .putInt(KEY_UI_SIZE, tagOf(rgUi))
                     .putInt(KEY_LYRIC_FONT, tagOf(rgFont))
@@ -1963,6 +1995,8 @@ class MainActivity : AppCompatActivity() {
                 applyLibLayout()
                 updateSeekButtons()
                 playbackService?.refreshDesktopLyricsStyle()
+                // 标题显示来源变了：重新扫描让歌名立即切换（标签标题 ↔ 文件名）
+                if (titleFromFileNameChanged) scanLibrary(silent = true)
             }
             .setNegativeButton(R.string.cancel, null)
             .create()
@@ -1989,6 +2023,10 @@ class MainActivity : AppCompatActivity() {
             library = null
             toast("已清除全部扫描文件夹")
             true
+        }
+        view.findViewById<Button>(R.id.btnAsrEntry).setOnClickListener {
+            settingsDialog?.dismiss()
+            showAsrDialog()
         }
         view.findViewById<Button>(R.id.btnExportLog).setOnClickListener {
             showPlaybackLogDialog()
@@ -2900,6 +2938,175 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** 导出播放运行日志（1.34）：滚动窗口展示 + 一键复制，用户发给作者定位播放异常。 */
+    /** 歌词识别入口（1.33.1 实验）：模型未就绪先引导下载，就绪后选音频生成 lrc。 */
+    private fun showAsrDialog() {
+        val ready = SpeechRecManager.isModelReady(this)
+        val builder = AlertDialog.Builder(this)
+            .setTitle(R.string.asr_title)
+            .setMessage(getString(if (ready) R.string.asr_ready_msg else R.string.asr_need_model_msg))
+            .setNegativeButton(R.string.close, null)
+        if (ready) {
+            builder.setPositiveButton(R.string.asr_pick_audio) { _, _ ->
+                try {
+                    asrAudioPicker.launch(arrayOf("audio/*"))
+                } catch (e: Exception) {
+                    toast(getString(R.string.asr_failed, e.message))
+                }
+            }
+        } else {
+            builder.setPositiveButton(R.string.asr_download_model) { _, _ ->
+                showAsrDownloadDialog()
+            }
+        }
+        builder.show()
+    }
+
+    /** 模型下载（后台线程 + 进度弹窗）。 */
+    private fun showAsrDownloadDialog() {
+        asrCancelled = false
+        val dlg = AlertDialog.Builder(this)
+            .setTitle(R.string.asr_title)
+            .setMessage(getString(R.string.asr_downloading))
+            .setNegativeButton(R.string.cancel) { _, _ -> asrCancelled = true }
+            .show()
+        SpeechRecManager.downloadModel(
+            this,
+            onProgress = { idx, pct ->
+                runOnUiThread {
+                    if (!dlg.isShowing) return@runOnUiThread
+                    dlg.setMessage(getString(R.string.asr_downloading_file, idx + 1, pct))
+                }
+            }
+        ) { ok, err ->
+            runOnUiThread {
+                if (dlg.isShowing) dlg.dismiss()
+                PlaybackLog.log("asr model download ok=$ok err=$err")
+                if (ok) {
+                    toast(getString(R.string.asr_model_ready))
+                    showAsrDialog()
+                } else {
+                    toast(getString(R.string.asr_model_failed, err ?: ""))
+                }
+            }
+        }
+    }
+
+    /** 选完音频：后台识别 + 进度弹窗，完成后自动静默重扫让新 lrc 入库，并提供一键翻译。 */
+    private fun startAsrTranscribe(uri: Uri) {
+        asrCancelled = false
+        val dlg = AlertDialog.Builder(this)
+            .setTitle(R.string.asr_title)
+            .setMessage(getString(R.string.asr_running, 0, 0))
+            .setNegativeButton(R.string.cancel) { _, _ -> asrCancelled = true }
+            .setOnCancelListener { asrCancelled = true }
+            .show()
+        val trees = savedTreeUris()
+        Thread {
+            SpeechRecManager.transcribe(
+                this,
+                uri,
+                trees,
+                onProgress = { sec, total ->
+                    runOnUiThread {
+                        if (dlg.isShowing) dlg.setMessage(getString(R.string.asr_running, sec, total))
+                    }
+                },
+                isCancelled = { asrCancelled }
+            ) { ok, msg, savedWhere, lines ->
+                runOnUiThread {
+                    if (dlg.isShowing) dlg.dismiss()
+                    PlaybackLog.log("asr transcribe ok=$ok msg=$msg saved=$savedWhere lines=${lines?.size}")
+                    if (ok) {
+                        toast(getString(R.string.asr_done, savedWhere ?: ""))
+                        scanLibrary(silent = true)
+                        showAsrDoneDialog(uri, lines, savedWhere)
+                    } else if (msg == "已取消") {
+                        toast("已取消识别")
+                    } else {
+                        toast(getString(R.string.asr_failed, msg ?: ""))
+                    }
+                }
+            }
+        }.start()
+    }
+
+    /** 识别成功后续：提供「立即翻译」（已配置翻译 API 时）。 */
+    private fun showAsrDoneDialog(uri: Uri, lines: List<LrcLine>?, savedWhere: String?) {
+        val cfg = translationConfig()
+        val builder = AlertDialog.Builder(this)
+            .setTitle(R.string.asr_gen_done_title)
+            .setMessage(getString(R.string.asr_done, savedWhere ?: ""))
+            .setNegativeButton(R.string.close, null)
+        if (lines.isNullOrEmpty()) {
+            builder.show()
+            return
+        }
+        builder.setPositiveButton(
+            if (cfg != null) R.string.asr_translate_now else R.string.trans_settings
+        ) { _, _ ->
+            if (cfg != null) {
+                translateGeneratedLyrics(uri.toString(), lines)
+            } else {
+                showTransSettingsDialog()
+            }
+        }
+        builder.show()
+    }
+
+    /**
+     * 直接翻译 ASR 生成的歌词（不必播放该歌）：
+     * 译文按歌曲 uri 写入翻译缓存；若该歌正在播放，立即刷新界面与桌面歌词。
+     * 已翻译过的行跳过（省 API 费用），失败的行可在播放时点「翻译」重试。
+     */
+    private fun translateGeneratedLyrics(uriKey: String, lines: List<LrcLine>) {
+        if (translating) {
+            toast(getString(R.string.trans_busy))
+            return
+        }
+        val cfg = translationConfig()
+        if (cfg == null) {
+            toast(getString(R.string.trans_no_key))
+            showTransSettingsDialog()
+            return
+        }
+        translating = true
+        toast(getString(R.string.asr_translating))
+        val cache = translationCache.getOrPut(uriKey) { HashMap() }
+        val toTranslate = lines.mapIndexed { i, l -> i to l.text }.filter { it.first !in cache }
+        if (toTranslate.isEmpty()) {
+            translating = false
+            toast(getString(R.string.trans_ok))
+            return
+        }
+        Thread {
+            val result = try {
+                LyricTranslator.translate(toTranslate, cfg)
+            } catch (e: Exception) {
+                LyricTranslator.TransResult(emptyMap(), "请求异常：${e.message}")
+            }
+            runOnUiThread {
+                translating = false
+                cache.putAll(result.translations)
+                LyricTranslationCache.save(applicationContext, translationCache)
+                if (lastSong?.uri?.toString() == uriKey) {
+                    lyricAdapter.setTranslations(translationCache[uriKey] ?: emptyMap())
+                    playbackService?.reloadLyricTranslations()
+                }
+                val failed = toTranslate.size - result.translations.size
+                PlaybackLog.log(
+                    "asr translate done: ${result.translations.size}/${toTranslate.size} err=${result.error}"
+                )
+                when {
+                    result.translations.isEmpty() && result.error != null ->
+                        toast(getString(R.string.asr_failed, "翻译失败：${result.error}"))
+                    result.translations.isEmpty() -> toast(getString(R.string.trans_all_fail))
+                    failed > 0 -> toast(getString(R.string.asr_translated_partial, failed))
+                    else -> toast(getString(R.string.asr_translated_done))
+                }
+            }
+        }.start()
+    }
+
     private fun showPlaybackLogDialog() {
         val text = PlaybackLog.dump(this)
         PlaybackLog.persist(this)
@@ -3091,6 +3298,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_TRANS_KEY = "trans_key"
         private const val KEY_TRANS_MODEL = "trans_model"
         private const val KEY_AUTO_TRANS = "auto_translate"
+        private const val KEY_TITLE_FROM_FILENAME = "title_from_filename"
         private const val KEY_DESKTOP_ON = "desktop_lyrics_on"
         private const val KEY_DESKTOP_SIZE = "desktop_lyrics_size"
         private const val KEY_DESKTOP_ALPHA = "desktop_lyrics_alpha"

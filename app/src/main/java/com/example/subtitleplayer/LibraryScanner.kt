@@ -49,7 +49,7 @@ class LibraryScanner(
         val folderSongs = mutableMapOf<String, MutableList<Song>>()
         val lyrics = mutableMapOf<String, LyricRef>()
         val all = mutableListOf<Song>()
-        scanDir(treeUri, rootId, null, folderSongs, lyrics, all)
+        scanDir(treeUri, rootId, null, folderSongs, lyrics, all, useFileNameTitle())
 
         val playlists = folderSongs.map { (name, songs) ->
             Playlist(name, songs.sortedBy { it.title })
@@ -73,12 +73,13 @@ class LibraryScanner(
         if (roots.isEmpty()) return MusicLibrary(emptyList(), emptyList(), emptyMap())
         if (roots.size == 1) return scan(roots[0])
         // 第一遍：逐根扫描，保留相对路径
+        val useFileNameTitle = useFileNameTitle()
         val scans = roots.map { root ->
             val subSongs = mutableListOf<Song>()
             val subLyrics = mutableMapOf<String, LyricRef>()
             scanDir(
                 root, DocumentsContract.getTreeDocumentId(root), null,
-                mutableMapOf(), subLyrics, subSongs
+                mutableMapOf(), subLyrics, subSongs, useFileNameTitle
             )
             Triple(rootDisplayName(root), subSongs, subLyrics)
         }
@@ -132,7 +133,8 @@ class LibraryScanner(
         folderPath: String?,
         folderSongs: MutableMap<String, MutableList<Song>>,
         lyrics: MutableMap<String, LyricRef>,
-        all: MutableList<Song>
+        all: MutableList<Song>,
+        useFileNameTitle: Boolean
     ) {
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId)
         val projection = arrayOf(
@@ -169,10 +171,16 @@ class LibraryScanner(
                                 m4sCandidates.add(Triple(uri, name, folder))
                             } else {
                                 val (tagTitle, tagArtist) = readTags(uri, name)
+                                // 标题来源：开关开 → 文件名；否则标签标题（乱码兜底文件名）
+                                val displayTitle = if (useFileNameTitle) {
+                                    stemOf(name)
+                                } else {
+                                    tagTitle?.takeIf { it.isNotBlank() } ?: stemOf(name)
+                                }
                                 // folderPath 为相对根目录完整路径（同名子文件夹不再合并）
                                 songsHere.add(
                                     Song(
-                                        title = tagTitle?.takeIf { it.isNotBlank() } ?: stemOf(name),
+                                        title = displayTitle,
                                         uri = uri,
                                         folder = folder,
                                         artist = tagArtist?.takeIf { it.isNotBlank() }
@@ -214,7 +222,11 @@ class LibraryScanner(
             val (tagTitle, tagArtist) = readTags(uri, name)
             songsHere.add(
                 Song(
-                    title = tagTitle?.takeIf { it.isNotBlank() } ?: stemOf(name),
+                    title = if (useFileNameTitle) {
+                        stemOf(name)
+                    } else {
+                        tagTitle?.takeIf { it.isNotBlank() } ?: stemOf(name)
+                    },
                     uri = uri,
                     folder = folder,
                     artist = tagArtist?.takeIf { it.isNotBlank() }
@@ -239,9 +251,14 @@ class LibraryScanner(
         for ((id, name) in subDirs) {
             // 子目录名拼上父路径：A/周杰伦 与 B/周杰伦 各自独立成歌单
             val childPath = if (folderPath == null) name else "$folderPath/$name"
-            scanDir(treeUri, id, childPath, folderSongs, lyrics, all)
+            scanDir(treeUri, id, childPath, folderSongs, lyrics, all, useFileNameTitle)
         }
     }
+
+    /** 标题显示开关：开 → 歌名用文件名（忽略标签标题）；默认关（优先标签标题）。 */
+    private fun useFileNameTitle(): Boolean =
+        context.getSharedPreferences("player", Context.MODE_PRIVATE)
+            .getBoolean("title_from_filename", false)
 
     private fun isAudio(mime: String, name: String): Boolean {
         if (mime.startsWith("audio/")) return true

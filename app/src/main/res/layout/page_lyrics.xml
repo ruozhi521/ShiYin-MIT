@@ -36,6 +36,15 @@
             android:textStyle="bold" />
 
         <Button
+            android:id="@+id/btnGenLyric"
+            style="@style/BtnStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
+            android:minWidth="56dp"
+            android:text="@string/asr_gen_short" />
+
+        <Button
             android:id="@+id/btnTranslate"
             style="@style/BtnStyle"
             android:layout_width="wrap_content"

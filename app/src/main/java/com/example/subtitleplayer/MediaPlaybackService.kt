@@ -1181,6 +1181,19 @@ class MediaPlaybackService : Service() {
         desktopLyrics?.refreshStyle()
     }
 
+    /**
+     * 音乐库重新扫描后：更新歌词映射并重载当前歌的歌词（1.33.1）。
+     * 场景：ASR 刚生成了正在播放这首歌的 .lrc——不用切歌即可看到歌词。
+     * 注意走 listener.onSongChanged 会让倍速按钮显示回 1x，调用方需重新同步按钮文本。
+     */
+    fun refreshLyricMap(newMap: Map<String, LyricRef>) {
+        this.lyricMap = newMap
+        val song = currentSong() ?: return
+        loadLyric(song)
+        listener?.onSongChanged(song, lyricLines, lyricName)
+        lyriconBridge.syncSong(song, lyricLines, lyricTrans, durationMs)
+    }
+
     // ---------- 音频焦点 ----------
 
     private fun requestFocus(): Boolean {

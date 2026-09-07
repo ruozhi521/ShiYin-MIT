@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:usesCleartextTraffic="true">
+
+    <!-- sherpa-onnx AAR 声明的 minSdk 可能高于本项目 26：合并冲突时以其允许覆盖 -->
+    <uses-sdk tools:overrideLibrary="com.k2fsa.sherpa.onnx" />
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />

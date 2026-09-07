@@ -72,6 +72,9 @@ dependencies {
     // 词幕（LyricOn）状态栏歌词 Provider SDK（Apache-2.0）
     implementation 'io.github.proify.lyricon:provider:0.1.70'
 
+    // 歌词识别（1.33.1 实验）：sherpa-onnx JNI（Apache-2.0），JitPack 预编译 AAR
+    implementation 'com.github.k2-fsa.sherpa-onnx:sherpa-onnx:v1.13.5'
+
     // 单元测试（GitHub Actions 云端跑：gradle testDebugUnitTest）
     testImplementation 'junit:junit:4.13.2'
     // Robolectric：JVM 里模拟 Android 框架（Uri/ContentResolver 等），测 findLyric/ID3 解析
