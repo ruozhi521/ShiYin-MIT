@@ -3027,19 +3027,21 @@ class MainActivity : AppCompatActivity() {
                     if (!dlg.isShowing) return@runOnUiThread
                     dlg.setMessage(getString(R.string.asr_downloading_file, idx + 1, pct))
                 }
-            }
-        ) { ok, err ->
-            runOnUiThread {
-                if (dlg.isShowing) dlg.dismiss()
-                PlaybackLog.log("asr model download ok=$ok err=$err")
-                if (ok) {
-                    toast(getString(R.string.asr_model_ready))
-                    showAsrDialog()
-                } else {
-                    toast(getString(R.string.asr_model_failed, err ?: ""))
+            },
+            onDone = { ok, err ->
+                runOnUiThread {
+                    if (dlg.isShowing) dlg.dismiss()
+                    PlaybackLog.log("asr model download ok=$ok err=$err")
+                    if (ok) {
+                        toast(getString(R.string.asr_model_ready))
+                        showAsrDialog()
+                    } else {
+                        toast(getString(R.string.asr_model_failed, err ?: ""))
+                    }
                 }
-            }
-        }
+            },
+            isCancelled = { asrCancelled }
+        )
     }
 
     /** 检测音频同目录的台本文件（.txt/.srt），返回文本（供热词提升识别率）。 */
