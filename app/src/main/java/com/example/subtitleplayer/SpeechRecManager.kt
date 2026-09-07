@@ -14,7 +14,9 @@ import com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.OutputStream
 import java.net.HttpURLConnection
@@ -158,8 +160,9 @@ object SpeechRecManager {
             val pcm = File(context.cacheDir, "asr_pcm_16k.raw")
             try {
                 PlaybackLog.log("asr decode start uri=$audioUri")
-                val totalSec = decodeToPcm16k(context, audioUri, pcm, onProgress, isCancelled)
-                    ?: return@Thread  // 已通过 onDone 上报
+                val totalSec = decodeToPcm16k(
+                    context, audioUri, pcm, onProgress, isCancelled, onDone
+                ) ?: return@Thread  // 已通过 onDone 上报
                 if (isCancelled()) {
                     onDone(false, "已取消", null, null)
                     return@Thread
@@ -202,7 +205,8 @@ object SpeechRecManager {
         uri: Uri,
         out: File,
         onProgress: (doneSec: Int, totalSec: Int) -> Unit,
-        isCancelled: () -> Boolean
+        isCancelled: () -> Boolean,
+        onDone: (ok: Boolean, errMsg: String?, savedWhere: String?, lines: List<LrcLine>?) -> Unit
     ): Double? {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
