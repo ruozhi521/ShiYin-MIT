@@ -336,6 +336,19 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri != null) startAsrTranscribe(uri, null)
         }
+    /** 手动导入模型文件（Android 11+ 的 Android/data 目录文件管理器进不去）。 */
+    private val asrModelPicker =
+        registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+            if (!uris.isNullOrEmpty()) {
+                val n = SpeechRecManager.importModelFiles(this, uris)
+                PlaybackLog.log("asr manual import: $n files")
+                toast(
+                    if (n > 0) getString(R.string.asr_import_done, n)
+                    else getString(R.string.asr_import_none)
+                )
+                if (n > 0 && SpeechRecManager.isModelReady(this)) showAsrDialog()
+            }
+        }
     private val coverPicker =
         registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
             val target = pendingCoverTarget
@@ -2991,6 +3004,9 @@ class MainActivity : AppCompatActivity() {
         } else {
             builder.setPositiveButton(R.string.asr_download_model) { _, _ ->
                 showAsrDownloadDialog()
+            }
+            builder.setNeutralButton(R.string.asr_import_model) { _, _ ->
+                asrModelPicker.launch(arrayOf("*/*"))
             }
         }
         builder.show()

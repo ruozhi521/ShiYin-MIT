@@ -94,7 +94,8 @@ object SpeechRecManager {
     fun downloadModel(
         context: Context,
         onProgress: (fileIndex: Int, filePercent: Int) -> Unit,
-        onDone: (ok: Boolean, errMsg: String?) -> Unit
+        onDone: (ok: Boolean, errMsg: String?) -> Unit,
+        isCancelled: () -> Boolean = { cancelFlagForTest }
     ) {
         Thread {
             val dir = modelDir(context).apply { mkdirs() }
@@ -106,18 +107,19 @@ object SpeechRecManager {
                 }
                 var downloaded: File? = null
                 var lastErr: String? = null
-                // 整体重试 2 轮：瞬时网络抖动一次失败不至于全盘失败
-                attempt@ for (attempt in 0 until 2) {
+                // 整体重试 4 轮（镜像小文件请求时好时坏，实测需要多试）；
+                // 退避递增 3/6/9 秒，防忙时连续撞墙
+                attempt@ for (attempt in 0 until 4) {
                     if (attempt > 0) {
                         PlaybackLog.log("asr model retry #${attempt + 1} for ${mf.role}")
-                        Thread.sleep(2000)
+                        Thread.sleep(3000L * attempt)
                     }
                     for (base in modelSources) {
                         for (name in mf.candidates) {
                             if (isCancelledHook()) break@attempt
                             try {
                                 val conn = URL(base + name).openConnection() as HttpURLConnection
-                                conn.connectTimeout = 12_000
+                                conn.connectTimeout = 20_000
                                 conn.readTimeout = 45_000
                                 conn.instanceFollowRedirects = true
                                 conn.setRequestProperty("User-Agent", "ShiYin/2.0")
@@ -192,6 +194,51 @@ object SpeechRecManager {
     var cancelFlagForTest: Boolean = false
 
     private fun isCancelledHook(): Boolean = cancelFlagForTest
+
+    /** 手动导入模型文件（SAF 多选）：文件名匹配任一候选即拷入模型目录。返回成功数。 */
+    fun importModelFiles(context: Context, uris: List<Uri>): Int {
+        val dir = modelDir(context).apply { mkdirs() }
+        val known = modelFiles.flatMap { it.candidates }.toSet()
+        var imported = 0
+        for (u in uris) {
+            try {
+                val name = queryDisplayName(context, u)
+                    ?: u.lastPathSegment?.substringAfterLast('/') ?: continue
+                if (name !in known) continue
+                val tmp = File(dir, "$name.tmp")
+                context.contentResolver.openInputStream(u)?.use { input ->
+                    tmp.outputStream().use { input.copyTo(it) }
+                } ?: continue
+                if (tmp.length() > 1024) {
+                    val target = File(dir, name)
+                    if (!tmp.renameTo(target)) {
+                        tmp.copyTo(target, overwrite = true)
+                        tmp.delete()
+                    }
+                    imported++
+                    PlaybackLog.log("asr import OK $name (${tmp.length()}B)")
+                } else {
+                    tmp.delete()
+                }
+            } catch (e: Exception) {
+                PlaybackLog.log("asr import THREW ${e.message}")
+            }
+        }
+        PlaybackLog.log("asr import done: $imported files")
+        return imported
+    }
+
+    private fun queryDisplayName(context: Context, uri: Uri): String? = try {
+        context.contentResolver.query(
+            uri,
+            arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+            null, null, null
+        )?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        }
+    } catch (e: Exception) {
+        null
+    }
 
     // ---------- 台本 → 热词 ----------
 
