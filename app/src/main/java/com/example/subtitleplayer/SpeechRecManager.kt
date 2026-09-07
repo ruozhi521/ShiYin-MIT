@@ -223,7 +223,7 @@ object SpeechRecManager {
                 }
             }
             if (track < 0 || fmt == null) {
-                onDone(false, "文件里没有音频轨", null)
+                onDone(false, "文件里没有音频轨", null, null)
                 return null
             }
             extractor.selectTrack(track)
@@ -262,7 +262,7 @@ object SpeechRecManager {
                 while (!eos) {
                     if (isCancelled()) {
                         sink.close()
-                        onDone(false, "已取消", null)
+                        onDone(false, "已取消", null, null)
                         return null
                     }
                     bb.clear()
@@ -280,7 +280,7 @@ object SpeechRecManager {
                 while (!eos) {
                     if (isCancelled()) {
                         sink.close()
-                        onDone(false, "已取消", null)
+                        onDone(false, "已取消", null, null)
                         return null
                     }
                     val inIdx = c.dequeueInputBuffer(10_000)
@@ -320,7 +320,7 @@ object SpeechRecManager {
             return secs
         } catch (e: Exception) {
             PlaybackLog.log("asr decode THREW: ${e.javaClass.simpleName}: ${e.message}")
-            onDone(false, "音频解码失败：${e.message}", null)
+            onDone(false, "音频解码失败：${e.message}", null, null)
             return null
         } finally {
             try {
