@@ -1088,6 +1088,29 @@ class MediaPlaybackService : Service() {
                 // 外部歌词读取失败则尝试内嵌
             }
         }
+        // 1.5 应用内 asr_lrc（歌词识别的兜底保存位置，2.0）：
+        // 识别的歌如果没权限写回音乐文件夹，歌词保存在这里，同样参与显示与翻译
+        if (lyricLines.isEmpty()) {
+            try {
+                val stem = song.fileStem.ifBlank {
+                    song.uri.lastPathSegment?.substringAfterLast('/')
+                        ?.substringBeforeLast('.') ?: ""
+                }
+                if (stem.isNotBlank()) {
+                    val f = java.io.File(filesDir, "asr_lrc/$stem.lrc")
+                    if (f.exists()) {
+                        val parsed = SubtitleParser.parse(decodeText(f.readBytes()))
+                        if (parsed.isNotEmpty()) {
+                            lyricLines = parsed
+                            lyricName = "识别歌词"
+                            return
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // 识别歌词读取失败则尝试内嵌
+            }
+        }
         // 2. 内嵌歌词兜底（USLT / SYLT）
         val embedded = Id3LyricsParser.parse(this, song.uri)
         if (embedded != null && embedded.isNotEmpty()) {

@@ -3255,7 +3255,12 @@ class MainActivity : AppCompatActivity() {
                             // 兜底：逐窗翻译全部失败过，至少补一次完整翻译
                             translateGeneratedLyrics(uriKey, lines)
                         }
-                        toast(getString(R.string.asr_done, savedWhere ?: ""))
+                        // 应用内兜底时提示重选文件夹升级写权限（2.0 修复写拒绝）
+                        if (savedWhere?.contains("应用内") == true) {
+                            toast(getString(R.string.asr_done_internal, savedWhere ?: ""))
+                        } else {
+                            toast(getString(R.string.asr_done, savedWhere ?: ""))
+                        }
                         // 只重扫所在文件夹（2.0）：秒级完成，比整库重扫快得多
                         rescanFolderForAsr(uri)
                         val spd = playbackService?.currentSpeed() ?: 1f
@@ -3566,9 +3571,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun persistRead(uri: Uri) {
         try {
+            // 读+写一起持久化：歌词识别要在音乐文件夹里创建 .lrc（2.0 修复写拒绝）
             contentResolver.takePersistableUriPermission(
                 uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
         } catch (e: Exception) {
             // 部分文件提供方不支持持久化权限，忽略

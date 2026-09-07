@@ -129,6 +129,7 @@
     <string name="asr_import_none">所选文件与模型文件名不匹配（需要 encoder / decoder / joiner / tokens 四个文件，可多选一起导入）</string>
     <string name="asr_running">识别中… 已处理 %1$d / %2$d 秒\n（识别耗时较长，点「取消」可中止）</string>
     <string name="asr_done">歌词已生成：%1$s\n重新扫描音乐库后即可显示</string>
+    <string name="asr_done_internal">歌词已保存到应用内（%1$s）\n想保存到音乐文件夹：设置 → 更换文件夹 重新选择一次即可（升级写权限）</string>
     <string name="asr_failed">识别失败：%1$s</string>
     <string name="asr_gen_short">生成歌词</string>
     <string name="asr_gen_confirm">为当前播放的歌曲实时生成带时间戳的歌词？\n识别在后台进行，边识别边保存，随时可取消（已完成部分保留）。</string>

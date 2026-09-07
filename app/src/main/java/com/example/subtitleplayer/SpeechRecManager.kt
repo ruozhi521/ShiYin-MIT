@@ -13,10 +13,8 @@ import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
-import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -294,16 +292,8 @@ object SpeechRecManager {
                 onDone(false, "识别模型未就绪", null, null)
                 return@Thread
             }
-            val pcm = File(context.cacheDir, "asr_pcm_16k.raw")
             try {
-                PlaybackLog.log("asr decode start uri=$audioUri script=${scriptText?.length ?: 0}chars")
-                val totalSec = decodeToPcm16k(
-                    context, audioUri, pcm, onProgress, isCancelled, onDone
-                ) ?: return@Thread
-                if (isCancelled()) {
-                    onDone(false, "已取消", null, null)
-                    return@Thread
-                }
+                PlaybackLog.log("asr start uri=$audioUri script=${scriptText?.length ?: 0}chars")
                 // lrc 目标在识别开始前建好：每窗写入，边识别边落盘（取消也保留已识别部分）。
                 // SAF 写失败时自动切换应用内兜底，绝不静默丢歌词
                 var target = createLrcTarget(context, audioUri, treeUris)
@@ -312,10 +302,16 @@ object SpeechRecManager {
                     target = internalLrcTarget(context, audioUri)
                     writeLrc(context, target, "")
                 }
-                val lines = recognize(
-                    modelDir(context), pcm, totalSec,
+                // 流水线：解码线程边解码边把 16k 采样块推入队列，
+                // 识别线程凑满 30s 窗即识别并实时上抛（首行歌词约 6-10 秒内出现）
+                val queue = java.util.concurrent.ArrayBlockingQueue<Any>(128)
+                val decoder = Thread {
+                    decodeToQueue(context, audioUri, queue, onProgress, isCancelled)
+                }
+                decoder.start()
+                val lines = recognizeStreaming(
+                    queue, modelDir(context),
                     scriptText?.let { writeHotwords(context, it) },
-                    onProgress,
                     { linesSoFar ->
                         // 实时：每窗完成即写盘 + 上抛（UI 预览 / 逐窗翻译联动）
                         if (!writeLrc(context, target, buildLrc(linesSoFar))) {
@@ -342,24 +338,56 @@ object SpeechRecManager {
             } catch (e: Exception) {
                 PlaybackLog.log("asr THREW: ${e.javaClass.simpleName}: ${e.message}")
                 onDone(false, "${e.javaClass.simpleName}: ${e.message}", null, null)
-            } finally {
-                pcm.delete()
             }
         }.start()
     }
 
-    // ---------- 音频解码：任意音频 → 16kHz 单声道 s16le 原始 PCM 文件 ----------
+    // ---------- 音频解码：任意音频 → 16kHz 单声道采样块（流水线推入队列） ----------
 
-    private fun decodeToPcm16k(
+    /** 队列终止标记：解码结束。 */
+    private class AsrEof
+
+    /** 队列错误标记：解码失败。 */
+    private class AsrError(val msg: String)
+
+    private val asrEofMarker = AsrEof()
+
+    /** 重采样后的 shorts 按 1 秒（16000 采样）聚块，转 float 推入队列。 */
+    private class PcmChunker(
+        private val chunkSamples: Int,
+        private val sink: (FloatArray) -> Unit
+    ) {
+        private var buf = ShortArray(chunkSamples)
+        private var len = 0
+
+        fun push(s: Short) {
+            buf[len++] = s
+            if (len == chunkSamples) flushPartial()
+        }
+
+        private fun flushPartial() {
+            val out = FloatArray(len)
+            for (i in 0 until len) out[i] = buf[i] / 32768f
+            sink(out)
+            len = 0
+        }
+
+        fun flush() {
+            if (len > 0) flushPartial()
+        }
+    }
+
+    /** 解码线程：结束时必投递终止标记（EOF 或 AsrError），消费方据此收尾。 */
+    private fun decodeToQueue(
         context: Context,
         uri: Uri,
-        out: File,
+        queue: java.util.concurrent.ArrayBlockingQueue<Any>,
         onProgress: (doneSec: Int, totalSec: Int) -> Unit,
-        isCancelled: () -> Boolean,
-        onDone: (ok: Boolean, errMsg: String?, savedWhere: String?, lines: List<LrcLine>?) -> Unit
-    ): Double? {
+        isCancelled: () -> Boolean
+    ) {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
+        var chunker = PcmChunker(16000) { chunk -> queue.put(chunk) }
         try {
             extractor.setDataSource(context, uri, null)
             var track = -1
@@ -373,8 +401,8 @@ object SpeechRecManager {
                 }
             }
             if (track < 0 || fmt == null) {
-                onDone(false, "文件里没有音频轨", null, null)
-                return null
+                queue.put(AsrError("文件里没有音频轨"))
+                return
             }
             extractor.selectTrack(track)
             val mime = fmt.getString(MediaFormat.KEY_MIME)!!
@@ -385,16 +413,11 @@ object SpeechRecManager {
             } else 0L
             val totalSec = durationUs / 1_000_000.0
             val resampler = LinearResampler(srcRate, 16000)
-            val sink = DataOutputStream(BufferedOutputStream(FileOutputStream(out), 64 * 1024))
             val mono = ShortArray(65536)
             val info = MediaCodec.BufferInfo()
             var eos = false
             var lastReport = -1
 
-            fun emit(s: Short) {
-                sink.write(s.toInt() and 0xFF)
-                sink.write((s.toInt() shr 8) and 0xFF)
-            }
             fun report(us: Long) {
                 if (durationUs > 0) {
                     val sec = (us / 1_000_000).toInt()
@@ -408,16 +431,12 @@ object SpeechRecManager {
             if (mime == "audio/raw") {
                 val bb = ByteBuffer.allocateDirect(128 * 1024)
                 while (!eos) {
-                    if (isCancelled()) {
-                        sink.close()
-                        onDone(false, "已取消", null, null)
-                        return null
-                    }
+                    if (isCancelled()) return
                     bb.clear()
                     val sz = extractor.readSampleData(bb, 0)
                     if (sz < 0) break
                     val frames = downmix(bb, sz, channels, mono)
-                    resampler.feed(mono, frames, ::emit)
+                    resampler.feed(mono, frames) { s -> chunker.push(s) }
                     report(extractor.sampleTime)
                     extractor.advance()
                 }
@@ -426,11 +445,7 @@ object SpeechRecManager {
                 c.configure(fmt, null, null, 0)
                 c.start()
                 while (!eos) {
-                    if (isCancelled()) {
-                        sink.close()
-                        onDone(false, "已取消", null, null)
-                        return null
-                    }
+                    if (isCancelled()) return
                     val inIdx = c.dequeueInputBuffer(10_000)
                     if (inIdx >= 0) {
                         val ib = c.getInputBuffer(inIdx)!!
@@ -450,7 +465,7 @@ object SpeechRecManager {
                             ob.position(info.offset)
                             ob.limit(info.offset + info.size)
                             val frames = downmix(ob, channels, mono)
-                            resampler.feed(mono, frames, ::emit)
+                            resampler.feed(mono, frames) { s -> chunker.push(s) }
                         }
                         val eosFlag = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                         c.releaseOutputBuffer(outIdx, false)
@@ -465,16 +480,13 @@ object SpeechRecManager {
                     }
                 }
             }
-            resampler.flush(::emit)
-            sink.flush()
-            sink.close()
-            val secs = out.length() / 2.0 / 16000.0
-            PlaybackLog.log("asr decode done: ${"%.1f".format(secs)}s pcm=${out.length()}B")
-            return secs
+            resampler.flush { s -> chunker.push(s) }
+            chunker.flush()
+            PlaybackLog.log("asr decode done")
         } catch (e: Exception) {
             PlaybackLog.log("asr decode THREW: ${e.javaClass.simpleName}: ${e.message}")
-            onDone(false, "音频解码失败：${e.message}", null, null)
-            return null
+            queue.put(AsrError("音频解码失败：${e.message}"))
+            return
         } finally {
             try {
                 codec?.stop()
@@ -489,6 +501,7 @@ object SpeechRecManager {
             } catch (_: Exception) {
             }
         }
+        queue.put(asrEofMarker)
     }
 
     /** 16bit PCM（ByteBuffer 已定位）→ 单声道 shorts（多声道取平均）。 */
@@ -552,14 +565,12 @@ object SpeechRecManager {
         }
     }
 
-    // ---------- 识别：PCM → 分窗（实时上抛）→ 行 ----------
+    // ---------- 识别：消费解码队列 → 分窗（实时上抛）→ 行 ----------
 
-    private fun recognize(
+    private fun recognizeStreaming(
+        queue: java.util.concurrent.ArrayBlockingQueue<Any>,
         modelDir: File,
-        pcm: File,
-        totalSec: Double,
         hotwordsFile: File?,
-        onProgress: (doneSec: Int, totalSec: Int) -> Unit,
         onWindowDone: (linesSoFar: List<LrcLine>) -> Unit,
         isCancelled: () -> Boolean,
         err: (String) -> Unit
@@ -591,62 +602,84 @@ object SpeechRecManager {
                 val windowSec = 30.0
                 val overlapSec = 1.5
                 val windowSamples = (16000 * (windowSec + overlapSec)).toInt()
-                val input = DataInputStream(BufferedInputStream(FileInputStream(pcm), 64 * 1024))
+                val pending = ArrayDeque<FloatArray>()
+                var pendingSamples = 0
+                var eof = false
                 var emittedUntil = -1.0
                 var windowStart = 0.0
-                try {
-                    while (true) {
-                        if (isCancelled()) {
-                            err("已取消")
-                            return null
+
+                fun takeWindow(target: FloatArray): Int {
+                    var filled = 0
+                    while (filled < target.size && pending.isNotEmpty()) {
+                        val head = pending.first()
+                        val take = minOf(target.size - filled, head.size)
+                        System.arraycopy(head, 0, target, filled, take)
+                        filled += take
+                        if (take >= head.size) {
+                            pending.removeFirst()
+                        } else {
+                            pending[0] = head.copyOfRange(take, head.size)
                         }
-                        val samples = FloatArray(windowSamples)
-                        var filled = 0
-                        while (filled < windowSamples) {
-                            val wantBytes = (windowSamples - filled) * 2
-                            val chunk = ByteArray(minOf(8192, wantBytes))
-                            var got = 0
-                            while (got < chunk.size) {
-                                val n = input.read(chunk, got, chunk.size - got)
-                                if (n < 0) break
-                                got += n
-                            }
-                            if (got <= 0) break
-                            val sb = ByteBuffer.wrap(chunk, 0, got)
-                                .order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-                            val n = sb.remaining()
-                            for (i in 0 until n) {
-                                samples[filled + i] = sb.get(i) / 32768f
-                            }
-                            filled += n
+                        pendingSamples -= take
+                    }
+                    return filled
+                }
+
+                while (true) {
+                    if (isCancelled()) {
+                        err("已取消")
+                        return null
+                    }
+                    // 凑窗：不满窗且未结束时持续拉队列（250ms 轮询以便响应取消）
+                    if (pendingSamples < windowSamples && !eof) {
+                        val item = try {
+                            queue.poll(250, java.util.concurrent.TimeUnit.MILLISECONDS)
+                        } catch (e: InterruptedException) {
+                            null
                         }
-                        if (filled == 0) break
-                        val stream = recognizer.createStream()
-                        stream.acceptWaveform(samples.copyOf(filled), sampleRate = 16000)
-                        recognizer.decode(stream)
-                        val r = recognizer.getResult(stream)
-                        for (i in r.tokens.indices) {
-                            val t = windowStart + r.timestamps[i]
-                            if (t >= emittedUntil) {
-                                tokens.add(t to r.tokens[i])
-                                emittedUntil = t + 0.05
+                        when (item) {
+                            null -> {}
+                            is FloatArray -> {
+                                pending.add(item)
+                                pendingSamples += item.size
                             }
+                            is AsrError -> {
+                                err(item.msg)
+                                return null
+                            }
+                            else -> eof = true
                         }
-                        stream.release()
-                        windowStart += windowSec
-                        onProgress(
-                            windowStart.toInt().coerceAtMost(totalSec.toInt()),
-                            totalSec.toInt()
-                        )
-                        // 实时：本窗结果立即切行上抛（UI 预览 / 逐窗翻译联动）
-                        if (r.tokens.isNotEmpty()) {
-                            onWindowDone(tokensToLines(tokens))
+                        if (pendingSamples < windowSamples && !eof) continue
+                    }
+                    if (pendingSamples <= 0) {
+                        if (eof) break
+                        continue
+                    }
+                    // 识别一个窗
+                    val window = FloatArray(minOf(windowSamples, pendingSamples))
+                    takeWindow(window)
+                    val stream = recognizer.createStream()
+                    stream.acceptWaveform(window, sampleRate = 16000)
+                    recognizer.decode(stream)
+                    val r = recognizer.getResult(stream)
+                    for (i in r.tokens.indices) {
+                        val t = windowStart + r.timestamps[i]
+                        if (t >= emittedUntil) {
+                            tokens.add(t to r.tokens[i])
+                            emittedUntil = t + 0.05
                         }
                     }
-                } finally {
-                    try {
-                        input.close()
-                    } catch (_: Exception) {
+                    stream.release()
+                    windowStart += windowSec
+                    // 实时：本窗结果立即切行上抛（UI 预览 / 逐窗翻译联动）
+                    if (r.tokens.isNotEmpty()) {
+                        onWindowDone(tokensToLines(tokens))
+                    }
+                    // 回退 1.5s 重叠区，下一窗从这里开始（重叠 token 由 emittedUntil 去重）
+                    val rewind = (16000 * overlapSec).toInt()
+                    if (window.size > rewind) {
+                        pending.addFirst(window.copyOfRange(window.size - rewind, window.size))
+                        pendingSamples += rewind
                     }
                 }
             } finally {
