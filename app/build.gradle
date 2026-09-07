@@ -3,6 +3,13 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+// sherpa-onnx 经 JitPack 分发：仓库直接声明在本文件，避免仅改 settings.gradle 时上传遗漏
+repositories {
+    google()
+    mavenCentral()
+    maven { url 'https://jitpack.io' }
+}
+
 android {
     namespace 'com.example.subtitleplayer'
     compileSdk 36

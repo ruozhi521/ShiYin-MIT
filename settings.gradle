@@ -6,10 +6,12 @@ pluginManagement {
     }
 }
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    // PREFER_PROJECT：项目内（app/build.gradle）声明的仓库优先——JitPack 声明在 app 侧
     repositories {
         google()
         mavenCentral()
+        // 备用：sherpa-onnx 经 JitPack 分发（仓库主声明在 app/build.gradle）
+        maven { url 'https://jitpack.io' }
     }
 }
 rootProject.name = "SubtitlePlayer"
