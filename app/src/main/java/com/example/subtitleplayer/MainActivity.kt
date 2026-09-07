@@ -3173,13 +3173,13 @@ class MainActivity : AppCompatActivity() {
         asrCancelled = false
         asrLiveUri = null
         asrLiveLines = emptyList()
+        val uriKey = uri.toString()
         if (uriKey == lastSong?.uri?.toString()) {
             // 为当前播放的歌识别：激活「边听边出」实时歌词
             asrLiveUri = uriKey
         }
         asrStatusRowVisible(true)
         updateAsrStatus(0, 0, 0)
-        val uriKey = uri.toString()
         val trees = savedTreeUris()
         Thread {
             SpeechRecManager.transcribe(
