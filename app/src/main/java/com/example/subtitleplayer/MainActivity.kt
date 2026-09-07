@@ -45,7 +45,7 @@ import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
-    private enum class Page { DISCOVER, LIBRARY, PLAYLIST, SEARCH, PLAYER, LYRICS, FAVORITES, VIDEO }
+    private enum class Page { DISCOVER, LIBRARY, PLAYLIST, SEARCH, PLAYER, LYRICS, FAVORITES, VIDEOS, VIDEO }
 
     // ---- 页面视图 ----
     private lateinit var viewDiscover: View
@@ -138,6 +138,11 @@ class MainActivity : AppCompatActivity() {
 
     // ---- 视频页 ----
     private lateinit var viewVideo: View
+    private lateinit var viewVideos: View
+    private lateinit var recyclerVideos: RecyclerView
+    private lateinit var txtVideosEmpty: TextView
+    private lateinit var videoAdapter: SongAdapter
+    private var videoSongs: List<Song> = emptyList()
     private lateinit var videoSurface: android.view.TextureView
     private lateinit var txtVideoHint: android.widget.TextView
     private lateinit var seekVideo: SeekBar
@@ -435,6 +440,23 @@ class MainActivity : AppCompatActivity() {
         }
 
         viewVideo = findViewById(R.id.pageVideo)
+        // 视频列表页（导航栏「视频」，2.0）
+        viewVideos = findViewById(R.id.pageVideos)
+        recyclerVideos = findViewById(R.id.recyclerVideos)
+        txtVideosEmpty = findViewById(R.id.txtVideosEmpty)
+        findViewById<Button>(R.id.btnBackVideos).setOnClickListener { backFromPlayer() }
+        videoAdapter = SongAdapter(
+            hasLyric = { false },
+            onClick = { pos ->
+                if (videoSongs.isNotEmpty()) {
+                    playSong(videoSongs, pos)
+                    openVideoPage()
+                }
+            }
+        )
+        recyclerVideos.layoutManager = LinearLayoutManager(this)
+        recyclerVideos.adapter = videoAdapter
+
         videoSurface = findViewById(R.id.videoSurface)
         txtVideoHint = findViewById(R.id.txtVideoHint)
         seekVideo = findViewById(R.id.seekVideo)
@@ -646,18 +668,8 @@ class MainActivity : AppCompatActivity() {
         updatePlayModeButton(playbackService?.getPlayMode() ?: 0)
         findViewById<Button>(R.id.btnBackLyrics).setOnClickListener { showPage(Page.PLAYER, -1) }
         findViewById<Button>(R.id.btnGenLyric).setOnClickListener {
-            // 为当前播放的歌生成歌词（需已下载识别模型）
-            val song = lastSong
-            when {
-                song == null -> toast(getString(R.string.no_song))
-                !SpeechRecManager.isModelReady(this) -> showAsrDialog()
-                else -> AlertDialog.Builder(this)
-                    .setTitle(R.string.asr_gen_short)
-                    .setMessage(R.string.asr_gen_confirm)
-                    .setPositiveButton(R.string.ok) { _, _ -> startAsrTranscribe(song.uri) }
-                    .setNegativeButton(R.string.cancel, null)
-                    .show()
-            }
+            // 为当前播放的歌生成歌词（需已下载识别模型；自动检测台本提升准确率）
+            startAsrForCurrentSong()
         }
         findViewById<Button>(R.id.btnTranslate).setOnClickListener {
             translateCurrentLyric()
@@ -815,6 +827,7 @@ class MainActivity : AppCompatActivity() {
             MODULE_LIBRARY -> { showPage(Page.LIBRARY); showSegment(true) }
             MODULE_ARTISTS -> { showPage(Page.LIBRARY); showSegment(false) }
             MODULE_FAVORITES -> openFavorites()
+            MODULE_VIDEO -> openVideoList()
             else -> showPage(Page.LIBRARY)
         }
     }
@@ -839,9 +852,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun navModules(): List<String> =
-        (prefs.getString(KEY_NAV_TABS, DEFAULT_NAV)?.split(",") ?: emptyList())
+    private fun navModules(): List<String> {
+        // 2.0 迁移：老用户已保存的自定义导航补上新模块「视频」（仅一次）
+        if (!prefs.getBoolean(KEY_NAV_MIGRATED_20, false)) {
+            prefs.edit().putBoolean(KEY_NAV_MIGRATED_20, true).apply()
+            val saved = prefs.getString(KEY_NAV_TABS, null)
+            if (saved != null && !saved.contains(MODULE_VIDEO)) {
+                prefs.edit().putString(KEY_NAV_TABS, "$saved,$MODULE_VIDEO").apply()
+            }
+        }
+        return (prefs.getString(KEY_NAV_TABS, DEFAULT_NAV)?.split(",") ?: emptyList())
             .filter { it in ALL_MODULES }.ifEmpty { ALL_MODULES }
+    }
 
     private fun defaultModule(): String {
         val d = prefs.getString(KEY_NAV_DEFAULT, null)
@@ -853,6 +875,7 @@ class MainActivity : AppCompatActivity() {
         MODULE_DISCOVER -> R.string.tab_discover
         MODULE_LIBRARY -> R.string.tab_library
         MODULE_ARTISTS -> R.string.nav_artists
+        MODULE_VIDEO -> R.string.tab_video
         else -> R.string.nav_favorites
     }
 
@@ -1203,6 +1226,7 @@ class MainActivity : AppCompatActivity() {
             viewPlayer to (p == Page.PLAYER),
             viewLyrics to (p == Page.LYRICS),
             viewFavorites to (p == Page.FAVORITES),
+            viewVideos to (p == Page.VIDEOS),
             viewVideo to (p == Page.VIDEO)
         )
         for ((v, show) in shows) {
@@ -1250,6 +1274,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun backFromPlayer() {
         selectModule(currentModule)
+    }
+
+    /** 导航栏「视频」：列出库中全部视频文件，点按即播放（2.0）。 */
+    private fun openVideoList() {
+        videoSongs = library?.allSongs?.filter { isVideoFile(it.uri) } ?: emptyList()
+        videoAdapter.submit(videoSongs)
+        txtVideosEmpty.visibility = if (videoSongs.isEmpty()) View.VISIBLE else View.GONE
+        showPage(Page.VIDEOS)
     }
 
     private fun updatePlayModeButton(mode: Int) {
@@ -1425,6 +1457,8 @@ class MainActivity : AppCompatActivity() {
             playlistList().firstOrNull { it.name == name }?.let { openPlaylist(it) }
         } else if (page == Page.FAVORITES) {
             openFavorites()
+        } else if (page == Page.VIDEOS) {
+            openVideoList()
         }
     }
 
@@ -2991,24 +3025,163 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 选完音频：后台识别 + 进度弹窗，完成后自动静默重扫让新 lrc 入库，并提供一键翻译。 */
-    private fun startAsrTranscribe(uri: Uri) {
+    /** 检测音频同目录的台本文件（.txt/.srt），返回文本（供热词提升识别率）。 */
+    private fun findScriptText(uri: Uri, trees: List<Uri>): String? {
+        val docId = try {
+            DocumentsContract.getDocumentId(uri)
+        } catch (e: Exception) {
+            return null
+        }
+        for (tree in trees) {
+            try {
+                val treeDocId = DocumentsContract.getTreeDocumentId(tree)
+                if (docId != treeDocId && !docId.startsWith("$treeDocId/")) continue
+                val parentDocId = if (docId.contains('/')) docId.substringBeforeLast('/') else treeDocId
+                val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+                    tree, parentDocId
+                )
+                val candidates = mutableListOf<Pair<Uri, String>>()
+                contentResolver.query(
+                    childrenUri,
+                    arrayOf(
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                    ),
+                    null, null, null
+                )?.use { c ->
+                    while (c.moveToNext()) {
+                        val name = c.getString(1) ?: continue
+                        val lower = name.lowercase(Locale.getDefault())
+                        if (lower.endsWith(".txt") || lower.endsWith(".srt")) {
+                            candidates.add(
+                                DocumentsContract.buildDocumentUriUsingTree(tree, c.getString(0)) to name
+                            )
+                        }
+                    }
+                }
+                for ((u, name) in candidates) {
+                    val text = try {
+                        contentResolver.openInputStream(u)?.use { input ->
+                            val bytes = input.readBytes()
+                            String(bytes, 0, minOf(bytes.size, 200_000), Charsets.UTF_8)
+                        }
+                    } catch (e: Exception) {
+                        null
+                    }
+                    if (!text.isNullOrBlank()) {
+                        PlaybackLog.log("asr script found: $name (${text.length} chars)")
+                        return text
+                    }
+                }
+            } catch (e: Exception) {
+            }
+        }
+        return null
+    }
+
+    /** 歌词页「生成歌词」：检测台本 → 提示用台本识别（更准）或直接实时识别。 */
+    private fun startAsrForCurrentSong() {
+        val song = lastSong
+        when {
+            song == null -> toast(getString(R.string.no_song))
+            !SpeechRecManager.isModelReady(this) -> showAsrDialog()
+            else -> {
+                val script = findScriptText(song.uri, savedTreeUris())
+                val builder = AlertDialog.Builder(this)
+                    .setTitle(R.string.asr_gen_short)
+                if (script != null) {
+                    builder.setMessage(R.string.asr_script_found)
+                        .setPositiveButton(R.string.asr_use_script) { _, _ ->
+                            startAsrTranscribe(song.uri, script)
+                        }
+                        .setNeutralButton(R.string.asr_start_direct) { _, _ ->
+                            startAsrTranscribe(song.uri, null)
+                        }
+                        .setNegativeButton(R.string.cancel, null)
+                } else {
+                    builder.setMessage(R.string.asr_gen_confirm)
+                        .setPositiveButton(R.string.ok) { _, _ ->
+                            startAsrTranscribe(song.uri, null)
+                        }
+                        .setNegativeButton(R.string.cancel, null)
+                }
+                builder.show()
+            }
+        }
+    }
+
+    @Volatile
+    private var asrLastPreview: String = ""
+
+    /** 选完音频：后台实时识别（逐窗上抛，边识别边落盘+翻译），完成后自动入库。 */
+    private fun startAsrTranscribe(uri: Uri, scriptText: String?) {
         asrCancelled = false
+        asrLastPreview = ""
         val dlg = AlertDialog.Builder(this)
             .setTitle(R.string.asr_title)
             .setMessage(getString(R.string.asr_running, 0, 0))
             .setNegativeButton(R.string.cancel) { _, _ -> asrCancelled = true }
             .setOnCancelListener { asrCancelled = true }
             .show()
+        val uriKey = uri.toString()
         val trees = savedTreeUris()
         Thread {
             SpeechRecManager.transcribe(
                 this,
                 uri,
                 trees,
+                scriptText,
                 onProgress = { sec, total ->
                     runOnUiThread {
-                        if (dlg.isShowing) dlg.setMessage(getString(R.string.asr_running, sec, total))
+                        if (dlg.isShowing) {
+                            dlg.setMessage(getString(R.string.asr_running, sec, total) + "\n" + asrLastPreview)
+                        }
+                    }
+                },
+                onWindowDone = { linesSoFar ->
+                    // 识别线程：逐窗实时翻译（已配置 API 时），更新预览
+                    val cfg = translationConfig()
+                    if (cfg != null) {
+                        try {
+                            val cache = translationCache.getOrPut(uriKey) { HashMap() }
+                            val todo = linesSoFar
+                                .mapIndexed { i, l -> i to l.text }
+                                .filter { it.first !in cache }
+                            if (todo.isNotEmpty()) {
+                                val result = try {
+                                    LyricTranslator.translate(todo, cfg)
+                                } catch (e: Exception) {
+                                    LyricTranslator.TransResult(emptyMap(), "请求异常：${e.message}")
+                                }
+                                if (result.translations.isNotEmpty()) {
+                                    cache.putAll(result.translations)
+                                    LyricTranslationCache.save(applicationContext, translationCache)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            PlaybackLog.log("asr live translate THREW: ${e.message}")
+                        }
+                    }
+                    val trans = translationCache[uriKey]
+                    val last = linesSoFar.lastOrNull()
+                    val preview = buildString {
+                        append(getString(R.string.asr_preview_lines, linesSoFar.size))
+                        if (last != null) {
+                            append('\n')
+                            append(last.text)
+                            val t = trans?.get(linesSoFar.size - 1)
+                            if (!t.isNullOrBlank()) {
+                                append('\n')
+                                append(t)
+                            }
+                        }
+                    }
+                    asrLastPreview = preview
+                    runOnUiThread {
+                        if (dlg.isShowing) {
+                            val sec = (last?.startSec ?: 0.0).toInt()
+                            dlg.setMessage(getString(R.string.asr_running, sec, sec) + "\n" + preview)
+                        }
                     }
                 },
                 isCancelled = { asrCancelled }
@@ -3017,9 +3190,21 @@ class MainActivity : AppCompatActivity() {
                     if (dlg.isShowing) dlg.dismiss()
                     PlaybackLog.log("asr transcribe ok=$ok msg=$msg saved=$savedWhere lines=${lines?.size}")
                     if (ok) {
+                        val cfg = translationConfig()
+                        if (cfg != null && lines != null && translationCache[uriKey].isNullOrEmpty()) {
+                            // 兜底：逐窗翻译全部失败过，至少补一次完整翻译
+                            translateGeneratedLyrics(uriKey, lines)
+                        }
                         toast(getString(R.string.asr_done, savedWhere ?: ""))
                         scanLibrary(silent = true)
-                        showAsrDoneDialog(uri, lines, savedWhere)
+                        // 正在播放这首歌：识别完立即重载歌词（含译文）
+                        if (lastSong?.uri?.toString() == uriKey) {
+                            playbackService?.refreshLyricMap(library?.lyrics ?: emptyMap())
+                            lyricAdapter.setTranslations(translationCache[uriKey] ?: emptyMap())
+                            playbackService?.reloadLyricTranslations()
+                            val spd = playbackService?.currentSpeed() ?: 1f
+                            btnSpeed.text = if (spd == 1f) "1x" else "${spd}x"
+                        }
                     } else if (msg == "已取消") {
                         toast("已取消识别")
                     } else {
@@ -3285,11 +3470,13 @@ class MainActivity : AppCompatActivity() {
         private const val MODULE_LIBRARY = "library"
         private const val MODULE_ARTISTS = "artists"
         private const val MODULE_FAVORITES = "favorites"
+        private const val MODULE_VIDEO = "video"
         private const val KEY_NAV_TABS = "nav_tabs"
         private const val KEY_NAV_DEFAULT = "nav_default"
+        private const val KEY_NAV_MIGRATED_20 = "nav_migrated_2_0"
         private val ALL_MODULES =
-            listOf(MODULE_DISCOVER, MODULE_LIBRARY, MODULE_ARTISTS, MODULE_FAVORITES)
-        private const val DEFAULT_NAV = "discover,library,artists,favorites"
+            listOf(MODULE_DISCOVER, MODULE_LIBRARY, MODULE_ARTISTS, MODULE_FAVORITES, MODULE_VIDEO)
+        private const val DEFAULT_NAV = "discover,library,artists,favorites,video"
         private const val KEY_DARK = "dark_mode"
         private const val KEY_LYRIC_SIZE = "lyric_size"
         private const val KEY_UI_SIZE = "ui_size"

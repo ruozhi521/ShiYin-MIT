@@ -18,7 +18,6 @@ import java.io.DataOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.ByteBuffer
@@ -27,30 +26,34 @@ import java.util.Locale
 import kotlin.math.floor
 
 /**
- * 歌词识别（1.33.1 实验，日语特化）：
- * sherpa-onnx 离线 zipformer（ReazonSpeech 35k 小时，int8 ≈162MB）→
- * 音频（SAF uri）解码为 16k 单声道 PCM → 分窗识别 → 词级时间戳 →
- * 按标点/间隙/长度切行 → 生成 .lrc 保存到音频同目录（SAF）或应用私有目录。
+ * 歌词识别（日语特化，sherpa-onnx 离线 zipformer）。
  *
- * 设计要点：
- * - 音频先落盘为 s16le 原始 PCM 再分窗读取：30 分钟音频仅 58MB 磁盘，
- *   避免整段音频驻留内存（低端机 OOM 风险）
- * - 分窗 30s + 1.5s 重叠：重叠区按 token 时间戳去重，边界不切丢整句
- * - 生成的 .lrc 与拾音现有歌词匹配体系（LibraryScanner）天然兼容：
- *   重新扫描后 findLyric 按同目录同名 stem 命中，播放即显歌词
+ * 2.0 改进：
+ * - 模型下载按「角色 + 候选文件名」解析（HF 镜像仓库的 joiner 只有 fp32 版，
+ *   之前写死 int8 名导致必 404）；hf-mirror 国内源优先，拒绝 HTML 错误页
+ * - **实时识别**：每识别完一个 30s 窗口，立即把已识别行写进 lrc 文件
+ *   （边识别边落盘，取消也保留已完成部分），并通过 onWindowDone 回调
+ *   实时上抛（UI 预览 + 逐窗翻译联动）
+ * - **台本热词**：提供台本文本时生成 sherpa hotwords 文件
+ *   （modified_beam_search + 词组 1.5 分），专有名词识别率显著提升
  */
 object SpeechRecManager {
 
-    private const val ENCODER = "encoder-epoch-99-avg-1.int8.onnx"
-    private const val DECODER = "decoder-epoch-99-avg-1.onnx"
-    private const val JOINER = "joiner-epoch-99-avg-1.int8.onnx"
-    private const val TOKENS = "tokens.txt"
+    private const val MODEL_DIR = "asr_model"
+    private const val HOTWORDS_FILE = "asr_hotwords.txt"
 
-    /** 4 个必需文件（总下载约 162MB）。 */
-    val requiredFiles = listOf(ENCODER, DECODER, JOINER, TOKENS)
+    /** 模型文件按「角色」定义，每个角色可有多个候选文件名（镜像仓库命名不一）。 */
+    private data class ModelFile(val role: String, val candidates: List<String>)
 
-    /** 模型镜像源（按序尝试；均为 HF 单文件直链，避免 680MB tar 包）。
-     *  hf-mirror.com 放首位：国内无需 VPN 可直连；huggingface 原站作回退。 */
+    private val modelFiles = listOf(
+        ModelFile("encoder", listOf("encoder-epoch-99-avg-1.int8.onnx")),
+        ModelFile("decoder", listOf("decoder-epoch-99-avg-1.onnx")),
+        // 镜像仓库 joiner 只有 fp32 版：两个候选都试，任一下载成功即可
+        ModelFile("joiner", listOf("joiner-epoch-99-avg-1.int8.onnx", "joiner-epoch-99-avg-1.onnx")),
+        ModelFile("tokens", listOf("tokens.txt"))
+    )
+
+    /** 模型镜像源（按序尝试）。hf-mirror 国内可直连，放最前；HF 原站回退。 */
     private val modelSources = listOf(
         "https://hf-mirror.com/DeL-TaiseiOzaki/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01/resolve/main/",
         "https://huggingface.co/DeL-TaiseiOzaki/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01/resolve/main/",
@@ -60,12 +63,35 @@ object SpeechRecManager {
         "https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01/resolve/main/"
     )
 
-    fun modelDir(context: Context): File = File(context.filesDir, "asr_model")
+    fun modelDir(context: Context): File = File(context.filesDir, MODEL_DIR)
+
+    private const val TOKENS_FILE = "tokens.txt"
+
+    /** 某角色已就绪的文件名（不存在返回 null）。 */
+    private fun resolvedFile(context: Context, role: String): File? {
+        val mf = modelFiles.firstOrNull { it.role == role } ?: return null
+        for (name in mf.candidates) {
+            val f = File(modelDir(context), name)
+            if (f.exists() && f.length() > 1024) return f
+        }
+        return null
+    }
 
     fun isModelReady(context: Context): Boolean =
-        requiredFiles.all { File(modelDir(context), it).let { f -> f.exists() && f.length() > 1024 } }
+        modelFiles.all { resolvedFile(context, it.role) != null }
 
-    /** 下载模型（后台线程）。onProgress(第几个文件, 当前文件百分比)。 */
+    private fun isSaneContent(bytes: ByteArray, n: Int, name: String): Boolean {
+        // onnx 是二进制（protobuf），tokens.txt 是文本：只要不是 '<' 开头的 HTML 即可
+        if (n > 0 && bytes[0] == '<'.code.toByte()) return false
+        if (name == TOKENS_FILE && n < 1024) return false
+        return true
+    }
+
+
+    /**
+     * 下载模型（后台线程）。onProgress(第几个文件 0-based, 当前文件百分比)。
+     * 每个文件按 候选名 × 镜像源 全组合尝试；单个源限时防挂死。
+     */
     fun downloadModel(
         context: Context,
         onProgress: (fileIndex: Int, filePercent: Int) -> Unit,
@@ -73,82 +99,137 @@ object SpeechRecManager {
     ) {
         Thread {
             val dir = modelDir(context).apply { mkdirs() }
-            for ((idx, name) in requiredFiles.withIndex()) {
-                val target = File(dir, name)
-                if (target.exists() && target.length() > 1024) {
+            for ((idx, mf) in modelFiles.withIndex()) {
+                val existing = resolvedFile(context, mf.role)
+                if (existing != null) {
                     onProgress(idx, 100)
                     continue
                 }
-                var downloaded = false
+                var downloaded: File? = null
                 var lastErr: String? = null
-                for (base in modelSources) {
-                    try {
-                        val conn = URL(base + name).openConnection() as HttpURLConnection
-                        conn.connectTimeout = 15_000
-                        conn.readTimeout = 60_000
-                        conn.instanceFollowRedirects = true
-                        conn.setRequestProperty("User-Agent", "ShiYin/1.33.1")
-                        val code = conn.responseCode
-                        if (code !in 200..299) {
-                            lastErr = "HTTP $code"
-                            conn.disconnect()
-                            continue
-                        }
-                        val total = conn.contentLengthLong
-                        val tmp = File(dir, "$name.tmp")
-                        var acc = 0L
-                        conn.inputStream.use { input ->
-                            tmp.outputStream().use { out ->
-                                val buf = ByteArray(64 * 1024)
-                                while (true) {
-                                    val n = input.read(buf)
-                                    if (n < 0) break
-                                    out.write(buf, 0, n)
-                                    acc += n
-                                    if (total > 0) {
-                                        onProgress(idx, ((acc * 100) / total).toInt().coerceIn(0, 100))
+                outer@ for (base in modelSources) {
+                    for (name in mf.candidates) {
+                        if (isCancelledHook()) break@outer
+                        try {
+                            val conn = URL(base + name).openConnection() as HttpURLConnection
+                            conn.connectTimeout = 12_000
+                            conn.readTimeout = 45_000
+                            conn.instanceFollowRedirects = true
+                            conn.setRequestProperty("User-Agent", "ShiYin/2.0")
+                            val code = conn.responseCode
+                            if (code !in 200..299) {
+                                lastErr = "$name HTTP $code"
+                                conn.disconnect()
+                                continue
+                            }
+                            val total = conn.contentLengthLong
+                            val tmp = File(dir, "$name.tmp")
+                            var acc = 0L
+                            var sane = true
+                            conn.inputStream.use { input ->
+                                tmp.outputStream().use { out ->
+                                    val buf = ByteArray(64 * 1024)
+                                    var first = true
+                                    while (true) {
+                                        val n = input.read(buf)
+                                        if (n < 0) break
+                                        if (first && n > 0 && buf[0] == '<'.code.toByte()) {
+                                            sane = false
+                                            break
+                                        }
+                                        first = false
+                                        out.write(buf, 0, n)
+                                        acc += n
+                                        if (total > 0) {
+                                            onProgress(idx, ((acc * 100) / total).toInt().coerceIn(0, 100))
+                                        }
                                     }
                                 }
                             }
+                            if (!sane || acc < 1024) {
+                                tmp.delete()
+                                lastErr = "$name 内容异常（可能 404 页面）"
+                                continue
+                            }
+                            val target = File(dir, name)
+                            if (!tmp.renameTo(target)) {
+                                tmp.copyTo(target, overwrite = true)
+                                tmp.delete()
+                            }
+                            downloaded = target
+                            PlaybackLog.log("asr model OK $roleTag(mf.role) <- $base$name")
+                            break@outer
+                        } catch (e: Exception) {
+                            lastErr = "${e.javaClass.simpleName}: ${e.message}"
+                            File(dir, "$name.tmp").delete()
                         }
-                        if (tmp.length() < 1024) {
-                            // 404 页面等错误内容
-                            tmp.delete()
-                            lastErr = "内容异常 (${tmp.length()}B)"
-                            continue
-                        }
-                        if (!tmp.renameTo(target)) {
-                            tmp.copyTo(target, overwrite = true)
-                            tmp.delete()
-                        }
-                        downloaded = true
-                        break
-                    } catch (e: Exception) {
-                        lastErr = e.message
                     }
                 }
-                if (!downloaded) {
-                    PlaybackLog.log("asr model download FAIL $name: $lastErr")
-                    onDone(false, "$name（$lastErr）")
+                if (downloaded == null) {
+                    PlaybackLog.log("asr model download FAIL ${mf.role}: $lastErr")
+                    onDone(false, "${mf.role} 文件（$lastErr）")
                     return@Thread
                 }
-                PlaybackLog.log("asr model download OK $name")
             }
             PlaybackLog.log("asr model download ALL DONE")
             onDone(true, null)
         }.start()
     }
 
+    private fun roleTag(role: String) = "[$role]"
+
+    /** 测试钩子（仅单测用）：置 true 可提前中止下载循环。 */
+    @Volatile
+    var cancelFlagForTest: Boolean = false
+
+    private fun isCancelledHook(): Boolean = cancelFlagForTest
+
+    // ---------- 台本 → 热词 ----------
+
     /**
-     * 识别并生成歌词。
-     * onDone(ok, errMsg, savedWhere, lines)：ok=false 时 errMsg 可读、lines=null；
-     * savedWhere 为保存位置描述，lines 为识别出的歌词行（供后续直接翻译）。
+     * 台本文本 → sherpa hotwords 文件（每行「词组 1.5」，去重、限长限量）。
+     * modified_beam_search 下热词显著提升专有名词识别率。
+     */
+    private fun writeHotwords(context: Context, scriptText: String): File? {
+        return try {
+            val phrases = LinkedHashSet<String>()
+            for (raw in scriptText.lines()) {
+                for (seg in raw.split(Regex("[。！？!?.,、，…\\s　]+"))) {
+                    val p = seg.trim()
+                    if (p.isEmpty() || p.length < 2 || p.length > 20) continue
+                    if (p.all { it.isDigit() || it in "0-9.-" }) continue
+                    phrases.add(p)
+                    if (phrases.size >= 300) break
+                }
+                if (phrases.size >= 300) break
+            }
+            if (phrases.isEmpty()) return null
+            val f = File(modelDir(context), HOTWORDS_FILE)
+            f.writeText(phrases.joinToString("\n") { "$it 1.5" })
+            PlaybackLog.log("asr hotwords: ${phrases.size} phrases")
+            f
+        } catch (e: Exception) {
+            PlaybackLog.log("asr hotwords THREW: ${e.message}")
+            null
+        }
+    }
+
+    // ---------- 主入口：识别并生成歌词 ----------
+
+    /**
+     * 识别并生成歌词（实时）。
+     * @param scriptText 台本文本（可空）→ 热词提升识别率
+     * @param onProgress (已处理秒, 总秒)
+     * @param onWindowDone 每识别完一个窗口回调一次（识别线程；linesSoFar 为累计行）
+     * @param onDone (ok, errMsg, savedWhere, lines)
      */
     fun transcribe(
         context: Context,
         audioUri: Uri,
         treeUris: List<Uri>,
+        scriptText: String?,
         onProgress: (doneSec: Int, totalSec: Int) -> Unit,
+        onWindowDone: (linesSoFar: List<LrcLine>) -> Unit,
         isCancelled: () -> Boolean,
         onDone: (ok: Boolean, errMsg: String?, savedWhere: String?, lines: List<LrcLine>?) -> Unit
     ) {
@@ -159,47 +240,45 @@ object SpeechRecManager {
             }
             val pcm = File(context.cacheDir, "asr_pcm_16k.raw")
             try {
-                PlaybackLog.log("asr decode start uri=$audioUri")
+                PlaybackLog.log("asr decode start uri=$audioUri script=${scriptText?.length ?: 0}chars")
                 val totalSec = decodeToPcm16k(
                     context, audioUri, pcm, onProgress, isCancelled, onDone
-                ) ?: return@Thread  // 已通过 onDone 上报
+                ) ?: return@Thread
                 if (isCancelled()) {
                     onDone(false, "已取消", null, null)
                     return@Thread
                 }
-                val lines = recognize(modelDir(context), pcm, totalSec, onProgress, isCancelled) { errMsg ->
-                    pcm.delete()
+                // lrc 目标在识别开始前建好：每窗写入，边识别边落盘（取消也保留已识别部分）
+                val target = createLrcTarget(context, audioUri, treeUris)
+                writeLrc(context, target, "")
+                val lines = recognize(
+                    modelDir(context), pcm, totalSec,
+                    scriptText?.let { writeHotwords(context, it) },
+                    onProgress,
+                    { linesSoFar ->
+                        // 实时：每窗完成即写盘 + 上抛（UI 预览 / 逐窗翻译联动）
+                        writeLrc(context, target, buildLrc(linesSoFar))
+                        onWindowDone(linesSoFar)
+                    },
+                    isCancelled
+                ) { errMsg ->
                     onDone(false, errMsg, null, null)
                 }
-                if (lines == null) return@Thread  // 已上报
-                if (isCancelled()) {
-                    pcm.delete()
-                    onDone(false, "已取消", null, null)
-                    return@Thread
-                }
-                val content = buildLrc(lines)
-                val where = saveLrcNextToAudio(context, audioUri, treeUris, content)
-                pcm.delete()
-                if (where == null) {
-                    onDone(false, "保存歌词文件失败", null, null)
-                } else {
-                    PlaybackLog.log("asr done: ${lines.size} lines -> $where")
-                    onDone(true, null, where, lines)
-                }
+                if (lines == null) return@Thread
+                val where = describeTarget(context, audioUri, target)
+                PlaybackLog.log("asr done: ${lines.size} lines -> $where")
+                onDone(true, null, where, lines)
             } catch (e: Exception) {
                 PlaybackLog.log("asr THREW: ${e.javaClass.simpleName}: ${e.message}")
-                pcm.delete()
                 onDone(false, "${e.javaClass.simpleName}: ${e.message}", null, null)
+            } finally {
+                pcm.delete()
             }
         }.start()
     }
 
     // ---------- 音频解码：任意音频 → 16kHz 单声道 s16le 原始 PCM 文件 ----------
 
-    /**
-     * 返回音频总秒数；出错/取消时已回调 onDone 并返回 null。
-     * PCM 16bit 单声道 16kHz：30 分钟 ≈ 58MB 磁盘，内存占用恒定。
-     */
     private fun decodeToPcm16k(
         context: Context,
         uri: Uri,
@@ -233,10 +312,9 @@ object SpeechRecManager {
             val durationUs = if (fmt.containsKey(MediaFormat.KEY_DURATION)) {
                 fmt.getLong(MediaFormat.KEY_DURATION)
             } else 0L
-            val totalSec = (durationUs / 1_000_000.0)
+            val totalSec = durationUs / 1_000_000.0
             val resampler = LinearResampler(srcRate, 16000)
             val sink = DataOutputStream(BufferedOutputStream(FileOutputStream(out), 64 * 1024))
-            // 128KB 输入块 → 单声道最多 65536 帧
             val mono = ShortArray(65536)
             val info = MediaCodec.BufferInfo()
             var eos = false
@@ -257,7 +335,6 @@ object SpeechRecManager {
             }
 
             if (mime == "audio/raw") {
-                // WAV 等：提取器直接给 PCM
                 val bb = ByteBuffer.allocateDirect(128 * 1024)
                 while (!eos) {
                     if (isCancelled()) {
@@ -399,14 +476,15 @@ object SpeechRecManager {
         }
     }
 
-    // ---------- 识别：PCM 文件 → 分窗 → token+时间戳 → 行 ----------
+    // ---------- 识别：PCM → 分窗（实时上抛）→ 行 ----------
 
-    /** 出错时回调 err（并返回 null）；正常返回行列表。 */
     private fun recognize(
         modelDir: File,
         pcm: File,
         totalSec: Double,
+        hotwordsFile: File?,
         onProgress: (doneSec: Int, totalSec: Int) -> Unit,
+        onWindowDone: (linesSoFar: List<LrcLine>) -> Unit,
         isCancelled: () -> Boolean,
         err: (String) -> Unit
     ): List<LrcLine>? {
@@ -417,14 +495,20 @@ object SpeechRecManager {
                     featConfig = FeatureConfig(sampleRate = 16000, featureDim = 80),
                     modelConfig = OfflineModelConfig(
                         transducer = OfflineTransducerModelConfig(
-                            encoder = File(modelDir, ENCODER).absolutePath,
-                            decoder = File(modelDir, DECODER).absolutePath,
-                            joiner = File(modelDir, JOINER).absolutePath
+                            encoder = File(modelDir, "encoder-epoch-99-avg-1.int8.onnx").absolutePath,
+                            decoder = File(modelDir, "decoder-epoch-99-avg-1.onnx").absolutePath,
+                            joiner = (File(modelDir, "joiner-epoch-99-avg-1.int8.onnx")
+                                .takeIf { it.exists() }
+                                ?: File(modelDir, "joiner-epoch-99-avg-1.onnx")).absolutePath
                         ),
-                        tokens = File(modelDir, TOKENS).absolutePath,
+                        tokens = File(modelDir, TOKENS_FILE).absolutePath,
                         numThreads = 2,
-                        modelType = "transducer"
-                    )
+                        modelType = "transducer",
+                        modelingUnit = "cjkchar"
+                    ),
+                    decodingMethod = if (hotwordsFile != null) "modified_beam_search" else "greedy_search",
+                    hotwordsFile = hotwordsFile?.absolutePath ?: "",
+                    hotwordsScore = 1.5f
                 )
             )
             try {
@@ -478,6 +562,10 @@ object SpeechRecManager {
                             windowStart.toInt().coerceAtMost(totalSec.toInt()),
                             totalSec.toInt()
                         )
+                        // 实时：本窗结果立即切行上抛（UI 预览 / 逐窗翻译联动）
+                        if (r.tokens.isNotEmpty()) {
+                            onWindowDone(tokensToLines(tokens))
+                        }
                     }
                 } finally {
                     try {
@@ -537,7 +625,57 @@ object SpeechRecManager {
         return lines
     }
 
-    // ---------- LRC 生成与保存 ----------
+    // ---------- LRC 增量落盘 ----------
+
+    private data class LrcTarget(val safUri: Uri?, val file: File?, val desc: String)
+
+    /** 识别开始前创建 lrc 目标：SAF 同目录优先（自动入歌词库），兜底应用私有目录。 */
+    private fun createLrcTarget(context: Context, audioUri: Uri, treeUris: List<Uri>): LrcTarget {
+        val docId = try {
+            DocumentsContract.getDocumentId(audioUri)
+        } catch (e: Exception) {
+            null
+        }
+        val stem = (docId ?: audioUri.lastPathSegment ?: "lyrics")
+            .substringAfterLast('/').substringBeforeLast('.')
+        if (docId != null) {
+            for (tree in treeUris) {
+                try {
+                    val treeDocId = DocumentsContract.getTreeDocumentId(tree)
+                    if (docId != treeDocId && !docId.startsWith("$treeDocId/")) continue
+                    val parentDocId = if (docId.contains('/')) {
+                        docId.substringBeforeLast('/')
+                    } else treeDocId
+                    val parentUri = DocumentsContract.buildDocumentUriUsingTree(tree, parentDocId)
+                    val lrcUri = DocumentsContract.createDocument(
+                        context.contentResolver, parentUri, "text/plain", "$stem.lrc"
+                    )
+                    if (lrcUri != null) return LrcTarget(lrcUri, null, "音频同目录 $stem.lrc")
+                } catch (e: Exception) {
+                }
+            }
+        }
+        val dir = File(context.filesDir, "asr_lrc").apply { mkdirs() }
+        return LrcTarget(null, File(dir, "$stem.lrc"), "应用内 asr_lrc/$stem.lrc")
+    }
+
+    private fun writeLrc(context: Context, target: LrcTarget, content: String): Boolean {
+        return try {
+            if (target.safUri != null) {
+                context.contentResolver.openOutputStream(target.safUri)?.use {
+                    it.write(content.toByteArray(Charsets.UTF_8))
+                } != null
+            } else {
+                target.file?.writeText(content)
+                true
+            }
+        } catch (e: Exception) {
+            PlaybackLog.log("asr writeLrc THREW: ${e.message}")
+            false
+        }
+    }
+
+    private fun describeTarget(context: Context, audioUri: Uri, target: LrcTarget): String = target.desc
 
     private fun buildLrc(lines: List<LrcLine>): String {
         val sb = StringBuilder()
@@ -555,51 +693,15 @@ object SpeechRecManager {
         return String.format(Locale.US, "[%02d:%02d.%02d]", mm, ss, cs)
     }
 
-    /**
-     * 保存 .lrc：优先写音频同目录（借已授权的扫描根树），保证下次扫描能自动
-     * 收进歌词库；无树权限时落到应用私有目录 asr_lrc/。返回位置描述，失败 null。
-     */
+    /** 兼容旧调用：保存整份歌词到音频同目录 / 应用私有目录。 */
     fun saveLrcNextToAudio(
         context: Context,
         audioUri: Uri,
         treeUris: List<Uri>,
         content: String
     ): String? {
-        val docId = try {
-            DocumentsContract.getDocumentId(audioUri)
-        } catch (e: Exception) {
-            null
-        }
-        if (docId != null) {
-            val stem = docId.substringAfterLast('/').substringBeforeLast('.')
-            for (tree in treeUris) {
-                try {
-                    val treeDocId = DocumentsContract.getTreeDocumentId(tree)
-                    if (docId != treeDocId && !docId.startsWith("$treeDocId/")) continue
-                    val parentDocId = if (docId.contains('/')) docId.substringBeforeLast('/') else treeDocId
-                    val parentUri = DocumentsContract.buildDocumentUriUsingTree(tree, parentDocId)
-                    val lrcUri = DocumentsContract.createDocument(
-                        context.contentResolver, parentUri, "text/plain", "$stem.lrc"
-                    ) ?: continue
-                    context.contentResolver.openOutputStream(lrcUri)?.use {
-                        it.write(content.toByteArray(Charsets.UTF_8))
-                    } ?: continue
-                    return "音频同目录 $stem.lrc"
-                } catch (e: Exception) {
-                    // 换下一棵树 / 兜底
-                }
-            }
-        }
-        return try {
-            val stem = (audioUri.lastPathSegment ?: "lyrics")
-                .substringAfterLast('/').substringBeforeLast('.')
-            val dir = File(context.filesDir, "asr_lrc").apply { mkdirs() }
-            val f = File(dir, "$stem.lrc")
-            f.writeText(content)
-            "应用内 asr_lrc/$stem.lrc"
-        } catch (e: Exception) {
-            null
-        }
+        val target = createLrcTarget(context, audioUri, treeUris)
+        return if (writeLrc(target, content)) target.desc else null
     }
 }
 

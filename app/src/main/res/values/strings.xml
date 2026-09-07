@@ -128,7 +128,11 @@
     <string name="asr_done">歌词已生成：%1$s\n重新扫描音乐库后即可显示</string>
     <string name="asr_failed">识别失败：%1$s</string>
     <string name="asr_gen_short">生成歌词</string>
-    <string name="asr_gen_confirm">为当前播放的歌曲生成带时间戳的歌词？识别在后台进行，完成后自动保存并刷新。</string>
+    <string name="asr_gen_confirm">为当前播放的歌曲实时生成带时间戳的歌词？\n识别在后台进行，边识别边保存，随时可取消（已完成部分保留）。</string>
+    <string name="asr_script_found">检测到同目录有台本文本！\n\n用台本识别：把台本作为热词，专有名词/人名识别率更高（推荐）\n直接识别：不用台本，立即开始实时识别</string>
+    <string name="asr_use_script">用台本识别（更准）</string>
+    <string name="asr_start_direct">直接识别</string>
+    <string name="asr_preview_lines">已识别 %1$d 行</string>
     <string name="asr_gen_done_title">歌词已生成</string>
     <string name="asr_translate_now">立即翻译歌词</string>
     <string name="asr_need_trans_cfg">还没配置翻译 API，可在「翻译设置」里配置后使用</string>
@@ -136,7 +140,9 @@
     <string name="asr_translated_done">翻译完成，播放这首歌即可看到双语歌词</string>
     <string name="asr_translated_partial">翻译完成，%1$d 行失败；播放这首歌时点「翻译」可重试</string>
     <string name="title_from_filename">歌名显示使用文件名（忽略标签标题，重新扫描后生效）</string>
-    <string name="about_version">版本 1.33.1</string>
+    <string name="tab_video">视频</string>
+    <string name="videos_empty">这个导航页还没有视频文件\n把含视频的文件夹添加进音乐库即可</string>
+    <string name="about_version">版本 2.0</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>
