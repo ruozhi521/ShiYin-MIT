@@ -53,6 +53,34 @@
             android:text="@string/translate" />
     </LinearLayout>
 
+    <LinearLayout
+        android:id="@+id/asrStatusRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/txtAsrStatus"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="3"
+            android:textColor="@color/accent"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btnAsrCancel"
+            style="@style/BtnStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="48dp"
+            android:text="@string/asr_cancel_short" />
+    </LinearLayout>
+
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/recyclerLyricFull"
         android:layout_width="match_parent"

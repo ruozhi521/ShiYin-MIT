@@ -429,7 +429,7 @@ object SpeechRecManager {
                         }
                     }
                     var outIdx = c.dequeueOutputBuffer(info, 10_000)
-                    while (outIdx >= 0) {
+                    while (outIdx >= 0 && !eos) {
                         val ob = c.getOutputBuffer(outIdx)!!
                         if (info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
                             ob.position(info.offset)
@@ -440,8 +440,13 @@ object SpeechRecManager {
                         val eosFlag = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                         c.releaseOutputBuffer(outIdx, false)
                         report(info.presentationTimeUs)
-                        if (eosFlag) eos = true
-                        if (!eos) outIdx = c.dequeueOutputBuffer(info, 0)
+                        if (eosFlag) {
+                            // EOS 缓冲已释放：立即退出内层循环，否则旧索引会被再次
+                            // 处理（"index 0 is not owned by client"，2.0 实测必崩）
+                            eos = true
+                            break
+                        }
+                        outIdx = c.dequeueOutputBuffer(info, 0)
                     }
                 }
             }

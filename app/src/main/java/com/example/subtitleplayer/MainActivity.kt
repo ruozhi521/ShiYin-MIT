@@ -297,10 +297,15 @@ class MainActivity : AppCompatActivity() {
                 updateTime(position)
             }
             updateNowLyric(lyricIndex)
-            if (lyricIndex != currentLyricHighlight) {
-                currentLyricHighlight = lyricIndex
-                lyricAdapter.setCurrent(lyricIndex)
-                scrollToLyric(lyricIndex)
+            // 识别实时歌词激活时（服务里还没有该歌的正式歌词）：按已识别行本地算高亮
+            var highlightIdx = lyricIndex
+            if (highlightIdx < 0 && asrLiveUri != null && asrLiveLines.isNotEmpty()) {
+                highlightIdx = asrLiveLines.indexOfLast { it.startMs <= position }
+            }
+            if (highlightIdx != currentLyricHighlight) {
+                currentLyricHighlight = highlightIdx
+                lyricAdapter.setCurrent(highlightIdx)
+                scrollToLyric(highlightIdx)
             }
         }
 
@@ -332,6 +337,14 @@ class MainActivity : AppCompatActivity() {
     // ---- 歌词识别（1.33.1 实验）----
     @Volatile
     private var asrCancelled = false
+    @Volatile
+    private var asrRunning = false
+    /** 正在实时显示识别歌词的歌曲 uri（边听边出）；null 表示无。 */
+    @Volatile
+    private var asrLiveUri: String? = null
+    private var asrLiveLines: List<SubtitleLine> = emptyList()
+    private lateinit var txtAsrStatus: TextView
+    private lateinit var btnAsrCancel: Button
     private val asrAudioPicker =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri != null) startAsrTranscribe(uri, null)
@@ -436,6 +449,10 @@ class MainActivity : AppCompatActivity() {
         viewSearch = findViewById(R.id.pageSearch)
         viewPlayer = findViewById(R.id.pagePlayer)
         viewLyrics = findViewById(R.id.pageLyrics)
+        txtAsrStatus = findViewById(R.id.txtAsrStatus)
+        btnAsrCancel = findViewById(R.id.btnAsrCancel)
+        btnAsrCancel.setOnClickListener { asrCancelled = true }
+        asrStatusRowVisible(false)
         playerHeader = findViewById(R.id.playerHeader)
         playerControlsMain = findViewById(R.id.playerControlsMain)
         playerControlsExtra = findViewById(R.id.playerControlsExtra)
@@ -3129,19 +3146,39 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    @Volatile
-    private var asrLastPreview: String = ""
+    private fun asrStatusRowVisible(visible: Boolean) {
+        runOnUiThread {
+            findViewById<View>(R.id.asrStatusRow).visibility =
+                if (visible) View.VISIBLE else View.GONE
+        }
+    }
 
-    /** 选完音频：后台实时识别（逐窗上抛，边识别边落盘+翻译），完成后自动入库。 */
+    private fun updateAsrStatus(sec: Int, total: Int, lineCount: Int) {
+        runOnUiThread {
+            txtAsrStatus.text = getString(R.string.asr_status_running, sec, total, lineCount)
+        }
+    }
+
+    /**
+     * 非阻塞实时识别（2.0）：不弹进度框，歌词页顶部显示状态行，
+     * 已识别的行实时浮现在歌词列表里并跟随播放高亮（边听边出）；
+     * 识别比实时快约 10 倍，整首歌词很快就能完整呈现。
+     */
     private fun startAsrTranscribe(uri: Uri, scriptText: String?) {
+        if (asrRunning) {
+            toast("已有识别在进行中")
+            return
+        }
+        asrRunning = true
         asrCancelled = false
-        asrLastPreview = ""
-        val dlg = AlertDialog.Builder(this)
-            .setTitle(R.string.asr_title)
-            .setMessage(getString(R.string.asr_running, 0, 0))
-            .setNegativeButton(R.string.cancel) { _, _ -> asrCancelled = true }
-            .setOnCancelListener { asrCancelled = true }
-            .show()
+        asrLiveUri = null
+        asrLiveLines = emptyList()
+        if (uriKey == lastSong?.uri?.toString()) {
+            // 为当前播放的歌识别：激活「边听边出」实时歌词
+            asrLiveUri = uriKey
+        }
+        asrStatusRowVisible(true)
+        updateAsrStatus(0, 0, 0)
         val uriKey = uri.toString()
         val trees = savedTreeUris()
         Thread {
@@ -3152,9 +3189,9 @@ class MainActivity : AppCompatActivity() {
                 scriptText,
                 onProgress = { sec, total ->
                     runOnUiThread {
-                        if (dlg.isShowing) {
-                            dlg.setMessage(getString(R.string.asr_running, sec, total) + "\n" + asrLastPreview)
-                        }
+                        txtAsrStatus.text = getString(
+                            R.string.asr_status_running, sec, total, asrLiveLines.size
+                        )
                     }
                 },
                 onWindowDone = { linesSoFar ->
@@ -3181,32 +3218,36 @@ class MainActivity : AppCompatActivity() {
                             PlaybackLog.log("asr live translate THREW: ${e.message}")
                         }
                     }
-                    val trans = translationCache[uriKey]
-                    val last = linesSoFar.lastOrNull()
-                    val preview = buildString {
-                        append(getString(R.string.asr_preview_lines, linesSoFar.size))
-                        if (last != null) {
-                            append('\n')
-                            append(last.text)
-                            val t = trans?.get(linesSoFar.size - 1)
-                            if (!t.isNullOrBlank()) {
-                                append('\n')
-                                append(t)
-                            }
-                        }
-                    }
-                    asrLastPreview = preview
                     runOnUiThread {
-                        if (dlg.isShowing) {
-                            val sec = (last?.startSec ?: 0.0).toInt()
-                            dlg.setMessage(getString(R.string.asr_running, sec, sec) + "\n" + preview)
+                        val live = uriKey == lastSong?.uri?.toString()
+                        asrLiveLines = linesSoFar.map { l ->
+                            SubtitleLine((l.startSec * 1000).toInt(), (l.endSec * 1000).toInt(), l.text)
                         }
+                        if (live) {
+                            // 边听边出：歌词列表实时替换为已识别行，跟随播放高亮
+                            lyricLines = asrLiveLines
+                            lyricAdapter.submit(asrLiveLines)
+                            lyricAdapter.setTranslations(translationCache[uriKey] ?: emptyMap())
+                            val pos = playbackService?.currentPosition() ?: 0
+                            val idx = asrLiveLines.indexOfLast { it.startMs <= pos }
+                            currentLyricHighlight = idx
+                            lyricAdapter.setCurrent(idx)
+                            scrollToLyric(idx)
+                            updateNowLyric(idx)
+                        }
+                        txtAsrStatus.text = getString(
+                            R.string.asr_status_running,
+                            (linesSoFar.lastOrNull()?.endSec ?: 0.0).toInt(),
+                            (linesSoFar.lastOrNull()?.endSec ?: 0.0).toInt(),
+                            linesSoFar.size
+                        )
                     }
                 },
                 isCancelled = { asrCancelled }
             ) { ok, msg, savedWhere, lines ->
                 runOnUiThread {
-                    if (dlg.isShowing) dlg.dismiss()
+                    asrRunning = false
+                    asrStatusRowVisible(false)
                     PlaybackLog.log("asr transcribe ok=$ok msg=$msg saved=$savedWhere lines=${lines?.size}")
                     if (ok) {
                         val cfg = translationConfig()
@@ -3216,8 +3257,9 @@ class MainActivity : AppCompatActivity() {
                         }
                         toast(getString(R.string.asr_done, savedWhere ?: ""))
                         scanLibrary(silent = true)
-                        // 正在播放这首歌：识别完立即重载歌词（含译文）
+                        // 正在播放这首歌：识别完用正式歌词替换实时预览（含译文）
                         if (lastSong?.uri?.toString() == uriKey) {
+                            asrLiveUri = uriKey
                             playbackService?.refreshLyricMap(library?.lyrics ?: emptyMap())
                             lyricAdapter.setTranslations(translationCache[uriKey] ?: emptyMap())
                             playbackService?.reloadLyricTranslations()
@@ -3232,29 +3274,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }.start()
-    }
-
-    /** 识别成功后续：提供「立即翻译」（已配置翻译 API 时）。 */
-    private fun showAsrDoneDialog(uri: Uri, lines: List<LrcLine>?, savedWhere: String?) {
-        val cfg = translationConfig()
-        val builder = AlertDialog.Builder(this)
-            .setTitle(R.string.asr_gen_done_title)
-            .setMessage(getString(R.string.asr_done, savedWhere ?: ""))
-            .setNegativeButton(R.string.close, null)
-        if (lines.isNullOrEmpty()) {
-            builder.show()
-            return
-        }
-        builder.setPositiveButton(
-            if (cfg != null) R.string.asr_translate_now else R.string.trans_settings
-        ) { _, _ ->
-            if (cfg != null) {
-                translateGeneratedLyrics(uri.toString(), lines)
-            } else {
-                showTransSettingsDialog()
-            }
-        }
-        builder.show()
     }
 
     /**
