@@ -108,7 +108,7 @@ gradle assembleDebug
 ## 🧱 技术栈
 
 - 语言：Kotlin
-- 构建：AGP 8.2.2 / Gradle 8.2 / Kotlin 1.9.22 / JDK 17
+- 构建：AGP 8.9.1 / Kotlin 2.3.20 / JDK 17（CI 用 Gradle 8.11.1）
 - minSdk 26（Android 8.0+），targetSdk 34 / compileSdk 36
 - 依赖：androidx core-ktx / appcompat / recyclerview；Media3 ExoPlayer（播放兜底引擎）；sherpa-onnx（歌词识别，Apache-2.0）；词幕 Provider SDK
 
