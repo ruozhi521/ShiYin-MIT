@@ -131,6 +131,7 @@
     <string name="asr_done">歌词已生成：%1$s\n重新扫描音乐库后即可显示</string>
     <string name="asr_done_internal">歌词已保存到应用内（%1$s）\n想保存到音乐文件夹：设置 → 更换文件夹 重新选一次同一文件夹（这次会授予写入权限），已识别好的歌词会自动搬过去</string>
     <string name="asr_lrc_flushed">已把 %1$d 个歌词文件写回音乐文件夹</string>
+    <string name="folder_own_songs">本文件夹的歌曲</string>
     <string name="asr_failed">识别失败：%1$s</string>
     <string name="asr_gen_short">生成歌词</string>
     <string name="asr_gen_confirm">为当前播放的歌曲实时生成带时间戳的歌词？\n识别在后台进行，边识别边保存，随时可取消（已完成部分保留）。</string>

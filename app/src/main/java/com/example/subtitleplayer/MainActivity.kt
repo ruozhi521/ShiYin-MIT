@@ -3525,7 +3525,23 @@ class MainActivity : AppCompatActivity() {
 
     /** 渲染当前层节点 + 面包屑路径。 */
     private fun refreshTree() {
-        val nodes = if (treeStack.isEmpty()) treeRoots else treeStack.last().children
+        // 进入某文件夹时，如果它自己也有歌（即同时有音声和子文件夹），
+        // 把「本文件夹的歌曲」作为第一行再列子文件夹 —— 以前单击进来只列子文件夹、
+        // 这层的音声看不到，只能长按目录才能打开（用户反馈：点进去只见子文件夹）。
+        val nodes: List<TreeNode> = if (treeStack.isEmpty()) {
+            treeRoots
+        } else {
+            val cur = treeStack.last()
+            val own = cur.playlist?.let { pl ->
+                TreeNode(
+                    name = getString(R.string.folder_own_songs),
+                    path = cur.path,
+                    depth = cur.depth + 1,
+                    playlist = pl
+                )
+            }
+            if (own != null) listOf(own) + cur.children else cur.children
+        }
         treeAdapter.submit(nodes)
         txtTreePath.text = if (treeStack.isEmpty()) {
             getString(R.string.root_dir)
