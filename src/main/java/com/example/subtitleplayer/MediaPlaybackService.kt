@@ -1,0 +1,1421 @@
+package com.example.subtitleplayer
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.ServiceInfo
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.media.MediaMetadata
+import android.media.MediaPlayer
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
+import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.os.PowerManager
+import android.provider.Settings
+import android.net.Uri
+import java.io.File
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.Charset
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
+
+/**
+ * 前台播放服务：持有 MediaPlayer，提供通知栏/锁屏控制，独立于 Activity 存活，
+ * 保证退到后台、锁屏也能稳定播放。
+ */
+class MediaPlaybackService : Service() {
+
+    interface Listener {
+        /** 歌曲切换：song 为 null 表示无歌曲；lines 为当前歌词（可能为空）。 */
+        fun onSongChanged(song: Song?, lines: List<SubtitleLine>, lyricName: String?)
+
+        /** 进度回调：lyricIndex 为当前应高亮的歌词行索引，-1 表示无。 */
+        fun onProgress(position: Int, duration: Int, lyricIndex: Int)
+
+        fun onPlayStateChanged(playing: Boolean)
+    }
+
+    companion object {
+        private const val CHANNEL_ID = "playback"
+        private const val NOTIFICATION_ID = 1
+        const val ACTION_PLAY_PAUSE = "com.example.subtitleplayer.PLAY_PAUSE"
+        const val ACTION_NEXT = "com.example.subtitleplayer.NEXT"
+        const val ACTION_PREV = "com.example.subtitleplayer.PREV"
+        const val ACTION_TOGGLE_LYRICS = "com.example.subtitleplayer.TOGGLE_LYRICS"
+        const val ACTION_ALARM_PLAY = "com.example.subtitleplayer.ALARM_PLAY"
+        const val KEY_LAST_URI = "last_uri"
+        const val KEY_LAST_POS = "last_pos"
+        const val KEY_PER_SONG = "per_song_pos"
+        // 定时开始播放（与 MainActivity 设置对话框共用字符串）
+        const val KEY_ALARM_ON = "alarm_play_on"
+        const val KEY_ALARM_ONCE = "alarm_play_once"
+        const val KEY_ALARM_HOUR = "alarm_play_hour"
+        const val KEY_ALARM_MINUTE = "alarm_play_minute"
+        const val KEY_DESKTOP_ON = "desktop_lyrics_on"
+        const val KEY_MIX_AUDIO = "mix_audio"
+        const val KEY_PLAY_MODE = "play_mode"
+        const val KEY_LYRICON = "lyricon_enabled"
+        const val MODE_SEQUENCE = 0
+        const val MODE_SHUFFLE = 1
+        const val MODE_REPEAT_ONE = 2
+    }
+
+    private val binder = PlaybackBinder()
+    private val handler = Handler(Looper.getMainLooper())
+    private var listener: Listener? = null
+
+    private var mediaPlayer: MediaPlayer? = null
+    /**
+     * ExoPlayer 兜底引擎（1.33）：个别 Android 16 机型 MediaPlayer 出声即报
+     * -19(ENODEV)（均衡器/音频属性均已排除），切 ExoPlayer 恢复正常。
+     * 仅在 MediaPlayer 自愈失败后启用（useExo），正常机型永不触碰，行为不变。
+     */
+    private var exoPlayer: androidx.media3.exoplayer.ExoPlayer? = null
+    private var useExo = false
+    /** 视频 surface（视频页绑定时记录；切歌/循环后新播放器需重新绑定画面）。 */
+    private var attachedVideoSurface: android.view.Surface? = null
+    /** 解码后的真实视频尺寸（含旋转修正，区别于 MediaMetadataRetriever 的存储方向）。 */
+    private var videoWidth = 0
+    private var videoHeight = 0
+    /** 视频尺寸解出后回调（视频页用于修正方向与画面比例）。 */
+    var onVideoSizeChanged: ((Int, Int) -> Unit)? = null
+    private var isPrepared = false
+    private var durationMs = 0
+    private var speed = 1f
+    /**
+     * 播放失败过的歌（uri）。onError 自动切歌的熔断依据：
+     * 整轮列表全部失败过才停止，而不是「连续失败」——部分机型
+     * prepare 成功但 start 后解码报错，连续计数会被 onPrepared 之外
+     * 的成功表象绕过，造成无限切歌（OriginOS 6 反馈，1.32）。
+     * 真正播响（start 成功）或换播放列表时清空。
+     */
+    private val playFailedUris = HashSet<String>()
+    /**
+     * -19 (ENODEV) 自愈：该 uri 已重试过一次。按 uri 记（不随播放器重建丢失），
+     * 稳定播放 3 秒后或换列表时清空。同一首最多自愈一次，防死循环。
+     */
+    private var deviceErrorRetriedUri: String? = null
+    /** 因 -19 卸载过均衡器后，本会话不再自动挂载（避免每首歌都要失败重试一轮）。 */
+    private var fxSuppressedByDeviceError = false
+    /** 每首歌独立进度记忆（默认关，设置开）。uri -> positionMs。 */
+    private val perSongPositions = HashMap<String, Int>()
+    private var perSongLoaded = false
+
+    private var songs: List<Song> = emptyList()
+    private var index = -1
+    private var lyricMap: Map<String, LyricRef> = emptyMap()
+    private var lyricLines: List<SubtitleLine> = emptyList()
+    private var lyricName: String? = null
+    private var lyricTrans: Map<Int, String> = emptyMap()
+
+    private var audioManager: AudioManager? = null
+    private var audioFocusRequest: AudioFocusRequest? = null
+    private var resumeAfterFocusLoss = false
+
+    private var mediaSession: MediaSession? = null
+    private var foregroundShown = false
+
+    private var sleepRunnable: Runnable? = null
+
+    private var desktopLyrics: DesktopLyricsOverlay? = null
+
+    private val statePrefs by lazy {
+        getSharedPreferences("play_state", Context.MODE_PRIVATE)
+    }
+    private var tick = 0
+    private var pendingResumeMs = 0
+    private var forcePlayAfterSeek = false
+    private val lyriconBridge by lazy { LyriconBridge(this) }
+    private var notificationArtwork: android.graphics.Bitmap? = null
+
+    private val progressRunnable = object : Runnable {
+        override fun run() {
+            if (isPrepared) {
+                val pos = enginePosition()
+                listener?.onProgress(pos, durationMs, lyricIndexAt(pos))
+                desktopLyrics?.updateText(lyricTextAt(pos))
+                tick++
+                if (tick % 4 == 0) lyriconBridge.syncPosition(pos)
+                if (tick % 30 == 0) savePosition()
+                // 播放稳定超过 3 秒才算「真成功」：清空失败记录（1.33 日志实锤——
+                // start 后立刻 clear 会被 20ms 后到达的 onError 打穿，熔断永不累积）
+                if (pos > 3000 && playFailedUris.isNotEmpty()) {
+                    PlaybackLog.log("playback stable >3s: clear failed (${playFailedUris.size})")
+                    playFailedUris.clear()
+                    deviceErrorRetriedUri = null
+                }
+                handler.postDelayed(this, 300)
+            }
+        }
+    }
+
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        // 混合播放模式：不响应任何焦点变化（与其他音频同时出声，互不打断）
+        if (isMixAudioOn()) return@OnAudioFocusChangeListener
+        when (change) {
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                resumeAfterFocusLoss = false
+                pause()
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                resumeAfterFocusLoss = isPlaying()
+                pause()
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                if (resumeAfterFocusLoss) {
+                    resumeAfterFocusLoss = false
+                    play()
+                }
+            }
+            else -> {
+                // AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK 等：保持播放
+            }
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        createChannel()
+        initMediaSession()
+        // 词幕开关（设置里可关，默认关闭）
+        lyriconBridge.enabled = getSharedPreferences("player", Context.MODE_PRIVATE)
+            .getBoolean(KEY_LYRICON, false)
+        // 耳机拔出/蓝牙断开（1.33）：系统广播「即将变吵」→ 自动暂停防外放
+        val noisyFilter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+        androidx.core.content.ContextCompat.registerReceiver(
+            this, becomingNoisyReceiver, noisyFilter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+    }
+
+    /**
+     * 耳机断开自动暂停（1.33）。
+     * 决策：混合播放模式下同样暂停——混合模式「无视」的是其他应用抢音频焦点的
+     * 暂停命令；拔耳机是物理事件，继续播会突然外放扰民，属于防尴尬保护。
+     * 暂停后点播放即可继续，混合模式特性（不抢焦点、不被其他应用打断）不受影响。
+     */
+    private val becomingNoisyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != AudioManager.ACTION_AUDIO_BECOMING_NOISY) return
+            if (engineIsPlaying()) {
+                PlaybackLog.log("headphones disconnected (becoming noisy) -> pause")
+                pause()
+            }
+        }
+    }
+
+    /** 设置页开关：开启/关闭状态栏歌词推送（词幕）。 */
+    fun setLyriconEnabled(on: Boolean) {
+        getSharedPreferences("player", Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_LYRICON, on).apply()
+        lyriconBridge.applyEnabled(on)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 提前前台化：闹钟触发冷启动时立即进入前台，避免后台调度节流导致播放卡顿
+        showForeground()
+        when (intent?.action) {
+            ACTION_PLAY_PAUSE -> togglePlay()
+            ACTION_PREV -> playPrev()
+            ACTION_NEXT -> playNext()
+            ACTION_TOGGLE_LYRICS -> toggleDesktopLyrics()
+            ACTION_ALARM_PLAY -> {
+                android.util.Log.d("ShiYinAlarm", "onStartCommand: ACTION_ALARM_PLAY")
+                playLast()
+                handleAlarmAfterPlay()
+            }
+        }
+        // 服务每次启动（含后台重建）时恢复桌面歌词开关状态
+        if (isDesktopLyricsOn()) setDesktopLyrics(true)
+        return START_NOT_STICKY
+    }
+
+    // ---------- 定时开始播放：仅一次 / 每天 ----------
+
+    /** 闹钟触发后的后续处理：每天 → 重设明天同一时间；仅播放一次 → 取消闹钟。 */
+    private fun handleAlarmAfterPlay() {
+        val p = getSharedPreferences("player", Context.MODE_PRIVATE)
+        if (p.getBoolean(KEY_ALARM_ONCE, false)) {
+            // 仅播放一次：取消闹钟并关闭开关
+            p.edit().putBoolean(KEY_ALARM_ON, false).apply()
+            val pi = PendingIntent.getService(
+                this, 100,
+                Intent(this, MediaPlaybackService::class.java)
+                    .setAction(ACTION_ALARM_PLAY),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            (getSystemService(Context.ALARM_SERVICE) as AlarmManager).cancel(pi)
+        } else {
+            // 每天：重设明天同一时间（PendingIntent 同 requestCode 100，覆盖旧闹钟）
+            val hour = p.getInt(KEY_ALARM_HOUR, 7)
+            val minute = p.getInt(KEY_ALARM_MINUTE, 0)
+            val cal = java.util.Calendar.getInstance().apply {
+                set(java.util.Calendar.HOUR_OF_DAY, hour)
+                set(java.util.Calendar.MINUTE, minute)
+                set(java.util.Calendar.SECOND, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+                if (timeInMillis <= System.currentTimeMillis()) {
+                    add(java.util.Calendar.DAY_OF_YEAR, 1)
+                }
+            }
+            val pi = PendingIntent.getService(
+                this, 100,
+                Intent(this, MediaPlaybackService::class.java)
+                    .setAction(ACTION_ALARM_PLAY),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val showPi = PendingIntent.getActivity(
+                this, 101,
+                Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            (getSystemService(Context.ALARM_SERVICE) as AlarmManager)
+                .setAlarmClock(AlarmManager.AlarmClockInfo(cal.timeInMillis, showPi), pi)
+        }
+    }
+
+    override fun onBind(intent: Intent?): IBinder = binder
+
+    override fun onDestroy() {
+        lyriconBridge.destroy()
+        savePosition()
+        handler.removeCallbacks(progressRunnable)
+        desktopLyrics?.hide()
+        abandonFocus()
+        try {
+            unregisterReceiver(becomingNoisyReceiver)
+        } catch (_: Exception) {
+        }
+        releasePlayer()
+        mediaSession?.release()
+        mediaSession = null
+        super.onDestroy()
+    }
+
+    // ---------- 对外 API（通过 Binder） ----------
+
+    inner class PlaybackBinder : android.os.Binder() {
+        fun service(): MediaPlaybackService = this@MediaPlaybackService
+    }
+
+    fun setListener(l: Listener?) {
+        listener = l
+    }
+
+    fun startPlaylist(
+        songs: List<Song>,
+        index: Int,
+        lyricMap: Map<String, LyricRef>,
+        resumeMs: Int = 0,
+        forcePlay: Boolean = false
+    ) {
+        savePosition() // 切歌单/列表点击前保存当前歌位置
+        this.songs = songs
+        this.index = index
+        this.lyricMap = lyricMap
+        this.pendingResumeMs = resumeMs
+        this.forcePlayAfterSeek = forcePlay
+        playFailedUris.clear() // 换列表：之前的失败记录作废
+        deviceErrorRetriedUri = null
+        PlaybackLog.log(
+            "startPlaylist size=${songs.size} index=$index resume=$resumeMs " +
+                "uri=${songs.getOrNull(index)?.uri?.lastPathSegment}"
+        )
+        playCurrent()
+    }
+
+    /**
+     * 播放失败统一处理（onError 与 play() 异常共用）：
+     * 记下失败的歌并自动切下一首；整轮全失败过才停下并清空状态，防无限切歌。
+     */
+    private fun handlePlaybackError() {
+        currentSong()?.uri?.toString()?.let { playFailedUris.add(it) }
+        if (songs.size > 1 && playFailedUris.size < songs.size) {
+            PlaybackLog.log("error -> skip next (failed ${playFailedUris.size}/${songs.size})")
+            playNext()
+        } else {
+            PlaybackLog.log("error -> STOP (whole list failed, ${playFailedUris.size}/${songs.size})")
+            playFailedUris.clear()
+            listener?.onSongChanged(null, emptyList(), null)
+        }
+    }
+
+    fun currentIndex(): Int = index
+
+    /** 当前引擎是否正在出声（两引擎通用）。 */
+    private fun engineIsPlaying(): Boolean = try {
+        if (useExo) exoPlayer?.isPlaying == true else mediaPlayer?.isPlaying == true
+    } catch (e: Exception) {
+        false
+    }
+
+    /** 当前引擎的播放位置（毫秒）。 */
+    private fun enginePosition(): Int = try {
+        if (useExo) (exoPlayer?.currentPosition ?: 0L).toInt()
+        else mediaPlayer?.currentPosition ?: 0
+    } catch (e: Exception) {
+        0
+    }
+
+    /** 当前引擎的音频会话 id（均衡器挂载用；未初始化返回 null）。 */
+    private fun engineAudioSessionId(): Int? = try {
+        if (useExo) exoPlayer?.audioSessionId else mediaPlayer?.audioSessionId
+    } catch (e: Exception) {
+        null
+    }
+
+    fun togglePlay() {
+        if (engineIsPlaying()) pause() else play()
+    }
+
+    fun playPrev() {
+        if (songs.isEmpty()) return
+        savePosition() // 切歌前保存当前歌位置（播放中 9 秒内切换也能记住）
+        index = when (getPlayMode()) {
+            MODE_SHUFFLE -> randomIndex()
+            else -> (index - 1 + songs.size) % songs.size
+        }
+        playCurrent()
+    }
+
+    fun playNext() {
+        if (songs.isEmpty()) return
+        savePosition() // 切歌前保存当前歌位置（播放中 9 秒内切换也能记住）
+        index = when (getPlayMode()) {
+            MODE_SHUFFLE -> randomIndex()
+            else -> (index + 1) % songs.size
+        }
+        playCurrent()
+    }
+
+    /** 随机选一首（避免与当前相同）。 */
+    private fun randomIndex(): Int {
+        if (songs.size <= 1) return index
+        var r = index
+        while (r == index) r = kotlin.random.Random.nextInt(songs.size)
+        return r
+    }
+
+    /** 播放模式：0 顺序 / 1 随机 / 2 单曲循环。 */
+    fun getPlayMode(): Int =
+        getSharedPreferences("player", Context.MODE_PRIVATE).getInt(KEY_PLAY_MODE, MODE_SEQUENCE)
+
+    /** 点击循环切换模式，返回新模式。 */
+    fun cyclePlayMode(): Int {
+        val next = (getPlayMode() + 1) % 3
+        getSharedPreferences("player", Context.MODE_PRIVATE)
+            .edit().putInt(KEY_PLAY_MODE, next).apply()
+        return next
+    }
+
+    fun seekTo(ms: Int) {
+        if (!isPrepared) return
+        try {
+            if (useExo) {
+                exoPlayer?.seekTo(ms.coerceIn(0, durationMs).toLong())
+            } else {
+                val mp = mediaPlayer ?: return
+                mp.seekTo(ms.coerceIn(0, durationMs))
+            }
+            // 刷新会话 position，通知进度与播放器同步（否则暂停时 seek 后通知停在旧位置）
+            updateMediaSession(isPlaying())
+        } catch (e: Exception) {
+            // ignore
+        }
+    }
+
+    /** 跳到指定毫秒，若当前暂停则同时开始播放（歌词点击跳转用）。 */
+    fun seekToAndPlay(ms: Int) {
+        seekTo(ms)
+        if (!isPlaying()) play()
+    }
+
+    /** 视频页：绑定画面 surface；传 null 表示脱离画面（setSurface(null) 后继续纯音频播放）。 */
+    fun attachVideoSurface(surface: android.view.Surface?) {
+        attachedVideoSurface = surface
+        try {
+            if (useExo) {
+                // Exo 接受 null 表示脱离画面
+                exoPlayer?.setVideoSurface(surface)
+            } else {
+                val mp = mediaPlayer ?: return
+                if (surface != null) {
+                    // 先清空再重设：强制重建渲染通道让画面输出。
+                    // 注意：不在此处 pause/seek（seek 在部分设备会卡住解码器导致进度冻结），
+                    // 播放/暂停一律走 Service 的 play()/pause() 保持状态一致。
+                    mp.setSurface(null)
+                    mp.setSurface(surface)
+                    android.util.Log.d("ShiYinVideo", "attachVideoSurface: rebind surface")
+                } else {
+                    mp.setSurface(null)
+                    android.util.Log.d("ShiYinVideo", "attachVideoSurface: detach")
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ShiYinVideo", "attachVideoSurface failed: ${e.message}")
+        }
+    }
+
+    /** 播放速度（倍速用；1f 正常）。切歌/换播放器时重置为 1f。 */
+    fun setSpeed(speed: Float) {
+        this.speed = speed
+        try {
+            if (speed >= 0.5f && speed <= 16f) {
+                if (useExo) {
+                    exoPlayer?.setPlaybackSpeed(speed)
+                } else {
+                    val mp = mediaPlayer ?: return
+                    mp.playbackParams = android.media.PlaybackParams().setSpeed(speed)
+                }
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    fun currentSpeed(): Float = speed
+
+    fun currentPosition(): Int = enginePosition()
+
+    fun currentDuration(): Int = durationMs
+
+    /** 当前视频解码尺寸（0,0 表示未知/音频）。 */
+    fun currentVideoSize(): Pair<Int, Int> = videoWidth to videoHeight
+
+    /** 定时开始播放：恢复上次播放的歌曲与进度；无记录时兜底播放第一个歌单。 */
+    private fun playLast() {
+        android.util.Log.d(
+            "ShiYinAlarm",
+            "playLast: lastUri=${statePrefs.getString(KEY_LAST_URI, null)}"
+        )
+        val lastUri = statePrefs.getString(KEY_LAST_URI, null)
+        if (!lastUri.isNullOrEmpty()) {
+            try {
+                val uri = android.net.Uri.parse(lastUri)
+                val pos = statePrefs.getInt(KEY_LAST_POS, 0)
+                // 优先从库缓存取完整歌曲信息（tag 标题/艺术家/文件夹），
+                // 避免状态栏歌词显示文件名、艺术家为空
+                val lib = LibraryCache.load(this)
+                val cached = lib?.allSongs?.firstOrNull { it.uri.toString() == lastUri }
+                if (cached != null) {
+                    android.util.Log.d("ShiYinAlarm", "playLast: restore cached uri=$lastUri pos=$pos")
+                    startPlaylist(
+                        listOf(cached), 0, lib?.lyrics ?: emptyMap(), pos, forcePlay = true
+                    )
+                } else {
+                    // 文件不在库中（被移走/未扫描）：回退文件名（去扩展名）+ 文件夹兜底艺术家
+                    val title = queryDisplayName(uri)
+                        ?.substringBeforeLast(".")
+                        ?.takeIf { it.isNotBlank() } ?: "音乐"
+                    val folder = queryFolder(uri)
+                    android.util.Log.d("ShiYinAlarm", "playLast: restore raw uri=$lastUri pos=$pos")
+                    startPlaylist(
+                        listOf(Song(title, uri, folder, artist = folder)),
+                        0, emptyMap(), pos, forcePlay = true
+                    )
+                }
+                return
+            } catch (e: Exception) {
+                android.util.Log.d("ShiYinAlarm", "playLast: restore failed ${e.message}")
+            }
+        }
+        // 兜底：播放第一个歌单（连续播放），保证到点一定有声音
+        try {
+            val lib = LibraryCache.load(this) ?: return
+            val pl = lib.playlists.firstOrNull() ?: return
+            android.util.Log.d("ShiYinAlarm", "playLast: fallback playlist=${pl.name} songs=${pl.songs.size}")
+            startPlaylist(pl.songs, 0, lib.lyrics, 0, forcePlay = true)
+        } catch (e: Exception) {
+            android.util.Log.d("ShiYinAlarm", "playLast: fallback failed ${e.message}")
+        }
+    }
+
+    private fun queryDisplayName(uri: android.net.Uri): String? = try {
+        contentResolver.query(uri, null, null, null, null)?.use { c ->
+            if (c.moveToFirst()) {
+                val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0) c.getString(idx) else null
+            } else null
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun queryFolder(uri: android.net.Uri): String = try {
+        val path = uri.lastPathSegment ?: ""
+        val parts = path.split("/").filter { it.isNotEmpty() }
+        parts.getOrNull(parts.size - 2) ?: ""
+    } catch (e: Exception) {
+        ""
+    }
+
+    /** 持久化当前歌曲与进度，供下次启动断点续播。 */
+    private fun savePosition() {
+        if (!isPrepared) return
+        val song = currentSong() ?: return
+        val pos = enginePosition()
+        statePrefs.edit()
+            .putString(KEY_LAST_URI, song.uri.toString())
+            .putInt(KEY_LAST_POS, pos)
+            .apply()
+        // 每首歌独立进度（设置开启时）：记录 + 持久化
+        if (perSongEnabled()) {
+            loadPerSongPositions()
+            perSongPositions[song.uri.toString()] = pos
+            persistPerSongPositions()
+        }
+    }
+
+    // ---------- 每首歌独立进度记忆（默认关闭，设置开启）----------
+
+    private fun perSongEnabled(): Boolean =
+        getSharedPreferences("player", Context.MODE_PRIVATE).getBoolean(KEY_PER_SONG, false)
+
+    private fun perSongFile(): File = File(filesDir, "per_song_pos.json")
+
+    private fun loadPerSongPositions() {
+        if (perSongLoaded) return
+        perSongLoaded = true
+        if (!perSongEnabled()) return
+        try {
+            val f = perSongFile()
+            if (f.exists() && f.length() > 0) {
+                val jo = org.json.JSONObject(f.readText())
+                val it = jo.keys()
+                while (it.hasNext()) {
+                    val k = it.next()
+                    perSongPositions[k] = jo.optInt(k, 0)
+                }
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun persistPerSongPositions() {
+        if (!perSongEnabled()) return
+        try {
+            val jo = org.json.JSONObject()
+            for ((k, v) in perSongPositions) jo.put(k, v)
+            perSongFile().writeText(jo.toString())
+        } catch (e: Exception) {
+        }
+    }
+
+    /** 该歌的记忆进度（未开启/无记录返回 0）。 */
+    private fun perSongPos(song: Song?): Int {
+        if (song == null || !perSongEnabled()) return 0
+        loadPerSongPositions()
+        return perSongPositions[song.uri.toString()] ?: 0
+    }
+
+    /** 定时关闭：minutes 分钟后自动暂停；minutes <= 0 表示取消。 */
+    fun setSleepTimer(minutes: Int) {
+        cancelSleepTimer()
+        if (minutes <= 0) return
+        sleepRunnable = Runnable {
+            sleepRunnable = null
+            pause()
+        }
+        handler.postDelayed(sleepRunnable!!, minutes * 60_000L)
+    }
+
+    fun cancelSleepTimer() {
+        sleepRunnable?.let { handler.removeCallbacks(it) }
+        sleepRunnable = null
+    }
+
+    /** 让新绑定的客户端立即拿到当前完整状态。 */
+    fun pushState() {
+        listener?.onSongChanged(currentSong(), lyricLines, lyricName)
+        if (isPrepared) {
+            val pos = enginePosition()
+            listener?.onProgress(pos, durationMs, lyricIndexAt(pos))
+        }
+        listener?.onPlayStateChanged(isPlaying())
+    }
+
+    // ---------- 播放 ----------
+
+    private fun currentSong(): Song? = songs.getOrNull(index)
+
+    /** 外部（播放页红心等）获取 Service 当前歌曲，不依赖 Activity 队列。 */
+    fun currentSongSafe(): Song? = currentSong()
+
+    /** 用户打开均衡器面板时调用：确保 EQ 已挂载到当前播放器（即便未保存配置）。 */
+    fun ensureEqAttached() {
+        val sid = engineAudioSessionId() ?: return
+        if (sid == 0) return
+        try {
+            if (!AudioFxManager.isAttached) {
+                if (AudioFxManager.attach(sid)) {
+                    AudioFxManager.restoreSaved(this)
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun playCurrent() {
+        val song = currentSong() ?: return
+        releasePlayer()
+        speed = 1f // 切歌/换播放器后倍速重置
+        PlaybackLog.log(
+            "playCurrent #$index engine=${if (useExo) "exo" else "media"} ${song.uri.lastPathSegment}"
+        )
+
+        loadLyric(song)
+        lyriconBridge.syncSong(song, lyricLines, lyricTrans, 0)
+        loadNotificationArtwork(song)
+        listener?.onSongChanged(song, lyricLines, lyricName)
+
+        if (useExo) startExo(song) else startMp(song)
+    }
+
+    /** MediaPlayer 主引擎：所有正常机型的默认路径，行为与历史版本一致。 */
+    private fun startMp(song: Song) {
+        val mp = MediaPlayer()
+        try {
+            // 显式声明音频用途：部分 Android 16 机型不设 Attributes 时 AudioTrack 打不开
+            try {
+                mp.setAudioAttributes(
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                )
+            } catch (_: Exception) {
+            }
+            mp.setDataSource(this, song.uri)
+            // 视频页打开中：新播放器重新绑定画面（否则循环/切歌后画面不动）
+            attachedVideoSurface?.let { surf ->
+                try {
+                    mp.setSurface(surf)
+                    android.util.Log.d("ShiYinVideo", "playCurrent: rebind surface $surf")
+                } catch (e: Exception) {
+                    android.util.Log.e("ShiYinVideo", "playCurrent rebind failed: ${e.message}")
+                }
+            }
+            mp.setWakeMode(this, PowerManager.PARTIAL_WAKE_LOCK)
+            mp.setOnPreparedListener { player ->
+                isPrepared = true
+                // 注意：prepare 成功不代表能播放（部分机型 start 后解码才报错，
+                // 如 OriginOS 6 反馈），失败计数不在清零——由稳定播放 3 秒后清零
+                // fMP4（m4s）duration 可能为 -1/0，兜底为 0（界面显示未知时长）
+                durationMs = player.duration.coerceAtLeast(0)
+                PlaybackLog.log("onPrepared dur=$durationMs uri=${currentSong()?.uri?.lastPathSegment}")
+                lyriconBridge.syncSong(currentSong(), lyricLines, lyricTrans, durationMs)
+                handlePreparedResume()
+            }
+            mp.setOnVideoSizeChangedListener { _, w, h ->
+                android.util.Log.d("ShiYinVideo", "onVideoSizeChanged: ${w}x$h")
+                if (w > 0 && h > 0) {
+                    videoWidth = w
+                    videoHeight = h
+                    onVideoSizeChanged?.invoke(w, h)
+                }
+            }
+            mp.setOnCompletionListener {
+                // 听完了：清除该歌的独立进度记录（下次从头播）
+                if (perSongEnabled()) {
+                    loadPerSongPositions()
+                    currentSong()?.let { perSongPositions.remove(it.uri.toString()) }
+                    persistPerSongPositions()
+                }
+                // 播放完成：按播放模式决定下一首（单曲循环重播当前）
+                when (getPlayMode()) {
+                    MODE_REPEAT_ONE -> {
+                        seekTo(0)
+                        // 单曲循环不重建播放器，强制重设 surface 触发画面刷新（部分设备 seek 后无新帧）
+                        attachedVideoSurface?.let { surf ->
+                            try {
+                                mp.setSurface(null)
+                                mp.setSurface(surf)
+                            } catch (e: Exception) {
+                            }
+                        }
+                        play()
+                    }
+                    MODE_SHUFFLE -> {
+                        if (songs.size > 1) {
+                            index = randomIndex()
+                            playCurrent()
+                        }
+                    }
+                    else -> playNext()
+                }
+            }
+            mp.setOnErrorListener { p, what, extra ->
+                // 迟到的旧播放器错误：playCurrent 已换新播放器，若不拦会连环切歌
+                if (p !== mediaPlayer) {
+                    android.util.Log.w("ShiYinPlay", "onError from stale player: what=$what extra=$extra")
+                    PlaybackLog.log("onError STALE player what=$what extra=$extra (ignored)")
+                    return@setOnErrorListener true
+                }
+                android.util.Log.w(
+                    "ShiYinPlay",
+                    "onError what=$what extra=$extra failed=${playFailedUris.size + 1}/${songs.size}"
+                )
+                PlaybackLog.log(
+                    "onError what=$what extra=$extra song=${currentSong()?.uri?.lastPathSegment} " +
+                        "failed=${playFailedUris.size + 1}/${songs.size}"
+                )
+                // -19 = ENODEV：音频输出设备打开失败（Android 16 部分机型实测，如 vivo
+                // V2324HA 全列表必现）。嫌疑：挂在会话上的均衡器 effect 或瞬时设备状态。
+                // 自愈：卸掉均衡器（本会话不再自动挂载）+ 250ms 后重建同一首重试一次，
+                // 不计失败；同曲只自愈一次，再失败走正常失败流程
+                val curUri = currentSong()?.uri?.toString()
+                if (extra == -19 && curUri != null && deviceErrorRetriedUri != curUri) {
+                    deviceErrorRetriedUri = curUri
+                    if (AudioFxManager.isAttached) {
+                        AudioFxManager.release()
+                        fxSuppressedByDeviceError = true
+                        PlaybackLog.log("ENODEV(-19): detached equalizer")
+                    }
+                    PlaybackLog.log("ENODEV(-19): retry same song once in 250ms")
+                    releasePlayer()
+                    val cur = index
+                    handler.postDelayed({
+                        if (index == cur && mediaPlayer == null && exoPlayer == null) playCurrent()
+                    }, 250)
+                    return@setOnErrorListener true
+                }
+                // 自愈重试后仍 -19：MediaPlayer 在该机型上无法出声（Android 16 实测），
+                // 整个会话切到 ExoPlayer 兜底引擎，立即重试当前歌（不计失败）
+                if (extra == -19 && !useExo) {
+                    useExo = true
+                    deviceErrorRetriedUri = null
+                    PlaybackLog.log("ENODEV(-19) persists -> switch to ExoPlayer engine")
+                    releasePlayer()
+                    val cur = index
+                    handler.postDelayed({
+                        if (index == cur && mediaPlayer == null && exoPlayer == null) playCurrent()
+                    }, 250)
+                    return@setOnErrorListener true
+                }
+                // 播放失败（fMP4 无 moov 等异常文件）：自动切下一首，避免卡死在无声文件。
+                // 按「失败过的歌」计数而非连续计数（1.32 修复 OriginOS 无限切歌）：
+                // 部分机型 prepare 成功但 start 后解码立即报错，旧逻辑在 onPrepared 清零
+                // 导致熔断永远不触发；现在整轮列表全失败过才停。
+                handlePlaybackError()
+                true
+            }
+            mp.prepareAsync()
+            mediaPlayer = mp
+            // 挂载均衡器（每次新建播放器都需重新挂载）并恢复上次曲线。
+            // 仅当用户配置过均衡器才 attach，否则全 0 的 audiofx.Equalizer 也会挂在 DAC
+            // 链路上，部分 DAC 机型低音量时引入可闻杂音。
+            // 因 -19 卸载过则本会话不再挂（fxSuppressedByDeviceError），防每首都失败一轮
+            try {
+                if (AudioFxManager.hasConfig(this) && !fxSuppressedByDeviceError) {
+                    if (AudioFxManager.attach(mp.audioSessionId)) {
+                        AudioFxManager.restoreSaved(this)
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        } catch (e: Exception) {
+            // setDataSource / prepare 阶段就失败：文件本身读不了，交给熔断逻辑。
+            // post 到队列异步处理：整列表都坏时避免 playCurrent 同步递归栈溢出
+            android.util.Log.e("ShiYinPlay", "prepare failed: ${e.message}")
+            PlaybackLog.log(
+                "prepare THREW: ${e.javaClass.simpleName}: ${e.message} song=${song.uri.lastPathSegment}"
+            )
+            try {
+                mp.release()
+            } catch (_: Exception) {
+            }
+            mediaPlayer = null
+            // 校验「失败的还是当前歌」：若用户已点了别的歌，这条过期失败直接作废
+            val failedUri = song.uri.toString()
+            handler.post {
+                if (currentSong()?.uri?.toString() == failedUri) handlePlaybackError()
+            }
+        }
+    }
+
+    /** ExoPlayer 兜底引擎（Media3）：MediaPlayer 出声即 -19 的机型上自动启用。 */
+    private fun startExo(song: Song) {
+        val p = try {
+            androidx.media3.exoplayer.ExoPlayer.Builder(this).build()
+        } catch (e: Exception) {
+            PlaybackLog.log("exo build THREW: ${e.javaClass.simpleName}: ${e.message}")
+            val failedUri = song.uri.toString()
+            handler.post {
+                if (currentSong()?.uri?.toString() == failedUri) handlePlaybackError()
+            }
+            return
+        }
+        exoPlayer = p
+        try {
+            // handleAudioFocus=false：焦点由 Service 的 requestFocus 统一管理
+            p.setAudioAttributes(
+                androidx.media3.common.AudioAttributes.Builder()
+                    .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                    .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .build(),
+                false
+            )
+        } catch (_: Exception) {
+        }
+        p.addListener(object : androidx.media3.common.Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (p !== exoPlayer) return // 迟到的旧引擎事件，忽略
+                when (state) {
+                    androidx.media3.common.Player.STATE_READY -> {
+                        if (isPrepared) return // READY 只处理一次（seek 不触发新 READY）
+                        isPrepared = true
+                        // fMP4 时长 -1/0 兜底为 0（Exo duration 为 Long，TIME_UNSET 为极大负数）
+                        durationMs = p.duration.coerceAtLeast(0L).toInt()
+                        PlaybackLog.log(
+                            "exo READY dur=$durationMs uri=${currentSong()?.uri?.lastPathSegment}"
+                        )
+                        lyriconBridge.syncSong(currentSong(), lyricLines, lyricTrans, durationMs)
+                        handlePreparedResume()
+                    }
+                    androidx.media3.common.Player.STATE_ENDED -> {
+                        PlaybackLog.log("exo ENDED song=${currentSong()?.uri?.lastPathSegment}")
+                        // 听完了：清除该歌的独立进度记录（下次从头播）
+                        if (perSongEnabled()) {
+                            loadPerSongPositions()
+                            currentSong()?.let { perSongPositions.remove(it.uri.toString()) }
+                            persistPerSongPositions()
+                        }
+                        when (getPlayMode()) {
+                            MODE_REPEAT_ONE -> {
+                                seekTo(0)
+                                play()
+                            }
+                            MODE_SHUFFLE -> {
+                                if (songs.size > 1) {
+                                    index = randomIndex()
+                                    playCurrent()
+                                }
+                            }
+                            else -> playNext()
+                        }
+                    }
+                    else -> {}
+                }
+            }
+
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                if (p !== exoPlayer) return
+                PlaybackLog.log(
+                    "exo error ${error.errorCodeName} song=${currentSong()?.uri?.lastPathSegment}"
+                )
+                handlePlaybackError()
+            }
+
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                if (videoSize.width > 0 && videoSize.height > 0) {
+                    videoWidth = videoSize.width
+                    videoHeight = videoSize.height
+                    onVideoSizeChanged?.invoke(videoSize.width, videoSize.height)
+                }
+            }
+        })
+        // 视频页打开中：新引擎重新绑定画面
+        attachedVideoSurface?.let { surf ->
+            try {
+                p.setVideoSurface(surf)
+            } catch (e: Exception) {
+                PlaybackLog.log("exo surface rebind failed: ${e.message}")
+            }
+        }
+        p.setMediaItem(androidx.media3.common.MediaItem.fromUri(song.uri))
+        p.prepare()
+        // 挂载均衡器（因 -19 卸载过则本会话不再挂）
+        try {
+            if (AudioFxManager.hasConfig(this) && !fxSuppressedByDeviceError) {
+                val sid = p.audioSessionId
+                if (sid != 0 && AudioFxManager.attach(sid)) {
+                    AudioFxManager.restoreSaved(this)
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    /** 引擎就绪（MediaPlayer onPrepared / Exo STATE_READY）共用的断点恢复逻辑。 */
+    private fun handlePreparedResume() {
+        var resume = pendingResumeMs
+        pendingResumeMs = 0
+        // 每首歌独立进度：调用方没指定位置时，用该歌自己的记录（接近结尾不恢复）
+        var fromPerSong = false
+        if (resume <= 0) {
+            val saved = perSongPos(currentSong())
+            if (saved > 0 && durationMs > 5000 && saved < durationMs - 5000) {
+                resume = saved
+                fromPerSong = true
+            }
+        }
+        if (resume > 0 && resume < durationMs) {
+            seekTo(resume)
+            if (forcePlayAfterSeek) {
+                // 定时开始播放（闹钟）：恢复进度后直接响，不等用户点播放
+                forcePlayAfterSeek = false
+                play()
+            } else if (fromPerSong) {
+                // 每首歌进度记忆：切回时直接继续播放（不是断点续播的"恢复后暂停"），
+                // 走 play() 才能重启 progressRunnable 刷新时长/进度 UI
+                play()
+            } else {
+                updateAll(false)
+            }
+        } else {
+            forcePlayAfterSeek = false
+            play()
+        }
+    }
+
+    private fun play() {
+        if (!isPrepared) {
+            PlaybackLog.log("play: not prepared, ignored")
+            return
+        }
+        if (!requestFocus()) {
+            android.util.Log.d("ShiYinAlarm", "play: audio focus denied")
+            PlaybackLog.log("play: audio focus DENIED")
+            return
+        }
+        try {
+            if (durationMs > 0 && enginePosition() >= durationMs) {
+                seekTo(0)
+            }
+            if (useExo) {
+                exoPlayer?.play()
+            } else {
+                mediaPlayer?.start()
+            }
+        } catch (e: Exception) {
+            // 播放器已进 Error 状态（旧版本在这里直接抛 IllegalStateException 闪退）：
+            // 走与 onError 相同的自动切歌，而不是崩溃（1.32 修复 OriginOS 闪退反馈）
+            android.util.Log.e("ShiYinPlay", "play() failed: ${e.message}")
+            PlaybackLog.log("play() THREW: ${e.javaClass.simpleName}: ${e.message}")
+            handlePlaybackError()
+            return
+        }
+        // 真正播响了：失败记录不清空（等稳定播放 3 秒后在进度循环里清，
+        // 否则 start 后立刻到达的 onError 会被清空的记录绕过熔断）
+        android.util.Log.d("ShiYinAlarm", "play: started")
+        PlaybackLog.log("play: started OK (${if (useExo) "exo" else "media"})")
+        lyriconBridge.syncPlaybackState(true)
+        updateAll(true)
+    }
+
+    private fun pause() {
+        savePosition()
+        cancelSleepTimer()
+        try {
+            if (useExo) exoPlayer?.pause() else mediaPlayer?.pause()
+        } catch (_: Exception) {
+            // Error 状态调用 pause 会抛异常，忽略
+        }
+        abandonFocus()
+        lyriconBridge.syncPlaybackState(false)
+        updateAll(false)
+    }
+
+    private fun isPlaying(): Boolean = engineIsPlaying()
+
+    fun isPlayingSafe(): Boolean = isPlaying()
+
+    private fun updateAll(playing: Boolean) {
+        handler.removeCallbacks(progressRunnable)
+        if (playing) {
+            handler.post(progressRunnable)
+        }
+        showForeground()
+        updateMediaSession(playing)
+        listener?.onPlayStateChanged(playing)
+    }
+
+    private fun releasePlayer() {
+        handler.removeCallbacks(progressRunnable)
+        isPrepared = false
+        try {
+            mediaPlayer?.release()
+        } catch (_: Exception) {
+        }
+        mediaPlayer = null
+        try {
+            exoPlayer?.release()
+        } catch (_: Exception) {
+        }
+        exoPlayer = null
+        durationMs = 0
+    }
+
+    // ---------- 歌词 ----------
+
+    private fun loadLyric(song: Song) {
+        lyricLines = emptyList()
+        lyricName = null
+        // 载入该歌的本地译文缓存（桌面歌词双行显示用）
+        lyricTrans = try {
+            LyricTranslationCache.load(this)[song.uri.toString()] ?: emptyMap()
+        } catch (e: Exception) {
+            emptyMap()
+        }
+        // 1. 外部 .lrc / .vtt 文件优先
+        val ref = LibraryScanner.findLyric(song, lyricMap)
+        if (ref != null) {
+            try {
+                val bytes =
+                    contentResolver.openInputStream(ref.uri)?.use { it.readBytes() }
+                // 外置读取失败（null/空）也继续走内嵌兜底，不能直接 return
+                if (bytes != null && bytes.isNotEmpty()) {
+                    val parsed = SubtitleParser.parse(decodeText(bytes))
+                    if (parsed.isNotEmpty()) {
+                        lyricLines = parsed
+                        lyricName = ref.displayName
+                        return
+                    }
+                }
+            } catch (e: Exception) {
+                // 外部歌词读取失败则尝试内嵌
+            }
+        }
+        // 1.5 应用内 asr_lrc（歌词识别的兜底保存位置，2.0）：
+        // 识别的歌如果没权限写回音乐文件夹，歌词保存在这里，同样参与显示与翻译
+        if (lyricLines.isEmpty()) {
+            try {
+                val stem = song.fileStem.ifBlank {
+                    song.uri.lastPathSegment?.substringAfterLast('/')
+                        ?.substringBeforeLast('.') ?: ""
+                }
+                if (stem.isNotBlank()) {
+                    val f = java.io.File(filesDir, "asr_lrc/$stem.lrc")
+                    if (f.exists()) {
+                        val parsed = SubtitleParser.parse(decodeText(f.readBytes()))
+                        if (parsed.isNotEmpty()) {
+                            lyricLines = parsed
+                            lyricName = "识别歌词"
+                            return
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // 识别歌词读取失败则尝试内嵌
+            }
+        }
+        // 2. 内嵌歌词兜底（USLT / SYLT）
+        val embedded = Id3LyricsParser.parse(this, song.uri)
+        if (embedded != null && embedded.isNotEmpty()) {
+            lyricLines = embedded
+            lyricName = "内嵌歌词"
+        }
+    }
+
+    private fun lyricIndexAt(pos: Int): Int {
+        if (lyricLines.isEmpty()) return -1
+        if (lyricLines[0].startMs < 0) return -1 // 静态歌词（无时间戳），不参与高亮
+        var idx = -1
+        for (i in lyricLines.indices) {
+            if (lyricLines[i].startMs <= pos) {
+                idx = i
+            } else {
+                break
+            }
+        }
+        return idx
+    }
+
+    /** 当前进度对应的歌词文本（桌面歌词用）；有译文时显示 原文+译文 双行。 */
+    private fun lyricTextAt(pos: Int): String {
+        val idx = lyricIndexAt(pos)
+        if (idx < 0) return ""
+        val text = lyricLines[idx].text
+        val trans = lyricTrans[idx]
+        return if (trans != null && trans.isNotEmpty() && trans != text) {
+            "$text\n$trans"
+        } else {
+            text
+        }
+    }
+
+    /** 翻译完成后由 Activity 调用：重新载入当前歌的译文缓存，刷新桌面歌词。 */
+    fun reloadLyricTranslations() {
+        val song = currentSong() ?: return
+        lyricTrans = try {
+            LyricTranslationCache.load(this)[song.uri.toString()] ?: emptyMap()
+        } catch (e: Exception) {
+            emptyMap()
+        }
+        desktopLyrics?.updateText(lyricTextAt(enginePosition()))
+    }
+
+    // ---------- 桌面歌词 ----------
+
+    fun isDesktopLyricsOn(): Boolean = getSharedPreferences("player", Context.MODE_PRIVATE)
+        .getBoolean(KEY_DESKTOP_ON, false)
+
+    /** 通知栏按钮触发：切换桌面歌词开/关。 */
+    fun toggleDesktopLyrics() {
+        setDesktopLyrics(!isDesktopLyricsOn())
+    }
+
+    /** 开启/关闭桌面歌词；未授权悬浮窗权限时提示并跳转系统设置引导授权。 */
+    fun setDesktopLyrics(on: Boolean) {
+        val sp = getSharedPreferences("player", Context.MODE_PRIVATE)
+        if (on) {
+            if (!Settings.canDrawOverlays(this)) {
+                toast(getString(R.string.desktop_lyrics_perm_needed))
+                try {
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    // 部分 ROM 不支持该页面；上面的 Toast 已提示用户去设置里手动开启
+                }
+                return
+            }
+            val overlay = desktopLyrics ?: DesktopLyricsOverlay(this).also { desktopLyrics = it }
+            overlay.show()
+            overlay.updateText(lyricTextAt(enginePosition()))
+            sp.edit().putBoolean(KEY_DESKTOP_ON, true).apply()
+        } else {
+            desktopLyrics?.hide()
+            sp.edit().putBoolean(KEY_DESKTOP_ON, false).apply()
+        }
+        showForeground()
+    }
+
+    private fun toast(msg: String) {
+        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    /** 字号/透明度/锁定设置变更后，让已显示的悬浮窗立即刷新样式。 */
+    fun refreshDesktopLyricsStyle() {
+        desktopLyrics?.refreshStyle()
+    }
+
+    /**
+     * 音乐库重新扫描后：更新歌词映射并重载当前歌的歌词（1.33.1）。
+     * 场景：ASR 刚生成了正在播放这首歌的 .lrc——不用切歌即可看到歌词。
+     * 注意走 listener.onSongChanged 会让倍速按钮显示回 1x，调用方需重新同步按钮文本。
+     */
+    fun refreshLyricMap(newMap: Map<String, LyricRef>) {
+        this.lyricMap = newMap
+        val song = currentSong() ?: return
+        loadLyric(song)
+        listener?.onSongChanged(song, lyricLines, lyricName)
+        lyriconBridge.syncSong(song, lyricLines, lyricTrans, durationMs)
+    }
+
+    // ---------- 音频焦点 ----------
+
+    private fun requestFocus(): Boolean {
+        // 混合播放模式：不请求音频焦点，也不响应焦点变化
+        if (isMixAudioOn()) return true
+        val am = audioManager ?: return true
+        val afr = audioFocusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
+            .setOnAudioFocusChangeListener(focusListener)
+            .build()
+            .also { audioFocusRequest = it }
+        return am.requestAudioFocus(afr) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }
+
+    /** 混合播放开关：开启后不请求/不响应音频焦点，可与其他音频同时播放。 */
+    private fun isMixAudioOn(): Boolean =
+        getSharedPreferences("player", Context.MODE_PRIVATE).getBoolean(KEY_MIX_AUDIO, false)
+
+    private fun abandonFocus() {
+        val am = audioManager ?: return
+        audioFocusRequest?.let {
+            try {
+                am.abandonAudioFocusRequest(it)
+            } catch (e: Exception) {
+                // ignore
+            }
+        }
+    }
+
+    // ---------- 通知与媒体会话 ----------
+
+    private fun createChannel() {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            getString(R.string.playback_channel),
+            NotificationManager.IMPORTANCE_LOW
+        )
+        nm.createNotificationChannel(channel)
+    }
+
+    private fun initMediaSession() {
+        mediaSession = MediaSession(this, "SubtitlePlayer").apply {
+            setCallback(object : MediaSession.Callback() {
+                override fun onPlay() = play()
+                override fun onPause() = pause()
+                override fun onSkipToNext() = playNext()
+                override fun onSkipToPrevious() = playPrev()
+                override fun onSeekTo(pos: Long) = seekTo(pos.toInt())
+                override fun onStop() = pause()
+            })
+            isActive = true
+        }
+    }
+
+    private fun showForeground() {
+        if (foregroundShown) {
+            val playing = isPlaying()
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIFICATION_ID, buildNotification(playing))
+            return
+        }
+        foregroundShown = true
+        val notification = buildNotification(false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun buildNotification(playing: Boolean): Notification {
+        val song = currentSong()
+        val title = song?.title ?: getString(R.string.app_name)
+        val text = song?.artist ?: song?.folder ?: getString(R.string.no_song)
+
+        val openPi = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java).addFlags(
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            ),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val prevPi = servicePi(ACTION_PREV, 1)
+        val ppPi = servicePi(ACTION_PLAY_PAUSE, 2)
+        val nextPi = servicePi(ACTION_NEXT, 3)
+        val lyricsPi = servicePi(ACTION_TOGGLE_LYRICS, 4)
+
+        val playIcon = if (playing) R.drawable.ic_pause else R.drawable.ic_play
+        val playLabel = getString(if (playing) R.string.pause else R.string.play)
+        val lyricsLabel =
+            getString(if (isDesktopLyricsOn()) R.string.desktop_lyrics_off else R.string.desktop_lyrics_on)
+
+        return Notification.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_music)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setLargeIcon(notificationArtwork)
+            .setContentIntent(openPi)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .addAction(
+                Notification.Action.Builder(R.drawable.ic_prev, getString(R.string.prev), prevPi).build()
+            )
+            .addAction(
+                Notification.Action.Builder(playIcon, playLabel, ppPi).build()
+            )
+            .addAction(
+                Notification.Action.Builder(R.drawable.ic_next, getString(R.string.next), nextPi).build()
+            )
+            .addAction(
+                Notification.Action.Builder(R.drawable.ic_lyric, lyricsLabel, lyricsPi).build()
+            )
+            .setStyle(
+                Notification.MediaStyle()
+                    .setMediaSession(mediaSession?.sessionToken)
+                    .setShowActionsInCompactView(0, 1, 2)
+            )
+            .build()
+    }
+
+    private fun servicePi(action: String, requestCode: Int): PendingIntent {
+        val intent = Intent(this, MediaPlaybackService::class.java).setAction(action)
+        return PendingIntent.getService(
+            this, requestCode, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    private fun updateMediaSession(playing: Boolean) {
+        val state = if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
+        val ps = PlaybackState.Builder()
+            .setActions(
+                PlaybackState.ACTION_PLAY or
+                    PlaybackState.ACTION_PAUSE or
+                    PlaybackState.ACTION_PLAY_PAUSE or
+                    PlaybackState.ACTION_SKIP_TO_NEXT or
+                    PlaybackState.ACTION_SKIP_TO_PREVIOUS or
+                    PlaybackState.ACTION_SEEK_TO
+            )
+            .setState(state, enginePosition().toLong(), if (playing) 1f else 0f)
+            .build()
+        mediaSession?.setPlaybackState(ps)
+
+        val song = currentSong()
+        val mb = MediaMetadata.Builder()
+            .putString(MediaMetadata.METADATA_KEY_TITLE, song?.title ?: getString(R.string.app_name))
+            .putString(MediaMetadata.METADATA_KEY_ARTIST, song?.artist ?: song?.folder ?: "")
+            // 通知栏/锁屏进度条读这个字段，漏了会一直显示 00:00/00:00
+            .putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs.toLong())
+        mediaSession?.setMetadata(mb.build())
+    }
+
+    /** 异步加载封面，用于媒体通知与 MediaSession artwork。 */
+    private fun loadNotificationArtwork(song: Song?) {
+        if (song == null) {
+            notificationArtwork = null
+            return
+        }
+        CoverLoader.load(this, song.uri, 96, folder = song.folder) { bmp ->
+            notificationArtwork = bmp
+            showForeground()
+            updateMediaSession(isPlaying())
+        }
+    }
+
+    // ---------- 文本解码（与旧代码一致） ----------
+
+    private fun decodeText(bytes: ByteArray): String {
+        val data = if (bytes.size >= 3 &&
+            bytes[0] == 0xEF.toByte() &&
+            bytes[1] == 0xBB.toByte() &&
+            bytes[2] == 0xBF.toByte()
+        ) {
+            bytes.copyOfRange(3, bytes.size)
+        } else {
+            bytes
+        }
+        val decoder = StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+        return try {
+            decoder.decode(ByteBuffer.wrap(data)).toString()
+        } catch (e: CharacterCodingException) {
+            try {
+                String(data, Charset.forName("GBK"))
+            } catch (e2: Exception) {
+                String(data, StandardCharsets.UTF_8)
+            }
+        }
+    }
+}
