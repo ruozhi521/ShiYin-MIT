@@ -326,8 +326,13 @@ class MainActivity : AppCompatActivity() {
             uri ?: return@registerForActivityResult
             persistRead(uri)
             addTreeUri(uri)
+            // 2.1：这次选文件夹已同时申请写权限，扫描完成后把之前只能存应用内的识别歌词补写回音乐文件夹
+            pendingLrcFlush = true
             scanLibrary()
         }
+
+    /** 是否要在下次扫描完成后补写「应用内兜底」的识别歌词（重选文件夹拿到写权限时置真）。 */
+    private var pendingLrcFlush = false
 
     /** 自定义封面选图（复制到内部存储，无需持久授权）。 */
     private var pendingCoverTarget: String? = null
@@ -1470,6 +1475,11 @@ class MainActivity : AppCompatActivity() {
                         }
                         onLibraryReady()
                         refreshOpenViews()
+                        // 刚拿到音乐文件夹写权限（重选了文件夹）：把应用内兜底的识别歌词补写回音频同目录
+                        if (pendingLrcFlush) {
+                            pendingLrcFlush = false
+                            flushInternalLrc()
+                        }
                         // 歌词映射同步到服务：ASR 新生成的 lrc 无需切歌立即可用（1.33.1）。
                         // refreshLyricMap 走 onSongChanged 会把倍速按钮重置为 1x，需回写真实速度
                         playbackService?.refreshLyricMap(lib.lyrics)
@@ -1477,6 +1487,29 @@ class MainActivity : AppCompatActivity() {
                         btnSpeed.text = if (spd == 1f) "1x" else "${spd}x"
                     }
                 }
+            }
+        }.start()
+    }
+
+    /**
+     * 把应用内兜底的识别歌词（filesDir/asr_lrc/*.lrc）补写到音频同目录。
+     * 场景：2.0 及更早选文件夹时没申请写权限，识别出的 .lrc 只能存应用内；
+     * 用户在 2.1 里重选一次文件夹（这次会真正授予写权限）后自动搬回音乐文件夹，
+     * 不用重新识别。成功后删除应用内副本。
+     */
+    private fun flushInternalLrc() {
+        val lib = library ?: return
+        if (lib.allSongs.isEmpty()) return
+        Thread {
+            val n = try {
+                SpeechRecManager.flushInternalLrc(this, lib.allSongs, savedTreeUris())
+            } catch (e: Exception) {
+                PlaybackLog.log("asr lrc flush wrapper THREW: ${e.message}")
+                0
+            }
+            if (n > 0) runOnUiThread {
+                toast(getString(R.string.asr_lrc_flushed, n))
+                scanLibrary(silent = true)
             }
         }.start()
     }
@@ -3476,9 +3509,17 @@ class MainActivity : AppCompatActivity() {
         refreshTree()
     }
 
-    /** 面包屑/返回键：回到上一级。 */
+    /**
+     * 面包屑/返回键：回到上一级。
+     *
+     * 注意：这里**不能**写 treeStack.removeLast()。本项目 compileSdk 36，而 Java 21 给
+     * java.util.List 加了默认方法 removeLast()（SequencedCollection），Kotlin 解析时
+     * 「成员优先于扩展」，会编译成 invokeinterface java.util.List.removeLast —— 在
+     * Android 14 及以下（没有该方法）直接 NoSuchMethodError 闪退，Android 15+ 正常，
+     * 与「部分机型点面包屑返回上一级闪退」的反馈吻合。改用 removeAt，全版本安全。
+     */
     private fun backTree() {
-        if (treeStack.isNotEmpty()) treeStack.removeLast()
+        if (treeStack.isNotEmpty()) treeStack.removeAt(treeStack.size - 1)
         refreshTree()
     }
 
@@ -3570,15 +3611,22 @@ class MainActivity : AppCompatActivity() {
     // ---------- 权限 ----------
 
     private fun persistRead(uri: Uri) {
+        // 读、写分开 take：某些文件提供方只授予读权限，一次同时请求读写会
+        // 因写权限未授予而整体抛 SecurityException——连读权限都保不住（1.33 的老坑）。
+        // 分开 try 就能「有多少拿多少」；2.1 起选文件夹时已同时申请写权限。
         try {
-            // 读+写一起持久化：歌词识别要在音乐文件夹里创建 .lrc（2.0 修复写拒绝）
             contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
             )
         } catch (e: Exception) {
-            // 部分文件提供方不支持持久化权限，忽略
+            // 忽略：个别文件提供方不支持持久化权限
+        }
+        try {
+            contentResolver.takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        } catch (e: Exception) {
+            // 未授予写权限：识别歌词会走应用内兜底，重选一次文件夹即可
         }
     }
 
@@ -3647,11 +3695,16 @@ class MainActivity : AppCompatActivity() {
         private const val SUPPORT_URL = "https://www.ifdian.net/a/ruozhi521"
     }
 
-    /** 选择整个文件夹并请求可持久化读权限。 */
+    /** 选择整个文件夹并请求可持久化读+写权限。 */
     private class OpenTreePersistable : ActivityResultContract<Void?, Uri?>() {
         override fun createIntent(context: Context, input: Void?): Intent {
+            // 【2.1 关键修复】原来只带 FLAG_GRANT_READ_URI_PERMISSION：
+            // 系统就不会授予写权限 → 识别歌词写同目录 .lrc 必然 Permission Denial
+            // → 100% 落进「应用内兜底」（所有机型、所有用户都一样，重选文件夹也没用）。
+            // 必须把写权限一起申请，SAF 才能在同目录 createDocument 出 .lrc。
             return Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                     Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
             )
         }

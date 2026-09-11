@@ -43,19 +43,53 @@ object CoverManager {
 
     // ---------- 读取 ----------
 
+    /**
+     * 单曲封面的稳定 key：文件名（URL 解码后取最后一段）。
+     * 原来直接用完整 uri 当 key——文件一旦被移动到别的文件夹，uri 就变了，
+     * 封面随之丢失（用户反馈的「移动文件后封面没了」）。
+     */
+    fun songKey(uri: String): String {
+        val seg = try {
+            java.net.URLDecoder.decode(uri.substringAfterLast('/'), "UTF-8")
+        } catch (e: Exception) {
+            uri.substringAfterLast('/')
+        }
+        return seg.substringAfterLast('/').substringBefore('?')
+    }
+
     fun playlistCover(c: Context, name: String): Uri? {
         val obj = json(c, KEY_PLAYLISTS)
         obj.optString(name, "").ifEmpty { null }?.let { return Uri.parse(it) }
         // 兼容旧版本（1.24 前 folder 是目录名而非相对路径）：回退查最后一段
         val short = name.substringAfterLast('/')
         if (short != name) {
-            obj.optString(short, "").ifEmpty { null }?.let { return Uri.parse(it) }
+            obj.optString(short, "").ifEmpty { null }?.let { url ->
+                // 文件夹换了父目录：按最后一段命中，顺手迁移到新的完整路径 key
+                obj.put(name, url)
+                saveJson(c, KEY_PLAYLISTS, obj)
+                return Uri.parse(url)
+            }
         }
         return null
     }
 
-    fun songCover(c: Context, songUri: String): Uri? =
-        json(c, KEY_SONGS).optString(songUri, "").ifEmpty { null }?.let { Uri.parse(it) }
+    fun songCover(c: Context, songUri: String): Uri? {
+        val obj = json(c, KEY_SONGS)
+        // 稳定 key（文件名）优先：文件被移动到别的文件夹后仍能命中
+        val key = songKey(songUri)
+        if (key.isNotEmpty()) {
+            obj.optString(key, "").ifEmpty { null }?.let { return Uri.parse(it) }
+        }
+        // 兼容旧数据（key 是完整 uri）：命中后迁移到稳定 key，下次直接命中
+        obj.optString(songUri, "").ifEmpty { null }?.let { url ->
+            if (key.isNotEmpty() && key != songUri) {
+                obj.put(key, url)
+                saveJson(c, KEY_SONGS, obj)
+            }
+            return Uri.parse(url)
+        }
+        return null
+    }
 
     // ---------- 写入 ----------
 
@@ -70,10 +104,11 @@ object CoverManager {
     }
 
     fun setSongCover(c: Context, songUri: String, src: Uri): Uri? {
-        val dst = copyToInternal(c, src, "s_" + Integer.toHexString(songUri.hashCode()) + ".jpg")
+        val key = songKey(songUri)
+        val dst = copyToInternal(c, src, "s_" + Integer.toHexString(key.hashCode()) + ".jpg")
         if (dst != null) {
             val obj = json(c, KEY_SONGS)
-            obj.put(songUri, dst.toString())
+            obj.put(key, dst.toString())
             saveJson(c, KEY_SONGS, obj)
         }
         return dst
@@ -91,7 +126,10 @@ object CoverManager {
 
     fun clearSongCover(c: Context, songUri: String) {
         val obj = json(c, KEY_SONGS)
-        val uri = obj.optString(songUri, "")
+        val key = songKey(songUri)
+        // 稳定 key 与旧 uri key 都清掉，别留下会「复活」的残留
+        val uri = obj.optString(key, "").ifEmpty { obj.optString(songUri, "") }
+        obj.remove(key)
         obj.remove(songUri)
         saveJson(c, KEY_SONGS, obj)
         deleteFileIfInternal(c, uri)
@@ -129,7 +167,8 @@ object CoverManager {
     /** 直接用内部文件 uri 写入单曲封面映射（不重新复制）。 */
     fun setSongCoverInternal(c: Context, songUri: String, internalUri: Uri) {
         val obj = json(c, KEY_SONGS)
-        obj.put(songUri, internalUri.toString())
+        // 与 setSongCover 同用稳定 key（文件名），移动文件后封面不丢
+        obj.put(songKey(songUri), internalUri.toString())
         saveJson(c, KEY_SONGS, obj)
     }
 

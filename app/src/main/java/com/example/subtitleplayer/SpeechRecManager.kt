@@ -40,6 +40,9 @@ object SpeechRecManager {
     private const val MODEL_DIR = "asr_model"
     private const val HOTWORDS_FILE = "asr_hotwords.txt"
 
+    /** 热词条数上限：太多会拖慢 modified_beam_search 且收益递减。 */
+    private const val MAX_HOTWORDS = 120
+
     /** 模型文件按「角色」定义，每个角色可有多个候选文件名（镜像仓库命名不一）。 */
     private data class ModelFile(val role: String, val candidates: List<String>)
 
@@ -116,47 +119,52 @@ object SpeechRecManager {
                         for (name in mf.candidates) {
                             if (isCancelledHook()) break@attempt
                             try {
-                                val conn = URL(base + name).openConnection() as HttpURLConnection
-                                conn.connectTimeout = 20_000
-                                conn.readTimeout = 45_000
-                                conn.instanceFollowRedirects = true
-                                conn.setRequestProperty("User-Agent", "ShiYin/2.0")
-                                val code = conn.responseCode
-                                if (code !in 200..299) {
-                                    lastErr = "$name HTTP $code"
-                                    conn.disconnect()
-                                    continue
-                                }
-                                val total = conn.contentLengthLong
+                                val (conn, total) = openDownload(base + name)
                                 val tmp = File(dir, "$name.tmp")
                                 var acc = 0L
                                 var sane = true
-                                conn.inputStream.use { input ->
-                                    tmp.outputStream().use { out ->
-                                        val buf = ByteArray(64 * 1024)
-                                        var first = true
-                                        while (true) {
-                                            // 收满 Content-Length 立即结束：hf-mirror 等代理
-                                            // 不会主动断流，等 EOF 会卡到读超时（2.0 实测）
-                                            if (total > 0 && acc >= total) break
-                                            val n = input.read(buf)
-                                            if (n < 0) break
-                                            if (first && n > 0 && buf[0] == '<'.code.toByte()) {
-                                                sane = false
-                                                break
-                                            }
-                                            first = false
-                                            out.write(buf, 0, n)
-                                            acc += n
-                                            if (total > 0) {
-                                                onProgress(idx, ((acc * 100) / total).toInt().coerceIn(0, 100))
+                                try {
+                                    conn.inputStream.use { input ->
+                                        tmp.outputStream().use { out ->
+                                            val buf = ByteArray(64 * 1024)
+                                            var first = true
+                                            while (true) {
+                                                // 收满长度立即结束：hf-mirror 等代理不会主动断流，
+                                                // 等 EOF 会卡到读超时（2.0 实测）
+                                                if (total > 0 && acc >= total) break
+                                                val n = input.read(buf)
+                                                if (n < 0) break
+                                                if (first && n > 0 && buf[0] == '<'.code.toByte()) {
+                                                    sane = false
+                                                    break
+                                                }
+                                                first = false
+                                                out.write(buf, 0, n)
+                                                acc += n
+                                                if (total > 0) {
+                                                    onProgress(idx, ((acc * 100) / total).toInt().coerceIn(0, 100))
+                                                }
                                             }
                                         }
                                     }
+                                } catch (e: java.net.SocketTimeoutException) {
+                                    // 【2.1】tokens.txt 这类非 LFS 小文件走 /api/resolve-cache
+                                    // （Cloudflare，Transfer-Encoding: chunked）：既没有
+                                    // Content-Length 也不主动断流。2.0 只能等 EOF → 挂到读超时 →
+                                    // 抛异常删掉已下数据重试 → 永远卡在 tokens.txt。
+                                    // 超时说明服务器不再发数据，按「读完」处理；长度不对下面会拦。
+                                    PlaybackLog.log("asr model read timeout as EOF name=$name acc=$acc total=$total")
                                 }
+                                conn.disconnect()
                                 if (!sane || acc < 1024) {
                                     tmp.delete()
                                     lastErr = "$name 内容异常（可能 404 页面）"
+                                    continue
+                                }
+                                if (total > 0 && acc < total) {
+                                    // 长度不足：超时兜底绝不能把截断的文件当成功
+                                    tmp.delete()
+                                    lastErr = "$name 长度不足 $acc/$total"
                                     continue
                                 }
                                 val target = File(dir, name)
@@ -166,10 +174,10 @@ object SpeechRecManager {
                                 }
                                 downloaded = target
                                 onProgress(idx, 100)
-                                PlaybackLog.log("asr model OK ${mf.role} <- $base$name")
+                                PlaybackLog.log("asr model OK ${mf.role} <- $base$name (${acc}B)")
                                 break@attempt
                             } catch (e: Exception) {
-                                lastErr = "${e.javaClass.simpleName}: ${e.message}"
+                                lastErr = "$name ${e.javaClass.simpleName}: ${e.message}"
                                 File(dir, "$name.tmp").delete()
                             }
                         }
@@ -187,6 +195,62 @@ object SpeechRecManager {
     }
 
     
+    /**
+     * 打开下载连接（手动跟随重定向，最多 5 跳），并尽力解析出文件总长度。
+     *
+     * 为什么不交给 HttpURLConnection 自动跟随：hf-mirror 对非 LFS 小文件
+     * （就是 tokens.txt）返回 307 → /api/resolve-cache，最终响应是 Cloudflare 的
+     * chunked（无 Content-Length）。自动跟随会把中间 307 上的 Content-Range 丢掉，
+     * 于是拿不到长度、只能死等 EOF —— 这正是 2.0「下载总是卡在 tokens.txt」的根因。
+     * 手动跟随既能在 307 响应头读到 Content-Range/X-Linked-Size，又能继续取到数据流。
+     */
+    private fun openDownload(url: String): Pair<HttpURLConnection, Long> {
+        var urlStr = url
+        var total = -1L
+        var hops = 0
+        while (true) {
+            val c = URL(urlStr).openConnection() as HttpURLConnection
+            c.connectTimeout = 20_000
+            c.readTimeout = 30_000
+            c.instanceFollowRedirects = false
+            c.setRequestProperty("User-Agent", "ShiYin/2.1")
+            // 明确要未压缩：gzip 会让 Content-Length 与实际读到的字节数对不上
+            c.setRequestProperty("Accept-Encoding", "identity")
+            // 带 Range：这样响应里会回 Content-Range，里面就带总长度
+            c.setRequestProperty("Range", "bytes=0-")
+            val code = c.responseCode
+            parseTotalLen(c)?.let { if (it > 0) total = it }
+            if (code in 300..399) {
+                val loc = c.getHeaderField("Location")
+                c.disconnect()
+                hops++
+                if (loc.isNullOrBlank() || hops > 5) {
+                    throw java.io.IOException("redirect $code without usable location")
+                }
+                urlStr = try {
+                    java.net.URI(urlStr).resolve(loc).toString()
+                } catch (e: Exception) {
+                    loc
+                }
+                continue
+            }
+            if (code !in 200..299) {
+                c.disconnect()
+                throw java.io.IOException("HTTP $code")
+            }
+            if (total <= 0 && c.contentLengthLong > 0) total = c.contentLengthLong
+            return c to total
+        }
+    }
+
+    /** 响应头里的总长度：X-Linked-Size，或 Content-Range「bytes 0-45753/45754」的 45754。 */
+    private fun parseTotalLen(c: HttpURLConnection): Long? = try {
+        c.getHeaderField("X-Linked-Size")?.trim()?.toLongOrNull()
+            ?: c.getHeaderField("Content-Range")?.substringAfterLast('/')?.trim()?.toLongOrNull()
+    } catch (e: Exception) {
+        null
+    }
+
     /** 测试钩子（仅单测用）：置 true 可提前中止下载循环。 */
     @Volatile
     var cancelFlagForTest: Boolean = false
@@ -240,27 +304,68 @@ object SpeechRecManager {
 
     // ---------- 台本 → 热词 ----------
 
+    /** tokens.txt 符号表（cjkchar 逐字查表用），按「文件路径+大小」缓存。 */
+    private val symbolCache = HashMap<String, Set<String>>()
+
+    private fun symbolTable(context: Context): Set<String>? {
+        val f = resolvedFile(context, "tokens") ?: return null
+        val key = f.absolutePath + ":" + f.length()
+        synchronized(symbolCache) { symbolCache[key]?.let { return it } }
+        return try {
+            val set = HashSet<String>(8192)
+            f.bufferedReader(Charsets.UTF_8).useLines { seq ->
+                for (line in seq) {
+                    val sym = line.substringBefore('\t').trim()
+                    if (sym.isNotEmpty()) set.add(sym)
+                }
+            }
+            if (set.isEmpty()) return null
+            synchronized(symbolCache) { symbolCache[key] = set }
+            PlaybackLog.log("asr symbol table: ${set.size} symbols")
+            set
+        } catch (e: Exception) {
+            PlaybackLog.log("asr symbol table THREW: ${e.message}")
+            null
+        }
+    }
+
     /**
      * 台本文本 → sherpa hotwords 文件（每行「词组 1.5」，去重、限长限量）。
      * modified_beam_search 下热词显著提升专有名词识别率。
+     *
+     * **必须按模型符号表逐字过滤**：日语模型 tokens.txt 只有 ASCII + 假名 + 日文汉字，
+     * 台本里的简体中文（说/语/们…）、特殊符号都不在表内；sherpa-onnx 在
+     * modified_beam_search 把热词转 token id 时找不到 symbol，会在 native 层直接
+     * exit/abort 杀掉进程——Java 侧 try/catch 拦不住，用户看到的就是「一用台本就闪退」。
+     * 所以只保留「每个字符都在符号表里」的词；过滤后为空就返回 null
+     * （调用方回退 greedy_search，不启用热词），功能降级但不崩。
      */
     private fun writeHotwords(context: Context, scriptText: String): File? {
         return try {
+            val sym = symbolTable(context) ?: run {
+                PlaybackLog.log("asr hotwords skipped: no symbol table")
+                return null
+            }
             val phrases = LinkedHashSet<String>()
             for (raw in scriptText.lines()) {
                 for (seg in raw.split(Regex("[。！？!?.,、，…\\s　]+"))) {
                     val p = seg.trim()
                     if (p.isEmpty() || p.length < 2 || p.length > 20) continue
                     if (p.all { it.isDigit() || it in "0-9.-" }) continue
+                    // 模型符号表里没有的字符：整词丢弃（否则 native 层直接崩）
+                    if (!p.all { sym.contains(it.toString()) }) continue
                     phrases.add(p)
-                    if (phrases.size >= 300) break
+                    if (phrases.size >= MAX_HOTWORDS) break
                 }
-                if (phrases.size >= 300) break
+                if (phrases.size >= MAX_HOTWORDS) break
             }
-            if (phrases.isEmpty()) return null
+            if (phrases.isEmpty()) {
+                PlaybackLog.log("asr hotwords: 0 phrases survived symbol-table filter")
+                return null
+            }
             val f = File(modelDir(context), HOTWORDS_FILE)
             f.writeText(phrases.joinToString("\n") { "$it 1.5" })
-            PlaybackLog.log("asr hotwords: ${phrases.size} phrases")
+            PlaybackLog.log("asr hotwords: ${phrases.size} phrases (symbol-filtered)")
             f
         } catch (e: Exception) {
             PlaybackLog.log("asr hotwords THREW: ${e.message}")
@@ -831,6 +936,40 @@ object SpeechRecManager {
     ): String? {
         val target = createLrcTarget(context, audioUri, treeUris)
         return if (writeLrc(context, target, content)) target.desc else null
+    }
+
+    /**
+     * 把应用内兜底的识别歌词（filesDir/asr_lrc/*.lrc）补写到音频同目录。
+     *
+     * 2.0 及更早：选文件夹时只申请了读权限，识别出的 .lrc 只能存应用内（所有机型都一样）。
+     * 2.1 修好了选文件夹的写权限申请；用户重选一次文件夹后，这些已识别好的歌词会自动
+     * 补写回音乐文件夹（不必重新识别），成功后删掉应用内副本。
+     * @return 成功补写的文件数
+     */
+    fun flushInternalLrc(context: Context, songs: List<Song>, treeUris: List<Uri>): Int {
+        val files = File(context.filesDir, "asr_lrc")
+            .listFiles { f -> f.isFile && f.name.endsWith(".lrc", ignoreCase = true) }
+            ?: return 0
+        if (files.isEmpty()) return 0
+        var ok = 0
+        for (f in files) {
+            val stem = f.name.substringBeforeLast('.')
+            val song = songs.firstOrNull { it.fileStem.equals(stem, ignoreCase = true) }
+                ?: continue
+            try {
+                val target = createLrcTarget(context, song.uri, treeUris)
+                if (target.safUri == null) continue   // 还是没有写权限：留到下次
+                if (writeLrc(context, target, f.readText())) {
+                    f.delete()
+                    ok++
+                    PlaybackLog.log("asr lrc flushed -> ${target.desc}")
+                }
+            } catch (e: Exception) {
+                PlaybackLog.log("asr lrc flush THREW: ${e.message}")
+            }
+        }
+        if (ok > 0) PlaybackLog.log("asr lrc flush done: $ok file(s)")
+        return ok
     }
 }
 
