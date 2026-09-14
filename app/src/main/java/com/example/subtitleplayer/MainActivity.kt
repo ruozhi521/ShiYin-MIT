@@ -170,6 +170,17 @@ class MainActivity : AppCompatActivity() {
         LyricTranslationCache.load(this)
     }
 
+    // ---- 歌词校准（2.2）：整体 ± 偏移，应用内立即生效 + 防抖写回歌词文件 ----
+    private var lyricOffsetDialog: AlertDialog? = null
+    private var lyricOffsetLabelView: TextView? = null
+    private var lyricOffsetSong: Song? = null
+    /** 对话框里跟踪的「文件自带 [offset:] 标签」（后台读出，通常为 0）。 */
+    private var lyricOffsetFileTag = 0
+    /** 应用内追加偏移（写入 prefs 与歌词文件时都用它）。 */
+    private var lyricOffsetExtra = 0
+    private val lyricOffsetWriteHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var lyricOffsetWritePending: Runnable? = null
+
     private lateinit var songAdapter: SongAdapter
     private lateinit var lyricAdapter: LyricAdapter
 
@@ -706,6 +717,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnGenLyric).setOnClickListener {
             // 为当前播放的歌生成歌词（需已下载识别模型；自动检测台本提升准确率）
             startAsrForCurrentSong()
+        }
+        // 歌词整体校准（2.2）：整体 ±0.1s / ±0.3s 偏移，写回歌词文件
+        findViewById<Button>(R.id.btnLyricOffset).setOnClickListener {
+            showLyricOffsetDialog()
         }
         findViewById<Button>(R.id.btnTranslate).setOnClickListener {
             translateCurrentLyric()
@@ -3003,6 +3018,224 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
+    }
+
+    // ---------- 歌词校准（2.2）：整体 ± 偏移 ----------
+
+    private fun showLyricOffsetDialog() {
+        val song = lastSong
+        if (song == null) {
+            toast(getString(R.string.no_lyric))
+            return
+        }
+        if (asrRunning) {
+            toast(getString(R.string.offset_busy_asr))
+            return
+        }
+        lyricOffsetSong = song
+        lyricOffsetExtra = LyricOffset.load(this, song.uri.toString())
+        lyricOffsetFileTag = 0
+
+        val txtOffset = TextView(this).apply {
+            gravity = android.view.Gravity.CENTER
+            textSize = 15f
+            setTextColor(getColor(R.color.text_primary))
+            setPadding(0, dp(8f), 0, dp(8f))
+        }
+        lyricOffsetLabelView = txtOffset
+
+        val row = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER
+        }
+        for (delta in intArrayOf(-300, -100, 100, 300)) {
+            row.addView(Button(this).apply {
+                text = String.format(Locale.US, "%+.1fs", delta / 1000.0)
+                setOnClickListener {
+                    lyricOffsetExtra = (lyricOffsetExtra + delta).coerceIn(-60000, 60000)
+                    applyLyricOffsetNow()
+                }
+            })
+        }
+
+        val rowReset = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER
+            addView(Button(this@MainActivity).apply {
+                text = getString(R.string.offset_reset)
+                setOnClickListener {
+                    lyricOffsetExtra = 0
+                    applyLyricOffsetNow()
+                }
+            })
+        }
+
+        val txtHint = TextView(this).apply {
+            textSize = 12f
+            setTextColor(getColor(R.color.text_hint))
+            setPadding(0, dp(10f), 0, 0)
+            text = getString(R.string.offset_hint)
+        }
+
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(dp(24f), dp(16f), dp(24f), dp(4f))
+            addView(txtOffset)
+            addView(row)
+            addView(rowReset)
+            addView(txtHint)
+        }
+
+        lyricOffsetDialog = AlertDialog.Builder(this)
+            .setTitle(R.string.offset_title)
+            .setView(box)
+            .setNegativeButton(R.string.close, null)
+            .show()
+            .also { d -> d.setOnDismissListener { lyricOffsetLabelView = null } }
+        refreshLyricOffsetLabel()
+
+        // 后台读歌词文件：显示文件自带的 [offset:] 标签（解析器已应用，通常为 0）
+        val songKey = song.uri.toString()
+        Thread {
+            val tag = try {
+                val text = readLyricSourceText(song)
+                if (text != null) LyricOffset.detectOffsetTag(text) else 0
+            } catch (e: Exception) {
+                0
+            }
+            runOnUiThread {
+                if (lyricOffsetSong?.uri?.toString() == songKey &&
+                    lyricOffsetDialog?.isShowing == true
+                ) {
+                    lyricOffsetFileTag = tag
+                    refreshLyricOffsetLabel()
+                }
+            }
+        }.start()
+    }
+
+    private fun refreshLyricOffsetLabel() {
+        val v = lyricOffsetLabelView ?: return
+        v.text = getString(
+            R.string.offset_current,
+            fmtOffsetMs(lyricOffsetExtra + lyricOffsetFileTag),
+            fmtOffsetMs(lyricOffsetFileTag)
+        )
+    }
+
+    private fun fmtOffsetMs(ms: Int): String =
+        String.format(Locale.US, "%+.1fs", ms / 1000.0)
+
+    private fun applyLyricOffsetNow() {
+        val song = lyricOffsetSong ?: return
+        // 发起校准时的歌已经切走：不再把偏移写进别的歌（1.30 串歌教训）
+        if (playbackService?.currentSongSafe()?.uri?.toString() != song.uri.toString()) return
+        playbackService?.applyLyricOffset(lyricOffsetExtra)
+        // onSongChanged 会把倍速按钮重置为 1x，需回写真实倍速（1.33 的坑）
+        val spd = playbackService?.currentSpeed() ?: 1f
+        btnSpeed.text = if (spd == 1f) "1x" else "${spd}x"
+        refreshLyricOffsetLabel()
+        scheduleLyricOffsetFileWrite(song)
+    }
+
+    /** 立即生效；600ms 防抖后写回歌词文件（连点只写最后一次，不卡 UI）。 */
+    private fun scheduleLyricOffsetFileWrite(song: Song) {
+        lyricOffsetWritePending?.let { lyricOffsetWriteHandler.removeCallbacks(it) }
+        // 到点写入时的追加偏移以本次调度为准（中途切到别的歌也不串值）
+        val extraAtSchedule = lyricOffsetExtra
+        val r = Runnable { writeLyricOffsetToFile(song, extraAtSchedule) }
+        lyricOffsetWritePending = r
+        lyricOffsetWriteHandler.postDelayed(r, 600)
+    }
+
+    /**
+     * 把 追加偏移 合并写进歌词文件的 [offset:] 标签（后台线程）。
+     * 成功后应用内追加偏移清零（由文件标签接管）；写不进去（内嵌歌词/无权限）则保留在应用内。
+     */
+    private fun writeLyricOffsetToFile(song: Song, extraMs: Int) {
+        val songKey = song.uri.toString()
+        Thread {
+            var wroteOk = false
+            var unchanged = false
+            var newFileTag = 0
+            try {
+                val text = readLyricSourceText(song)
+                if (text != null && LyricOffset.hasTimeTag(text)) {
+                    newFileTag = LyricOffset.detectOffsetTag(text) + extraMs
+                    val newText = LyricOffset.buildLrcWithOffset(text, newFileTag)
+                    unchanged = newText == text
+                    if (!unchanged) {
+                        wroteOk = writeLyricSourceText(song, newText)
+                    }
+                    // 写成功立刻清掉追加偏移（文件标签从此接管），把「文件+应用内双重偏移」
+                    // 的时间窗口压到最小（进程在两步之间被杀才会出现双重偏移）
+                    if (wroteOk || unchanged) {
+                        try { LyricOffset.save(this@MainActivity, songKey, 0) } catch (e: Exception) { }
+                    }
+                }
+            } catch (e: Exception) {
+                wroteOk = false
+            }
+            runOnUiThread {
+                if (wroteOk || unchanged) {
+                    lyricOffsetExtra = 0
+                    if (lyricOffsetSong?.uri?.toString() == songKey) {
+                        lyricOffsetFileTag = newFileTag
+                        refreshLyricOffsetLabel()
+                    }
+                    toast(getString(R.string.offset_saved_file))
+                } else {
+                    toast(getString(R.string.offset_in_app_only))
+                }
+            }
+        }.start()
+    }
+
+    /** 读出本歌歌词源文本：外置 .lrc（与播放同一匹配规则）优先，其次应用内识别兜底。 */
+    private fun readLyricSourceText(song: Song): String? {
+        val ref = library?.let { LibraryScanner.findLyric(song, it.lyrics) }
+        if (ref != null && ref.displayName.endsWith(".lrc", true)) {
+            val bytes = contentResolver.openInputStream(ref.uri)?.use { it.readBytes() }
+            if (bytes != null && bytes.isNotEmpty()) return LyricOffset.decodeLrcText(bytes)
+        }
+        val stem = song.fileStem.ifBlank {
+            song.uri.lastPathSegment?.substringAfterLast('/')?.substringBeforeLast('.') ?: ""
+        }
+        if (stem.isNotBlank()) {
+            val f = java.io.File(filesDir, "asr_lrc/$stem.lrc")
+            if (f.exists()) return LyricOffset.decodeLrcText(f.readBytes())
+        }
+        return null
+    }
+
+    /** 整串覆写歌词源文件（先拿到输出流再写入，内容已在内存备好）。 */
+    private fun writeLyricSourceText(song: Song, text: String): Boolean {
+        val ref = library?.let { LibraryScanner.findLyric(song, it.lyrics) }
+        if (ref != null && ref.displayName.endsWith(".lrc", true)) {
+            try {
+                val os = contentResolver.openOutputStream(ref.uri)
+                if (os != null) {
+                    os.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                    return true
+                }
+            } catch (e: Exception) {
+            }
+        }
+        val stem = song.fileStem.ifBlank {
+            song.uri.lastPathSegment?.substringAfterLast('/')?.substringBeforeLast('.') ?: ""
+        }
+        if (stem.isNotBlank()) {
+            val f = java.io.File(filesDir, "asr_lrc/$stem.lrc")
+            if (f.exists()) {
+                return try {
+                    f.writeText(text)
+                    true
+                } catch (e: Exception) {
+                    false
+                }
+            }
+        }
+        return false
     }
 
     /**

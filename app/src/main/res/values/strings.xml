@@ -105,6 +105,15 @@
     <string name="delete">删除</string>
     <string name="trans_privacy">API Key 仅保存在本机，不会上传或写入代码。翻译为逐行输出，个别行可能因模型策略缺失，会自动跳过其余行。</string>
     <string name="trans_saved">已保存翻译配置</string>
+    <!-- 歌词校准（2.2）：整体 ± 偏移 -->
+    <string name="lyric_offset">校准</string>
+    <string name="offset_title">歌词时间校准</string>
+    <string name="offset_current">整体偏移：%1$s（其中已写入歌词文件 %2$s）</string>
+    <string name="offset_reset">清零</string>
+    <string name="offset_hint">歌词比音乐先出来就按 −，后出来就加 +。每次点击立即生效并记住；停止点击后会自动把偏移写进歌词文件，其他播放器也生效。内嵌歌词或暂时没有写权限时，只在应用内生效。</string>
+    <string name="offset_saved_file">偏移已写入歌词文件，其他播放器也生效</string>
+    <string name="offset_in_app_only">这种歌词（内嵌 / vtt / txt）不支持写偏移，已在应用内生效并记住</string>
+    <string name="offset_busy_asr">正在识别歌词，稍后再校准</string>
     <string name="auto_trans">自动翻译非中文歌词</string>
     <string name="auto_trans_hint">开启后播放外语歌曲时自动翻译：只翻译非中文歌词，每首歌只翻译一遍，结果本地缓存</string>
     <string name="auto_trans_confirm_title">开启自动翻译</string>
@@ -151,7 +160,7 @@
     <string name="title_from_filename">歌名显示使用文件名（忽略标签标题，重新扫描后生效）</string>
     <string name="tab_video">视频</string>
     <string name="videos_empty">这个导航页还没有视频文件\n把含视频的文件夹添加进音乐库即可</string>
-    <string name="about_version">版本 2.1</string>
+    <string name="about_version">版本 2.11</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>

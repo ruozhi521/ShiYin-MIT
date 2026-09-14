@@ -1061,6 +1061,15 @@ class MediaPlaybackService : Service() {
     // ---------- 歌词 ----------
 
     private fun loadLyric(song: Song) {
+        parseLyric(song)
+        // 歌词校准（2.2）：文件自带的 [offset:] 已由解析器算进时间戳，
+        // 这里只叠加「应用内追加偏移」（按歌曲记忆，重启保留）
+        val off = try { LyricOffset.load(this, song.uri.toString()) } catch (e: Exception) { 0 }
+        if (off != 0) lyricLines = LyricOffset.applyToLines(lyricLines, off)
+    }
+
+    /** 仅解析歌词三来源（外部 lrc/vtt / 应用内识别兜底 / 内嵌），不做偏移。 */
+    private fun parseLyric(song: Song) {
         lyricLines = emptyList()
         lyricName = null
         // 载入该歌的本地译文缓存（桌面歌词双行显示用）
@@ -1154,6 +1163,19 @@ class MediaPlaybackService : Service() {
         } catch (e: Exception) {
             emptyMap()
         }
+        desktopLyrics?.updateText(lyricTextAt(enginePosition()))
+    }
+
+    /**
+     * 歌词校准（2.2）：更新本歌「应用内追加偏移」并重载歌词，立即生效。
+     * 走 listener.onSongChanged 会把倍速按钮重置为 1x，调用方需重新同步按钮文本。
+     */
+    fun applyLyricOffset(offsetMs: Int) {
+        val song = currentSong() ?: return
+        try { LyricOffset.save(this, song.uri.toString(), offsetMs) } catch (e: Exception) { }
+        loadLyric(song)
+        listener?.onSongChanged(song, lyricLines, lyricName)
+        lyriconBridge.syncSong(song, lyricLines, lyricTrans, durationMs)
         desktopLyrics?.updateText(lyricTextAt(enginePosition()))
     }
 
