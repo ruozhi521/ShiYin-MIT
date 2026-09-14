@@ -3049,13 +3049,20 @@ class MainActivity : AppCompatActivity() {
             gravity = android.view.Gravity.CENTER
         }
         for (delta in intArrayOf(-300, -100, 100, 300)) {
-            row.addView(Button(this).apply {
+            val b = Button(this).apply {
                 text = String.format(Locale.US, "%+.1fs", delta / 1000.0)
                 setOnClickListener {
                     lyricOffsetExtra = (lyricOffsetExtra + delta).coerceIn(-60000, 60000)
                     applyLyricOffsetNow()
                 }
-            })
+            }
+            // 四个按钮等分一行（weight=1），窄屏也不会把 +0.3s 挤出对话框
+            val lp = android.widget.LinearLayout.LayoutParams(
+                0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+            )
+            lp.setMargins(dp(3f), 0, dp(3f), 0)
+            b.layoutParams = lp
+            row.addView(b)
         }
 
         val rowReset = android.widget.LinearLayout(this).apply {
