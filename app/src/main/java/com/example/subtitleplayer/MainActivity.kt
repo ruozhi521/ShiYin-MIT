@@ -3071,7 +3071,9 @@ class MainActivity : AppCompatActivity() {
             addView(Button(this@MainActivity).apply {
                 text = getString(R.string.offset_reset)
                 setOnClickListener {
-                    lyricOffsetExtra = 0
+                    // 清零 = 整体归零：追加层补上「负的文件标签」，随后的防抖写入会把
+                    // 文件里的 [offset:] 标签一并移除（整体偏移真正回到 0）
+                    lyricOffsetExtra = (0 - lyricOffsetFileTag).coerceIn(-60000, 60000)
                     applyLyricOffsetNow()
                 }
             })
@@ -3131,7 +3133,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun fmtOffsetMs(ms: Int): String =
-        String.format(Locale.US, "%+.1fs", ms / 1000.0)
+        if (ms == 0) "0s" else String.format(Locale.US, "%+.1fs", ms / 1000.0)
 
     private fun applyLyricOffsetNow() {
         val song = lyricOffsetSong ?: return
