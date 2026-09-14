@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.nio.charset.Charset
 
 /** 2.2 歌词校准纯逻辑：行平移 / offset 标签读写 / lrc 文本解码。 */
 class LyricOffsetTest {
