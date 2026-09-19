@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 分段选择器单项：选中时浮起为卡片色圆角块，未选中透明 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checked="true">
+        <shape android:shape="rectangle">
+            <corners android:radius="8dp" />
+            <solid android:color="@color/surface" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="8dp" />
+            <solid android:color="@android:color/transparent" />
+        </shape>
+    </item>
+</selector>

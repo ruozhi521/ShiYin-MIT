@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 分段选择器轨道：衬在白色卡片上，用主题的 bg 色形成对比 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="10dp" />
+    <solid android:color="@color/bg" />
+</shape>

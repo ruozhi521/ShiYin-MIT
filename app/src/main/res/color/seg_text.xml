@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 分段选择器文字色：选中主色，未选中弱化 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:color="@color/text_primary" android:state_checked="true" />
+    <item android:color="@color/text_hint" />
+</selector>

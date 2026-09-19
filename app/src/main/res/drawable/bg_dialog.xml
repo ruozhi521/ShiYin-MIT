@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 全局弹窗背景：圆角 + 跟随主题 bg 色（深/浅自动切换） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="20dp" />
+    <solid android:color="@color/bg" />
+</shape>
