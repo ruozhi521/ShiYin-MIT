@@ -37,6 +37,7 @@ object LibraryCache {
                         .put("folder", s.folder)
                         .put("artist", s.artist)
                         .put("fileStem", s.fileStem)
+                        .put("size", s.size)
                 )
             }
             val lyrics = JSONArray()
@@ -75,7 +76,9 @@ object LibraryCache {
                         Uri.parse(o.getString("uri")),
                         o.getString("folder"),
                         o.optString("artist", ""),
-                        o.optString("fileStem", "")
+                        o.optString("fileStem", ""),
+                        // 旧缓存无 size 字段 → 0：单曲封面 key 退回纯文件名（与旧版兼容）
+                        o.optLong("size", 0L)
                     )
                 )
             }

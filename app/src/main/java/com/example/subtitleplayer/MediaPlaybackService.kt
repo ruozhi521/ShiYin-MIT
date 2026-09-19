@@ -1408,7 +1408,7 @@ class MediaPlaybackService : Service() {
             notificationArtwork = null
             return
         }
-        CoverLoader.load(this, song.uri, 96, folder = song.folder) { bmp ->
+        CoverLoader.load(this, song.uri, 96, folder = song.folder, songSize = song.size) { bmp ->
             notificationArtwork = bmp
             showForeground()
             updateMediaSession(isPlaying())

@@ -71,7 +71,7 @@ class FolderTreeAdapter(
                 } else {
                     val song = pl.songs.firstOrNull()
                     if (song != null) {
-                        CoverLoader.load(holder.itemView.context, song.uri, 120, folder = song.folder) { bmp ->
+                        CoverLoader.load(holder.itemView.context, song.uri, 120, folder = song.folder, songSize = song.size) { bmp ->
                             if (bmp != null && holder.bindingAdapterPosition == position) {
                                 holder.cover.setImageBitmap(bmp)
                             }

@@ -26,12 +26,13 @@ object CoverLoader {
         uri: Uri,
         targetSize: Int,
         folder: String? = null,
+        songSize: Long = 0L,
         callback: (Bitmap?) -> Unit
     ) {
         val key = uri.toString()
         val cacheKey = key + "#" + targetSize
-        // 自定义单曲封面优先
-        val custom = CoverManager.songCover(context, key)
+        // 自定义单曲封面优先（key=文件名|大小，跨文件夹同名不串）
+        val custom = CoverManager.songCover(context, key, songSize)
         android.util.Log.d("ShiYinCover", "load uri=$key size=$targetSize custom=${custom?.toString() ?: "null"}")
         if (custom != null) {
             loadFile(context, custom, cacheKey, targetSize) { bmp ->

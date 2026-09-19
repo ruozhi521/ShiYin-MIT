@@ -77,7 +77,7 @@ class SongAdapter(
             if (hasLyric(song)) View.VISIBLE else View.GONE
         holder.lyricMark.setTextColor(ThemeManager.accent(holder.itemView.context))
         holder.cover.setImageResource(R.drawable.ic_music_tinted)
-        CoverLoader.load(holder.itemView.context, song.uri, 64, folder = song.folder) { bmp ->
+        CoverLoader.load(holder.itemView.context, song.uri, 64, folder = song.folder, songSize = song.size) { bmp ->
             if (bmp != null && holder.bindingAdapterPosition == position) {
                 holder.cover.setImageBitmap(bmp)
             }

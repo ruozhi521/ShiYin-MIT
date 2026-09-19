@@ -61,6 +61,13 @@ class MainActivity : AppCompatActivity() {
     private val navTabs = LinkedHashMap<String, android.widget.TextView>()
     private var hasSong = false
 
+    /**
+     * 当前播放队列的来源页（2.11）：从哪个列表页发起的播放就记住哪个页，
+     * 歌词页/播放页按返回键时先回该页（音轨界面），不再直接跳回主页。
+     * null 表示队列不来自可展示的列表页（如后台恢复的全库队列）→ 返回走原逻辑。
+     */
+    private var queueSourcePage: Page? = null
+
     // ---- 迷你播放条 ----
     private lateinit var miniPlayer: View
     private lateinit var txtMiniTitle: TextView
@@ -271,7 +278,7 @@ class MainActivity : AppCompatActivity() {
             imgCd.setImageResource(R.drawable.ic_music_tinted)
             currentCoverKey = song?.uri?.toString()
             if (song != null) {
-                CoverLoader.load(this@MainActivity, song.uri, 400, folder = song.folder) { bmp ->
+                CoverLoader.load(this@MainActivity, song.uri, 400, folder = song.folder, songSize = song.size) { bmp ->
                     if (bmp != null && song.uri.toString() == currentCoverKey) {
                         imgCd.setImageBitmap(bmp)
                         applyPlayerBackground(bmp)
@@ -347,8 +354,10 @@ class MainActivity : AppCompatActivity() {
 
     /** 自定义封面选图（复制到内部存储，无需持久授权）。 */
     private var pendingCoverTarget: String? = null
-    /** 批量封面模式：非空时 coverPicker 回调对这批 uri 批量写单曲封面。 */
-    private var pendingBatchSongs: List<String>? = null
+    /** 单曲封面模式下的目标歌曲（取文件大小参与封面 key，2.11）。 */
+    private var pendingCoverSong: Song? = null
+    /** 批量封面模式：非空时 coverPicker 回调对这批歌曲批量写单曲封面。 */
+    private var pendingBatchSongs: List<Song>? = null
 
     // ---- 歌词识别（1.33.1 实验）----
     @Volatile
@@ -382,6 +391,8 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
             val target = pendingCoverTarget
             pendingCoverTarget = null
+            val targetSong = pendingCoverSong
+            pendingCoverSong = null
             val batch = pendingBatchSongs
             pendingBatchSongs = null
             android.util.Log.d("ShiYinCover", "coverPicker uri=$uri target=$target batch=${batch?.size}")
@@ -394,10 +405,10 @@ class MainActivity : AppCompatActivity() {
                 val shared = CoverManager.copySharedCover(this, uri)
                 var ok = 0
                 if (shared != null) {
-                    batch.forEach { su ->
-                        CoverManager.setSongCoverInternal(this, su, shared)
+                    batch.forEach { s ->
+                        CoverManager.setSongCoverInternal(this, s.uri.toString(), s.size, shared)
                         ok++
-                        CoverLoader.invalidate(su)
+                        CoverLoader.invalidate(s.uri.toString())
                     }
                 }
                 if (ok > 0) {
@@ -414,7 +425,9 @@ class MainActivity : AppCompatActivity() {
             val ok = if (t.startsWith("pl:")) {
                 CoverManager.setPlaylistCover(this, t.removePrefix("pl:"), uri) != null
             } else {
-                CoverManager.setSongCover(this, t.removePrefix("song:"), uri) != null
+                CoverManager.setSongCover(
+                    this, t.removePrefix("song:"), targetSong?.size ?: 0L, uri
+                ) != null
             }
             if (ok) {
                 toast(getString(R.string.cover_saved))
@@ -713,7 +726,8 @@ class MainActivity : AppCompatActivity() {
             )
         }
         updatePlayModeButton(playbackService?.getPlayMode() ?: 0)
-        findViewById<Button>(R.id.btnBackLyrics).setOnClickListener { showPage(Page.PLAYER, -1) }
+        // 歌词页返回按钮（2.11）：与系统返回键一致——队列来自歌单时直接回音轨界面
+        findViewById<Button>(R.id.btnBackLyrics).setOnClickListener { backFromLyricsPage() }
         findViewById<Button>(R.id.btnGenLyric).setOnClickListener {
             // 为当前播放的歌生成歌词（需已下载识别模型；自动检测台本提升准确率）
             startAsrForCurrentSong()
@@ -1423,12 +1437,55 @@ class MainActivity : AppCompatActivity() {
             return
         }
         when (page) {
-            Page.LYRICS -> showPage(Page.PLAYER, -1)
-            Page.PLAYER -> backFromPlayer()
+            Page.LYRICS -> backFromLyricsPage()
+            Page.PLAYER -> backFromPlayerPage()
             Page.VIDEO -> closeVideoPage()
             Page.PLAYLIST, Page.SEARCH, Page.FAVORITES -> showPage(Page.LIBRARY)
             else -> super.onBackPressed()
         }
+    }
+
+    /**
+     * 歌词页返回（2.11 按弱志反馈）：队列来自某个列表页时直接回该页
+     * （歌单播放 → 该歌单的音轨界面），不再先绕回播放页、再退回主页。
+     */
+    private fun backFromLyricsPage() {
+        if (backToQueueSource(slide = -1)) return
+        showPage(Page.PLAYER, -1)
+    }
+
+    /** 播放页返回：同上，来源页不可用时走原逻辑（回主导航页）。 */
+    private fun backFromPlayerPage() {
+        if (backToQueueSource(slide = -1)) return
+        backFromPlayer()
+    }
+
+    /**
+     * 返回队列来源页。歌单来源时用「当前播放歌曲所在歌单」重新填充歌单页，
+     * 避免浏览过别的歌单后返回看到不相干的列表。成功返回 true。
+     */
+    private fun backToQueueSource(slide: Int): Boolean {
+        val src = queueSourcePage ?: return false
+        if (src == Page.PLAYLIST) {
+            val song = playbackService?.currentSongSafe()
+            val lib = library
+            val pl = if (song != null && lib != null) {
+                lib.playlists.firstOrNull {
+                    it.name == song.folder && it.songs.any { s -> s.uri == song.uri }
+                }
+            } else {
+                null
+            }
+            if (pl != null) {
+                bindPlaylist(pl)
+                showPage(Page.PLAYLIST, slide)
+                return true
+            }
+            // 当前队列没有对应文件夹歌单（全库队列等）→ 回列表页会显示旧数据，放弃
+            return false
+        }
+        showPage(src, slide)
+        return true
     }
 
     // ---------- 扫描与数据 ----------
@@ -1623,11 +1680,16 @@ class MainActivity : AppCompatActivity() {
     // ---------- 歌单/搜索 ----------
 
     private fun openPlaylist(playlist: Playlist) {
+        bindPlaylist(playlist)
+        showPage(Page.PLAYLIST)
+    }
+
+    /** 只填充歌单页数据（标题/列表），不切页——恢复播放等后台场景用。 */
+    private fun bindPlaylist(playlist: Playlist) {
         txtPlaylistTitle.text = playlist.name
         dragEnabled = true
         currentSongs = applyPlaylistOrder(playlist.songs, playlist.name)
         songAdapter.submit(currentSongs)
-        showPage(Page.PLAYLIST)
     }
 
     // ---------- 歌单手动排序 ----------
@@ -1741,6 +1803,14 @@ class MainActivity : AppCompatActivity() {
         val resumeSongs = folderPlaylist?.songs ?: lib.allSongs
         val idx = resumeSongs.indexOfFirst { it.uri == song.uri }
         if (idx < 0) return
+        // 恢复的队列来自某个文件夹歌单：后台把歌单页数据也填好（不切页），
+        // 之后从歌词/播放页按返回键能直接回到这条队列的音轨界面
+        if (folderPlaylist != null) {
+            bindPlaylist(folderPlaylist)
+            queueSourcePage = Page.PLAYLIST
+        } else {
+            queueSourcePage = null
+        }
         ensureService()
         val svc = playbackService
         if (svc != null) {
@@ -1760,8 +1830,14 @@ class MainActivity : AppCompatActivity() {
         } else {
             pendingStart = Triple(songs, index, 0)
         }
+        // 记录队列来源页：只有「列表页发起」才记（队列对话框里切歌时 page 是播放页，不能覆盖）
+        if (page in queueSourcePages) queueSourcePage = page
         showPage(Page.PLAYER)
     }
+
+    /** 可作为播放队列来源、返回时可重新展示的列表页。 */
+    private val queueSourcePages =
+        setOf(Page.PLAYLIST, Page.SEARCH, Page.FAVORITES, Page.DISCOVER, Page.VIDEOS)
 
     private fun ensureService() {
         val intent = Intent(this, MediaPlaybackService::class.java)
@@ -2637,7 +2713,6 @@ class MainActivity : AppCompatActivity() {
             .setView(box)
             .setPositiveButton(R.string.batch_cover_apply) { d, _ ->
                 val checked = songs.filterIndexed { i, _ -> rows[i].isChecked }
-                    .map { it.uri.toString() }
                 if (checked.isEmpty()) {
                     toast(getString(R.string.batch_cover_empty))
                 } else {
@@ -2670,10 +2745,11 @@ class MainActivity : AppCompatActivity() {
                     }
                     1 -> {
                         pendingCoverTarget = "song:${song.uri}"
+                        pendingCoverSong = song
                         coverPicker.launch("image/*")
                     }
                     2 -> {
-                        CoverManager.clearSongCover(this, song.uri.toString())
+                        CoverManager.clearSongCover(this, song.uri.toString(), song.size)
                         CoverLoader.invalidate(song.uri.toString())
                         refreshCdCover()
                         refreshLibGrid()
@@ -2872,7 +2948,7 @@ class MainActivity : AppCompatActivity() {
         android.util.Log.d("ShiYinCover", "refreshCdCover song=${song.uri} key=$currentCoverKey")
         CoverLoader.invalidate(song.uri.toString())
         imgCd.setImageResource(R.drawable.ic_music_tinted)
-        CoverLoader.load(this, song.uri, 400, folder = song.folder) { bmp ->
+        CoverLoader.load(this, song.uri, 400, folder = song.folder, songSize = song.size) { bmp ->
             android.util.Log.d("ShiYinCover", "refreshCdCover bmp=${bmp != null} key=$currentCoverKey")
             if (bmp != null && song.uri.toString() == currentCoverKey) {
                 imgCd.setImageBitmap(bmp)

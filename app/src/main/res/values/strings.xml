@@ -160,7 +160,7 @@
     <string name="title_from_filename">歌名显示使用文件名（忽略标签标题，重新扫描后生效）</string>
     <string name="tab_video">视频</string>
     <string name="videos_empty">这个导航页还没有视频文件\n把含视频的文件夹添加进音乐库即可</string>
-    <string name="about_version">版本 2.11</string>
+    <string name="about_version">版本 2.12</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>

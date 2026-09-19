@@ -157,20 +157,23 @@ class LibraryScanner(
         val projection = arrayOf(
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,
             DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-            DocumentsContract.Document.COLUMN_MIME_TYPE
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_SIZE
         )
         val subDirs = mutableListOf<Pair<String, String>>()
         val songsHere = mutableListOf<Song>()
         // b 站缓存目录的 entry.json 标题（m4s 文件名是数字，用视频标题代替）
         var dirEntryTitle: String? = null
         // m4s 先收集后统一处理（视频流/音频流去重，见循环后逻辑）
-        val m4sCandidates = mutableListOf<Triple<Uri, String, String>>() // uri, name, folder
+        val m4sCandidates = mutableListOf<Quadruple<Uri, String, String, Long>>() // uri, name, folder, size
         try {
             resolver.query(childrenUri, projection, null, null, null)?.use { c ->
                 while (c.moveToNext()) {
                     val id = c.getString(0) ?: continue
                     val name = c.getString(1) ?: continue
                     val mime = c.getString(2) ?: ""
+                    // 单曲封面稳定 key 需要文件大小（2.11）；部分 provider 不给 → 0，退回纯文件名 key
+                    val size = c.getLong(3)
                     when {
                         mime == DocumentsContract.Document.MIME_TYPE_DIR -> {
                             subDirs.add(id to name)
@@ -185,7 +188,7 @@ class LibraryScanner(
                             val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
                             val folder = folderPath ?: DEFAULT_FOLDER
                             if (extOf(name) == "m4s") {
-                                m4sCandidates.add(Triple(uri, name, folder))
+                                m4sCandidates.add(Quadruple(uri, name, folder, size))
                             } else {
                                 val (tagTitle, tagArtist) = readTags(uri, name)
                                 // 标题来源：开关开 → 文件名；否则标签标题（乱码兜底文件名）
@@ -202,7 +205,8 @@ class LibraryScanner(
                                         folder = folder,
                                         artist = tagArtist?.takeIf { it.isNotBlank() }
                                             ?: folder.substringAfterLast('/'),
-                                        fileStem = stemOf(name)
+                                        fileStem = stemOf(name),
+                                        size = size
                                     )
                                 )
                             }
@@ -235,7 +239,7 @@ class LibraryScanner(
         val pickedM4s =
             if (audioOnlyM4s.isNotEmpty()) audioOnlyM4s
             else m4sCandidates.filter { hasAudioTrack(it.first) }
-        for ((uri, name, folder) in pickedM4s) {
+        for ((uri, name, folder, size) in pickedM4s) {
             val (tagTitle, tagArtist) = readTags(uri, name)
             songsHere.add(
                 Song(
@@ -248,7 +252,8 @@ class LibraryScanner(
                     folder = folder,
                     artist = tagArtist?.takeIf { it.isNotBlank() }
                         ?: folder.substringAfterLast('/'),
-                    fileStem = stemOf(name)
+                    fileStem = stemOf(name),
+                    size = size
                 )
             )
         }
