@@ -11,4 +11,6 @@
     <color name="text_hint">#7A7F92</color>
     <color name="current_bg">#334A6CF7</color>
     <color name="ic_launcher_background">#4A6CF7</color>
+    <!-- 设置卡片内的细分隔线 -->
+    <color name="divider">#1FFFFFFF</color>
 </resources>

@@ -5,6 +5,15 @@
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:statusBarColor">@color/bg</item>
         <item name="android:navigationBarColor">@color/bg</item>
+        <!-- 勾选框/单选框/输入线等控件统一用品牌蓝（原 AppCompat 默认粉色） -->
+        <item name="colorAccent">@color/accent</item>
+        <!-- 全局弹窗统一为圆角 + 跟随主题底色 -->
+        <item name="alertDialogTheme">@style/ShiYinAlertDialog</item>
+    </style>
+
+    <style name="ShiYinAlertDialog" parent="Theme.AppCompat.DayNight.Dialog.Alert">
+        <item name="colorAccent">@color/accent</item>
+        <item name="android:windowBackground">@drawable/bg_dialog</item>
     </style>
 
     <style name="BtnStyle" parent="Widget.AppCompat.Button">
