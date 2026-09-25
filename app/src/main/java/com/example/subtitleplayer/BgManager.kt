@@ -3,9 +3,15 @@ package com.example.subtitleplayer
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorFilter
+import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.PixelFormat
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.LayerDrawable
 import android.net.Uri
 import android.view.View
@@ -70,6 +76,73 @@ object BgManager {
         } catch (e: Exception) {
             view.background = null
         }
+    }
+
+    /** 封面背景遮罩透明度：70% 黑（深色底 + 浅色文字，任意封面上歌词都可读）。 */
+    private const val COVER_DIM = 0xB3000000.toInt()
+
+    /**
+     * 生成封面背景 Drawable（2.12.1）：封面等比铺满裁剪 + 深色遮罩。
+     * 与 [apply] 的区别：源图是内存里的封面 Bitmap，不是磁盘文件；且必须
+     * centerCrop 铺满——封面多为正方形，按 FILL 拉伸会把画面压扁。
+     * 裁剪矩阵在 Drawable 内部按实际 bounds 实时算：切页、旋转、软键盘
+     * 引起的尺寸变化都不用重新生成 drawable，也不占额外位图内存。
+     */
+    fun coverDrawable(cover: Bitmap): Drawable = CoverBackgroundDrawable(cover)
+
+    /**
+     * 封面铺满裁剪参数（纯函数，便于 JVM 单测）。
+     * @return FloatArray[scale, dx, dy]——先按 scale 等比缩放，再平移 (dx, dy)。
+     *   scale 取 max 保证两个方向都盖满目标区（多余部分裁掉，绝不出现留白或拉伸变形）。
+     */
+    fun coverFitParams(
+        srcW: Int,
+        srcH: Int,
+        dstW: Int,
+        dstH: Int
+    ): FloatArray {
+        if (srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) {
+            return floatArrayOf(1f, 0f, 0f)
+        }
+        val scale = maxOf(dstW.toFloat() / srcW, dstH.toFloat() / srcH)
+        return floatArrayOf(
+            scale,
+            (dstW - srcW * scale) / 2f,
+            (dstH - srcH * scale) / 2f
+        )
+    }
+
+    private class CoverBackgroundDrawable(
+        private val cover: Bitmap
+    ) : Drawable() {
+
+        private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+        private val dimPaint = Paint().apply { color = COVER_DIM }
+        private val matrix = Matrix()
+
+        override fun draw(canvas: Canvas) {
+            val b = bounds
+            if (b.width() <= 0 || b.height() <= 0) return
+            if (cover.isRecycled || cover.width <= 0 || cover.height <= 0) return
+            val p = coverFitParams(cover.width, cover.height, b.width(), b.height())
+            matrix.setScale(p[0], p[0])
+            matrix.postTranslate(b.left + p[1], b.top + p[2])
+            canvas.drawBitmap(cover, matrix, bitmapPaint)
+            canvas.drawRect(b, dimPaint)
+        }
+
+        override fun setAlpha(alpha: Int) {
+            bitmapPaint.alpha = alpha
+            dimPaint.alpha = alpha
+            invalidateSelf()
+        }
+
+        override fun setColorFilter(colorFilter: ColorFilter?) {
+            bitmapPaint.colorFilter = colorFilter
+            invalidateSelf()
+        }
+
+        override fun getOpacity(): Int = PixelFormat.OPAQUE
     }
 
     private fun decodeScaled(path: String, targetW: Int, targetH: Int): Bitmap? {

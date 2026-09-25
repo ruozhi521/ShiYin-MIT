@@ -13,6 +13,11 @@
     <color name="ic_launcher_background">#4A6CF7</color>
     <!-- 设置卡片内的细分隔线 -->
     <color name="divider">#0F000000</color>
+    <!-- 封面背景（始终叠 70% 黑遮罩）下的文字色：与深色主题同源，不受日夜切换影响 -->
+    <color name="cover_text_on_photo">#F2F3F7</color>
+    <color name="cover_text_hint_on_photo">#C7CBD8</color>
+    <!-- 非当前歌词行：浅色主题的 text_normal 是深灰，压在遮罩上会糊掉 -->
+    <color name="cover_lyric_idle_on_photo">#DDE1EA</color>
     <!-- 调音面板（按截图：蓝色系） -->
     <color name="eq_blue">#1976D2</color>
     <color name="eq_tab_gray">#E6E6E6</color>

@@ -47,8 +47,11 @@
     <string name="bg_set">选择背景图</string>
     <string name="bg_clear">清除背景图</string>
     <string name="bg_saved">背景图已更新</string>
+    <string name="bg_saved_cover_bg_on">背景图已更新（「封面背景」开启中，有封面时以封面为先）</string>
     <string name="bg_cleared">已清除背景图</string>
     <string name="bg_failed">背景图设置失败</string>
+    <string name="cover_bg_title">封面背景</string>
+    <string name="cover_bg_hint">用当前音声封面铺满歌词页与播放页；没有封面时自动回退上面的背景图</string>
     <string name="lyricon_enabled">状态栏歌词（词幕）</string>
     <string name="lyricon_hint">需 root + LSPosed + 词幕模块；各机型效果请以实际为准</string>
     <string name="immersion_seconds_title">沉浸模式进入时间</string>
@@ -163,7 +166,7 @@
     <string name="title_from_filename_hint">忽略标签标题，重新扫描后生效</string>
     <string name="tab_video">视频</string>
     <string name="videos_empty">这个导航页还没有视频文件\n把含视频的文件夹添加进音乐库即可</string>
-    <string name="about_version">版本 2.12</string>
+    <string name="about_version">版本 2.12.1</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>

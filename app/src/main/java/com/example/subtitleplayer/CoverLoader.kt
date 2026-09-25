@@ -18,7 +18,61 @@ import java.util.concurrent.Executors
 object CoverLoader {
 
     private val pool = Executors.newFixedThreadPool(2)
-    private val cache = HashMap<String, Bitmap>()
+
+    /**
+     * 封面缓存：按「解码后字节数」限量的 LRU（2.12.1）。
+     * 此前是无上限 HashMap——封面背景要铺满整屏，必须加载高清封面（否则发糊），
+     * 大图累积几十张就会 OOM，所以给缓存一个硬上限。
+     * 做成具名类而不是匿名 object：字节计数属于缓存自身，不依赖外层 object 的初始化顺序。
+     */
+    private class CoverCache : LinkedHashMap<String, Bitmap>(16, 0.75f, true) {
+        private var bytes = 0L
+
+        fun putCounted(key: String, bmp: Bitmap) {
+            // 先摘旧值（remove 不触发 accessOrder 重排），再把新值计入总量，
+            // 这样 put 时 removeEldestEntry 看到的是「含新值」的准确用量
+            remove(key)?.let { bytes -= it.allocationByteCount }
+            bytes += bmp.allocationByteCount
+            put(key, bmp)
+        }
+
+        /**
+         * 按前缀清除（设置/清除封面后调用，清掉该 uri 的所有尺寸变体）。
+         * 用 entries 迭代器：accessOrder=true 的 LinkedHashMap 在迭代中调用 get
+         * 会 modCount++ → ConcurrentModificationException（所以不能走 this[k]）。
+         */
+        fun removeByPrefix(prefix: String) {
+            val it = entries.iterator()
+            while (it.hasNext()) {
+                val e = it.next()
+                if (e.key.startsWith(prefix)) {
+                    bytes -= e.value.allocationByteCount
+                    it.remove()
+                }
+            }
+        }
+
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>): Boolean {
+            if (bytes <= MAX_CACHE_BYTES) return false
+            // 淘汰前先扣掉它的占用，否则计数只增不减、上限形同虚设
+            bytes -= eldest.value.allocationByteCount
+            return true
+        }
+
+        companion object {
+            /** 缓存上限 24MB（约 4~6 张 1080p 大封面，或上百张小缩略图）。 */
+            const val MAX_CACHE_BYTES = 24L * 1024 * 1024
+        }
+    }
+
+    private val cache = CoverCache()
+
+    private fun cacheGet(key: String): Bitmap? = synchronized(cache) { cache[key] }
+
+    private fun cachePutCounted(key: String, bmp: Bitmap) {
+        synchronized(cache) { cache.putCounted(key, bmp) }
+    }
+
     private val mainHandler = Handler(Looper.getMainLooper())
 
     fun load(
@@ -45,7 +99,7 @@ object CoverLoader {
             }
             return
         }
-        cache[cacheKey]?.let {
+        cacheGet(cacheKey)?.let {
             callback(it)
             return
         }
@@ -93,7 +147,7 @@ object CoverLoader {
                 android.util.Log.d("ShiYinCover", "cover not found uri=$uri folder=$folder")
             }
             if (bmp != null) {
-                synchronized(cache) { cache[cacheKey] = bmp }
+                cachePutCounted(cacheKey, bmp)
             }
             mainHandler.post { callback(bmp) }
         }
@@ -137,7 +191,7 @@ object CoverLoader {
         targetSize: Int,
         callback: (Bitmap?) -> Unit
     ) {
-        cache[cacheKey]?.let {
+        cacheGet(cacheKey)?.let {
             callback(it)
             return
         }
@@ -151,7 +205,7 @@ object CoverLoader {
             }
             android.util.Log.d("ShiYinCover", "loadFile result bmp=${bmp != null}")
             if (bmp != null) {
-                synchronized(cache) { cache[cacheKey] = bmp }
+                cachePutCounted(cacheKey, bmp)
             }
             mainHandler.post { callback(bmp) }
         }
@@ -208,12 +262,7 @@ object CoverLoader {
 
     /** 清除缓存（设置/清除封面后调用；按前缀清除该 uri 的所有尺寸变体）。 */
     fun invalidate(cacheKey: String) {
-        synchronized(cache) {
-            val it = cache.keys.iterator()
-            while (it.hasNext()) {
-                if (it.next().startsWith(cacheKey)) it.remove()
-            }
-        }
+        synchronized(cache) { cache.removeByPrefix(cacheKey) }
     }
 
     private fun decodeScaled(data: ByteArray, target: Int): Bitmap? {

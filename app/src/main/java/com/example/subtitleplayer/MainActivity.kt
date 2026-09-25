@@ -124,6 +124,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var txtTime: TextView
     private lateinit var btnPlayPlayer: ImageButton
     private var currentCoverKey: String? = null
+    /**
+     * 当前歌曲封面（2.12.1）。歌词页/播放页的「封面背景」直接用这份 bitmap，
+     * 避免切页时再走一遍 CoverLoader（磁盘/解析）。切歌或加载失败即置 null。
+     */
+    private var currentCoverBmp: Bitmap? = null
+    /**
+     * 上一次「歌词页/播放页是否正用封面背景」的状态（2.12.1）。
+     * 只在翻转时重刷适配器配色，避免每次刷新背景都全量 notifyDataSetChanged。
+     */
+    private var lastCoverTextState = false
     /** 用户手动滑动歌词页的时间（4 秒冷却期内不自动回位）。 */
     private var lastLyricUserScroll = 0L
     /** 播放页沉浸模式。 */
@@ -168,6 +178,7 @@ class MainActivity : AppCompatActivity() {
     // ---- 全屏歌词页 ----
     private lateinit var recyclerLyricFull: RecyclerView
     private lateinit var btnTranslate: Button
+    private lateinit var txtLyricsTitle: TextView
     private var lastSong: Song? = null
     private var translating = false
     private var transFailedLines: List<Pair<Int, String>> = emptyList()
@@ -277,15 +288,28 @@ class MainActivity : AppCompatActivity() {
             maybeAutoTranslate(song, lines)
             imgCd.setImageResource(R.drawable.ic_music_tinted)
             currentCoverKey = song?.uri?.toString()
+            // 切歌不主动清背景（会闪纯色）；等封面回调定夺——有封面铺封面，没有则回退。
+            // 与 imgCd 的行为一致：旧图留到新图加载完再替换。
             if (song != null) {
-                CoverLoader.load(this@MainActivity, song.uri, 400, folder = song.folder, songSize = song.size) { bmp ->
-                    if (bmp != null && song.uri.toString() == currentCoverKey) {
-                        imgCd.setImageBitmap(bmp)
-                        applyPlayerBackground(bmp)
+                CoverLoader.load(this@MainActivity, song.uri, coverLoadSize(), folder = song.folder, songSize = song.size) { bmp ->
+                    if (song.uri.toString() == currentCoverKey) {
+                        if (bmp != null) {
+                            imgCd.setImageBitmap(bmp)
+                            currentCoverBmp = bmp
+                            // 播放页主色渐变按封面算；歌词页/播放页的封面背景一并刷新
+                            applyPlayerBackground(bmp)
+                        } else {
+                            currentCoverBmp = null
+                            applyPlayerBackground(null)
+                        }
+                        // 无封面的歌 → cover 为 null → 自动回退自定义背景图/纯色
+                        applyPageBackground()
                     }
                 }
             } else {
+                currentCoverBmp = null
                 applyPlayerBackground(null)
+                applyPageBackground()
             }
         }
 
@@ -444,7 +468,12 @@ class MainActivity : AppCompatActivity() {
             if (uri == null) return@registerForActivityResult
             if (BgManager.setBg(this, uri)) {
                 applyPageBackground()
-                toast(getString(R.string.bg_saved))
+                // 封面背景开启时提示优先级，否则用户会以为背景图没生效
+                toast(
+                    getString(
+                        if (coverBgEnabled()) R.string.bg_saved_cover_bg_on else R.string.bg_saved
+                    )
+                )
             } else {
                 toast(getString(R.string.bg_failed))
             }
@@ -615,6 +644,7 @@ class MainActivity : AppCompatActivity() {
         btnPlayPlayer = findViewById(R.id.btnPlayPlayer)
         recyclerLyricFull = findViewById(R.id.recyclerLyricFull)
         btnTranslate = findViewById(R.id.btnTranslate)
+        txtLyricsTitle = findViewById(R.id.txtLyricsTitle)
 
         // ---- 发现页 ----
         discoverAdapter = DiscoverAdapter { pos ->
@@ -1237,11 +1267,60 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /** 应用背景图到播放页/歌词页。 */
+    /**
+     * 播放页/歌词页背景统一刷新（2.12.1）。
+     * 优先级：封面背景（开关开启且有当前封面）→ 用户自定义背景图 → 播放页封面主色渐变 → 纯色。
+     * 注意必须在这里一次性定夺，否则歌词页刷自定义背景图时会把播放页的主色渐变冲掉。
+     */
     private fun applyPageBackground() {
-        val uri = BgManager.bgUri(this)
-        BgManager.apply(viewPlayer, uri)
-        BgManager.apply(viewLyrics, uri)
+        val cover = if (coverBgEnabled()) currentCoverBmp else null
+        val bgUri = BgManager.bgUri(this)
+        if (cover != null) {
+            // 两页各建一个 Drawable 实例：Drawable 的 bounds/state 是实例级的，
+            // 共享同一实例在两个 View 上会互相踩（bitmap 本身仍是共享引用，不额外占内存）
+            viewPlayer.background = BgManager.coverDrawable(cover)
+            viewLyrics.background = BgManager.coverDrawable(cover)
+        } else {
+            BgManager.apply(viewPlayer, bgUri)
+            BgManager.apply(viewLyrics, bgUri)
+            // 没有自定义背景图时，播放页才用封面主色渐变（暗化保证可读）
+            if (bgUri == null) applyPlayerBackground(currentCoverBmp)
+        }
+        applyLyricTextOnCover(cover != null)
+    }
+
+    /** 封面背景开关（设置-主题）。 */
+    private fun coverBgEnabled(): Boolean = prefs.getBoolean(KEY_COVER_BG, false)
+
+    /**
+     * 封面加载目标边长（2.12.1）。
+     * CD 封面原本只要 400px，但同一张图现在要铺满整屏（1080p 上下），
+     * 400px 放大会明显发糊。取屏幕长边并夹在 [COVER_LOAD_MIN, COVER_LOAD_MAX]：
+     * 兼顾清晰度与内存（配合 CoverLoader 的 24MB LRU 上限）。
+     */
+    private fun coverLoadSize(): Int {
+        val dm = resources.displayMetrics
+        val longest = maxOf(dm.widthPixels, dm.heightPixels)
+        return longest.coerceIn(COVER_LOAD_MIN, COVER_LOAD_MAX)
+    }
+
+    /**
+     * 封面背景开启时把两页文字提亮（遮罩固定 70% 黑，文字必须始终浅色）；
+     * 关闭时恢复主题色。播放页主色渐变背景已自带暗化，无需处理。
+     */
+    private fun applyLyricTextOnCover(onCover: Boolean) {
+        val primary = if (onCover) getColor(R.color.cover_text_on_photo) else getColor(R.color.text_primary)
+        val hint = if (onCover) getColor(R.color.cover_text_hint_on_photo) else getColor(R.color.text_hint)
+        txtLyricsTitle.setTextColor(primary)
+        txtPlayerTitle.setTextColor(primary)
+        txtPlayerFolder.setTextColor(hint)
+        txtTime.setTextColor(primary)
+        txtImmersiveLyric.setTextColor(primary)
+        // 译者行取色在适配器里，状态变了才重刷（避免每次刷背景都全量 notify）
+        if (onCover != lastCoverTextState) {
+            lastCoverTextState = onCover
+            applyAppearance()
+        }
     }
 
     /** 背景图设置弹窗。 */
@@ -2275,6 +2354,28 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { showBgDialog() }
         })
 
+        // 封面背景开关（2.12.1）：歌词页/播放页用当前音声封面铺满作背景
+        box.addView(android.widget.Switch(this).apply {
+            isChecked = coverBgEnabled()
+            text = getString(R.string.cover_bg_title)
+            textSize = 16f
+            setTextColor(getColor(R.color.text_primary))
+            setPadding(0, dp(14f), 0, dp(4f))
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(KEY_COVER_BG, checked).apply()
+                // 两种状态都要重刷：开启 → 立刻换封面；关闭 → 立刻退回背景图/纯色
+                applyAppearance()
+                applyPageBackground()
+            }
+        })
+        // 说明小字：讲清与上面「背景图」的回退关系，免得出「设了背景图没反应」的误报
+        box.addView(android.widget.TextView(this).apply {
+            text = getString(R.string.cover_bg_hint)
+            textSize = 12f
+            setTextColor(getColor(R.color.text_hint))
+            setPadding(0, 0, 0, dp(6f))
+        })
+
         // 非当前歌词颜色行（带当前色圆点；长按恢复默认）
         val idleRow = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.HORIZONTAL
@@ -2948,17 +3049,28 @@ class MainActivity : AppCompatActivity() {
         android.util.Log.d("ShiYinCover", "refreshCdCover song=${song.uri} key=$currentCoverKey")
         CoverLoader.invalidate(song.uri.toString())
         imgCd.setImageResource(R.drawable.ic_music_tinted)
-        CoverLoader.load(this, song.uri, 400, folder = song.folder, songSize = song.size) { bmp ->
+        CoverLoader.load(this, song.uri, coverLoadSize(), folder = song.folder, songSize = song.size) { bmp ->
             android.util.Log.d("ShiYinCover", "refreshCdCover bmp=${bmp != null} key=$currentCoverKey")
-            if (bmp != null && song.uri.toString() == currentCoverKey) {
+            if (song.uri.toString() != currentCoverKey) return@load
+            // 清除封面且无内嵌/歌单封面兜底时 bmp 为 null → 背景退回自定义图/纯色（2.12.1）
+            if (bmp != null) {
                 imgCd.setImageBitmap(bmp)
+                currentCoverBmp = bmp
                 applyPlayerBackground(bmp)
+            } else {
+                imgCd.setImageResource(R.drawable.ic_music_tinted)
+                currentCoverBmp = null
+                applyPlayerBackground(null)
             }
+            // 手动设置/清除封面后，封面背景要同步换图
+            applyPageBackground()
         }
     }
 
-    /** 播放页背景：自定义背景图优先；无则用封面主色渐变（暗化保证可读）。 */
+    /** 播放页背景：封面背景 > 自定义背景图 > 封面主色渐变（暗化保证可读）。 */
     private fun applyPlayerBackground(cover: Bitmap?) {
+        // 封面背景开启且有封面时，以封面铺满为准，不再叠主色渐变（2.12.1）
+        if (coverBgEnabled() && currentCoverBmp != null) return
         val bgUri = BgManager.bgUri(this)
         if (bgUri != null) {
             BgManager.apply(viewPlayer, bgUri)
@@ -3901,11 +4013,20 @@ class MainActivity : AppCompatActivity() {
     private fun applyAppearance() {
         val idleColor = prefs.getInt(KEY_LYRIC_IDLE_COLOR, IDLE_DEFAULT)
         val curColor = prefs.getInt(KEY_LYRIC_CUR_COLOR, CUR_DEFAULT)
+        // 封面背景开启时：非当前行/译文行都要提亮（浅色主题的 text_normal/text_hint
+        // 压在 70% 黑遮罩上会糊掉，2.12.1）。用户显式自定义过的颜色尊重用户选择。
+        val onCover = coverBgEnabled() && currentCoverBmp != null
+        val idleResolved = when {
+            idleColor != IDLE_DEFAULT -> idleColor
+            onCover -> getColor(R.color.cover_lyric_idle_on_photo)
+            else -> -1
+        }
         lyricAdapter.applyStyle(
             prefs.getInt(KEY_LYRIC_SIZE, 18),
             prefs.getInt(KEY_LYRIC_FONT, 0),
-            if (idleColor == IDLE_DEFAULT) -1 else idleColor,
-            if (curColor == CUR_DEFAULT) -1 else curColor
+            idleResolved,
+            if (curColor == CUR_DEFAULT) -1 else curColor,
+            if (onCover) getColor(R.color.cover_text_hint_on_photo) else -1
         )
         val uiSize = prefs.getInt(KEY_UI_SIZE, 15)
         songAdapter.applyUiSize(uiSize)
@@ -3985,7 +4106,11 @@ class MainActivity : AppCompatActivity() {
             listOf(MODULE_DISCOVER, MODULE_LIBRARY, MODULE_ARTISTS, MODULE_FAVORITES, MODULE_VIDEO)
         private const val DEFAULT_NAV = "discover,library,artists,favorites,video"
         private const val KEY_DARK = "dark_mode"
-        private const val KEY_LYRIC_SIZE = "lyric_size"
+        /** 2.12.1：歌词页/播放页用当前封面作背景（设置-主题 开关）。 */
+        private const val KEY_COVER_BG = "cover_background"
+        /** 封面背景加载分辨率下限/上限：太低铺满会糊，太高白占内存。 */
+        private const val COVER_LOAD_MIN = 800
+        private const val COVER_LOAD_MAX = 1080        private const val KEY_LYRIC_SIZE = "lyric_size"
         private const val KEY_UI_SIZE = "ui_size"
         private const val KEY_LYRIC_FONT = "lyric_font"
         private const val KEY_TRANS_BASE = "trans_base"

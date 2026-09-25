@@ -111,6 +111,7 @@ class LyricAdapter(
     private var fontMode = 0
     private var idleColor = -1 // -1 = 默认 text_normal
     private var curColor = -1 // -1 = 跟随主题色（1.30）
+    private var transColor = -1 // -1 = 默认 text_hint（2.12.1：封面背景下换亮色）
     private var translations: Map<Int, String> = emptyMap()
 
     fun submit(list: List<SubtitleLine>) {
@@ -124,11 +125,18 @@ class LyricAdapter(
         notifyDataSetChanged()
     }
 
-    fun applyStyle(sizeSp: Int, font: Int, idleColorArgb: Int = -1, curColorArgb: Int = -1) {
+    fun applyStyle(
+        sizeSp: Int,
+        font: Int,
+        idleColorArgb: Int = -1,
+        curColorArgb: Int = -1,
+        transColorArgb: Int = -1
+    ) {
         lyricSizeSp = sizeSp.toFloat()
         fontMode = font
         idleColor = idleColorArgb
         curColor = curColorArgb
+        transColor = transColorArgb
         notifyDataSetChanged()
     }
 
@@ -170,7 +178,10 @@ class LyricAdapter(
             // 1.30：自定义播放中歌词色优先，未设置时跟随主题色
             val accent = if (curColor != -1) curColor else ThemeManager.accent(holder.text.context)
             holder.text.setTextColor(accent)
-            holder.trans.setTextColor(ThemeManager.accentDark(accent))
+            // 封面背景下 accentDark 会沉进封面（2.12.1）→ 统一用亮色译文
+            holder.trans.setTextColor(
+                if (transColor != -1) transColor else ThemeManager.accentDark(accent)
+            )
         } else {
             holder.itemView.setBackgroundResource(0)
             val ctx = holder.text.context
@@ -178,7 +189,10 @@ class LyricAdapter(
                 if (idleColor != -1) idleColor
                 else ctx.getColor(R.color.text_normal)
             )
-            holder.trans.setTextColor(ctx.getColor(R.color.text_hint))
+            // 封面背景下 text_hint 会糊进封面（2.12.1）
+            holder.trans.setTextColor(
+                if (transColor != -1) transColor else ctx.getColor(R.color.text_hint)
+            )
         }
         // 当前行淡入，更沉浸
         if (isCurrent) {
