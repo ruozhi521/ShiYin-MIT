@@ -4110,7 +4110,8 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_COVER_BG = "cover_background"
         /** 封面背景加载分辨率下限/上限：太低铺满会糊，太高白占内存。 */
         private const val COVER_LOAD_MIN = 800
-        private const val COVER_LOAD_MAX = 1080        private const val KEY_LYRIC_SIZE = "lyric_size"
+        private const val COVER_LOAD_MAX = 1080
+        private const val KEY_LYRIC_SIZE = "lyric_size"
         private const val KEY_UI_SIZE = "ui_size"
         private const val KEY_LYRIC_FONT = "lyric_font"
         private const val KEY_TRANS_BASE = "trans_base"
