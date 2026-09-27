@@ -29,14 +29,17 @@ object PlaylistSorter {
     }
 
     /**
-     * 按最近播放排序：时间戳大的在前；从没播过（无记录）的排最后，内部保持原顺序。
-     * 这样「没听过的歌单」不会插在听过的中间，而是在末尾等你看。
+     * 按最近播放排序：时间戳大的在前；从没播过（无记录）的排最后。
+     *
+     * 只用时间戳一个键，不追加 `thenBy { it.name }`（2.13 修正）：
+     * - Kotlin 的 `sortedWith` 是**稳定排序**，同一时间戳（含全部无记录 = 0）会保持输入原顺序 ——
+     *   这正是我们想要的「没听过的歌单按扫描顺序排在末尾」；
+     * - 原先追加的 `thenBy { it.name }` 用的是 **Unicode 码位**，而 [byName] 用的是 **拼音**，
+     *   同一批歌单在两种排序下尾部顺序不一致，会让用户觉得「排序乱了」。
+     *   统一为「名字相关一律走 [byName]」，本函数不碰名字。
      */
     fun byRecent(lists: List<Playlist>, recent: Map<String, Long>): List<Playlist> {
-        return lists.sortedWith(
-            compareByDescending<Playlist> { recent[it.name] ?: 0L }
-                .thenBy { it.name }
-        )
+        return lists.sortedWith(compareByDescending<Playlist> { recent[it.name] ?: 0L })
     }
 
     /**
