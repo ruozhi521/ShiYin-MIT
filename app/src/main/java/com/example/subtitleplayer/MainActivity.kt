@@ -175,6 +175,12 @@ class MainActivity : AppCompatActivity() {
      * 上一个视频的残留帧（粉丝反馈「画面是之前的视频，但音频正常」）。
      */
     private var videoFramePending = false
+    /**
+     * 「新首帧」最早被认可的时刻（2.13）。
+     * 切歌瞬间旧播放器的余帧会继续触发 onSurfaceTextureUpdated，
+     * 不设时间门槛就会把旧帧误判成新帧、立刻显示出来。
+     */
+    private var videoFrameReadyAfter = 0L
     private val videoFrameHandler = android.os.Handler(android.os.Looper.getMainLooper())
     /** 视频页是否处于全屏（系统栏已隐藏）。 */
     private var videoImmersive = false
@@ -589,7 +595,7 @@ class MainActivity : AppCompatActivity() {
             override fun onSurfaceTextureAvailable(
                 st: android.graphics.SurfaceTexture, width: Int, height: Int
             ) {
-                android.util.Log.d("ShiYinVideo", "surface available: ${width}x$height")
+                PlaybackLog.log("video surface available ${width}x$height")
                 playbackService?.attachVideoSurface(android.view.Surface(st))
                 videoSurfaceAttached = true
                 fitVideoSurface(width, height)
@@ -613,14 +619,29 @@ class MainActivity : AppCompatActivity() {
 
             override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {
                 // 新视频首帧到达：结束「等首帧」状态，显示画面（2.13）
-                if (videoFramePending) {
+                // 2.13：加时间门槛——切歌瞬间旧播放器可能仍有余帧在刷，若立刻判定
+                // 「首帧已到」就会把旧画面当新画面显示出来（原 bug 复现）。
+                // 只有「隐藏之后又过了至少一帧时长」才认账。
+                if (videoFramePending && System.currentTimeMillis() >= videoFrameReadyAfter) {
                     videoFramePending = false
                     videoFrameHandler.removeCallbacksAndMessages(null)
                     videoSurface.alpha = 1f
+                    PlaybackLog.log("video first frame shown")
                 }
             }
         }
         videoSurface.setOnTouchListener { v, ev -> handleVideoTouch(v, ev) }
+        // 2.13：布局尺寸变化后必须重新适配画面。
+        // `openVideoPage` 里的 fit 是在 post 中调用，若此刻 view 刚 GONE→VISIBLE、
+        // 布局尚未完成，拿到的 width/height 可能是 0 —— 而尺寸未知时只能给「不缩放」的
+        // 保守矩阵，表现为画面按原始像素铺开、**只看到左上角一块**（粉丝反馈的「只显示一部分」）。
+        // 布局监听可保证：无论何时布局落定，都用真实尺寸重算一次（幂等、开销极小）。
+        videoSurface.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
+            if (l == ol && t == ot && r == or && b == ob) return@addOnLayoutChangeListener
+            if (page == Page.VIDEO) {
+                fitVideoSurface(r - l, b - t)
+            }
+        }
         seekVideo.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(
                 sb: android.widget.SeekBar, progress: Int, fromUser: Boolean
@@ -3048,7 +3069,9 @@ class MainActivity : AppCompatActivity() {
             }
             videoW = mw
             videoH = mh
+            PlaybackLog.log("video open: mmr ${mw}x$mh rot=$rot")
         } catch (e: Exception) {
+            PlaybackLog.log("video open: mmr FAILED ${e.javaClass.simpleName}: ${e.message}")
         }
         // 优先用播放器解码后的真实尺寸（retriever 给的是存储方向，旋转视频会错）
         val (sw, sh) = playbackService?.currentVideoSize() ?: (0 to 0)
@@ -3056,6 +3079,10 @@ class MainActivity : AppCompatActivity() {
             videoW = sw
             videoH = sh
         }
+        PlaybackLog.log(
+            "video open: final size ${videoW}x$videoH (player=${sw}x$sh) " +
+                "surfaceAttached=$videoSurfaceAttached"
+        )
         requestedOrientation = when {
             videoW > videoH ->
                 android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -3066,8 +3093,23 @@ class MainActivity : AppCompatActivity() {
         // 播放器后续解出/修正尺寸时同步
         playbackService?.onVideoSizeChanged = { w, h -> onVideoSizeReady(w, h) }
         showPage(Page.VIDEO)
-        // 打开视频页时若正等待新帧（切歌后立刻进视频页），保持隐藏态；否则显示画面
-        videoSurface.alpha = if (videoFramePending) 0f else 1f
+        // 2.13：进入视频页后按「补绑 → 隐藏旧帧 → 适配画面」的顺序处理，缺一不可：
+        // ① 补绑：从视频列表点进来时 TextureView 的 SurfaceTexture 可能已存在且可见
+        //    （view 只是 GONE→VISIBLE），不会再触发 onSurfaceTextureAvailable，
+        //    不主动绑定就是**全黑**（粉丝反馈「点别的就黑了」）。
+        // ② 隐藏旧帧：必须**在绑定之后**判断——否则 videoSurfaceAttached 还是 false，
+        //    隐藏会被跳过，新视频首帧到来前一直显示上一个视频的残留帧（粉丝反馈的原 bug）。
+        //    放在这里而不是只靠 onSongChanged：点视频时执行顺序是
+        //    `playSong()`（内部 showPage(PLAYER)）→ `openVideoPage()`（showPage(VIDEO)），
+        //    切歌那一刻 page 还是 PLAYER，onSongChanged 里那次调用会被跳过。
+        // ③ 适配：不能干等 onVideoSizeChanged——部分视频/机型不回调该事件，
+        //    画面会一直沿用**上一个视频的矩阵**（放大到只剩局部，或位移出可视区变黑）。
+        videoSurface.post {
+            if (page != Page.VIDEO) return@post
+            ensureVideoSurfaceBound()
+            awaitVideoFirstFrame()
+            fitVideoSurface(videoSurface.width, videoSurface.height)
+        }
         seekVideo.max = playbackService?.currentDuration() ?: 0
         txtVideoHint.visibility =
             if (playbackService?.isPlayingSafe() == true) View.GONE else View.VISIBLE
@@ -3083,6 +3125,7 @@ class MainActivity : AppCompatActivity() {
         val changed = videoW != w || videoH != h
         videoW = w
         videoH = h
+        PlaybackLog.log("video onSizeReady ${w}x$h changed=$changed attached=$videoSurfaceAttached")
         val target = when {
             w > h -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             h > w -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
@@ -3091,6 +3134,9 @@ class MainActivity : AppCompatActivity() {
         if (target != requestedOrientation) {
             requestedOrientation = target
         }
+        // 2.13：尺寸解出来是「能画了」的信号，此刻必须确保 surface 已绑定
+        // （切歌瞬间 attachVideoSurface 可能因播放器未就绪被延后）
+        ensureVideoSurfaceBound()
         if (changed && videoSurfaceAttached) {
             // post 到下一帧：旋转刚触发时 view 尺寸可能还没完成重排，
             // 立刻取 width/height 会拿到旧值（1.31 错位修复）
@@ -3104,9 +3150,49 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 视频画面完整显示（fit：等比缩放、宁可黑边不裁切）。画面区域 = 视频 FrameLayout，不含底部进度条。 */
+    /**
+     * 确保视频画面已绑定到播放器（2.13）。
+     *
+     * 为什么必须主动做：`onSurfaceTextureAvailable` 只在 SurfaceTexture **首次创建**时回调。
+     * 而这个 TextureView 长住在布局里（只切 visibility），从视频列表点进另一个视频时
+     * SurfaceTexture 早就存在了 → **不会再回调 available** → 没人调 attachVideoSurface
+     * → MediaPlayer 没有输出目标 → **全黑**（粉丝反馈「点别的就黑了」）。
+     * 这里在每次进入视频页时检查并补绑；幂等（重复绑定只是重设一次 surface）。
+     */
+    private fun ensureVideoSurfaceBound() {
+        if (!videoSurface.isAvailable) {
+            PlaybackLog.log("video surface not available yet, wait for callback")
+            return
+        }
+        if (videoSurfaceAttached) return
+        val st = videoSurface.surfaceTexture
+        if (st == null) {
+            PlaybackLog.log("video surface isAvailable but surfaceTexture null")
+            return
+        }
+        playbackService?.attachVideoSurface(android.view.Surface(st))
+        videoSurfaceAttached = true
+        PlaybackLog.log("video surface rebound on page open")
+    }
+
+    /**
+     * 视频画面完整显示（fit：等比缩放、宁可黑边不裁切）。画面区域 = 视频 FrameLayout，不含底部进度条。
+     *
+     * 2.13 修复（粉丝反馈「画面被放大到只剩局部」「点别的就黑了」）：
+     * 旧实现在尺寸未知时直接 `return`，**不更新 transform** —— 而 TextureView 的矩阵是
+     * 「上次设定的」那一份，于是沿用**上一个视频**的缩放/位移：竖屏视频的矩阵去摆横屏视频
+     * 就会放大裁切（只剩局部），位移过大时画面整个跑出可视区（全黑）。
+     * 现在的约定：**任何一次调用都必须给出确定的矩阵**，绝不沿用旧值。
+     * 尺寸信息不全时退回 [idleTransform]，它按 view 尺寸给一个「正好铺满」的中性变换。
+     */
     private fun fitVideoSurface(viewW: Int, viewH: Int) {
-        if (videoW <= 0 || videoH <= 0 || viewW <= 0 || viewH <= 0) return
+        if (videoW <= 0 || videoH <= 0 || viewW <= 0 || viewH <= 0) {
+            videoSurface.setTransform(idleTransform(viewW, viewH))
+            PlaybackLog.log(
+                "video fit fallback (size unknown) v=${videoW}x$videoH view=${viewW}x$viewH"
+            )
+            return
+        }
         val scale = minOf(
             viewW.toFloat() / videoW,
             viewH.toFloat() / videoH
@@ -3117,6 +3203,30 @@ class MainActivity : AppCompatActivity() {
         m.setScale(scale, scale)
         m.postTranslate(dx, dy)
         videoSurface.setTransform(m)
+    }
+
+    /**
+     * 尺寸未知时的中性变换（2.13）。
+     *
+     * 唯一目标：**主动覆盖掉上一个视频的矩阵**，给一个"看起来正常"的画面，绝不黑屏/只露一角。
+     * 做法：假设最常见的横屏 16:9，等比缩放到**刚好放得下**（宁可留黑边）。
+     * 视频坐标是像素，所以先把 view 尺寸当作 16:9 的基准算缩放比，再把假设的
+     * 1920×1080 像素画面按该比例摆进去 —— 这样尺度与真实视频一致（不会放大到只剩局部）。
+     */
+    private fun idleTransform(viewW: Int, viewH: Int): android.graphics.Matrix {
+        val m = android.graphics.Matrix()
+        if (viewW <= 0 || viewH <= 0) return m
+        // 假设视频是 1920x1080（横屏常见），求出"刚好放得下"的缩放比
+        val assumedW = 1920f
+        val assumedH = 1080f
+        val scale = minOf(viewW / assumedW, viewH / assumedH)
+        if (scale <= 0f) return m
+        m.setScale(scale, scale)
+        m.postTranslate(
+            (viewW - assumedW * scale) / 2f,
+            (viewH - assumedH * scale) / 2f
+        )
+        return m
     }
 
     /** 关闭视频页：脱离画面（播放不中断），恢复竖屏。 */
@@ -3201,20 +3311,30 @@ class MainActivity : AppCompatActivity() {
      * 粉丝反馈的「点不同视频画面是之前的视频，但音频正常」就是这个。
      * 做法：先把画面设为透明（露出黑色底），等 onSurfaceTextureUpdated 收到新首帧再显示。
      * 必须有超时兜底：个别设备/纯音频不回调 updated，否则会一直黑屏。
+     *
+     * 2.13 收紧：这条「先隐藏」是**主动制造黑屏**，一旦首帧回不来就是用户看到的全黑。
+     * 因此①只在确实在视频页、且 surface 已绑定（有新帧可期）时才隐藏；
+     * ②超时从 2 秒缩到 1.2 秒，把最坏黑屏时间压到最短。
      */
     private fun awaitVideoFirstFrame() {
         if (page != Page.VIDEO) return
+        // surface 没绑上时不可能有新帧到达，隐藏等于直接黑屏 —— 此时保持原画面
+        if (!videoSurfaceAttached || !videoSurface.isAvailable) {
+            PlaybackLog.log("video awaitFirstFrame skipped (surface not ready)")
+            return
+        }
         videoFramePending = true
+        videoFrameReadyAfter = System.currentTimeMillis() + FRAME_GRACE_MS
         videoSurface.alpha = 0f
         videoFrameHandler.removeCallbacksAndMessages(null)
         videoFrameHandler.postDelayed({
-            // 超时兜底：2 秒还没等到新帧就直接显示（宁可短暂旧帧，不能黑屏）
+            // 超时兜底：还没等到新帧就直接显示（宁可短暂旧帧，不能黑屏）
             if (videoFramePending) {
                 videoFramePending = false
                 videoSurface.alpha = 1f
                 PlaybackLog.log("video first-frame timeout, show anyway")
             }
-        }, 2000)
+        }, 1200)
     }
 
     /** 播放页背景：封面背景 > 自定义背景图 > 封面主色渐变（暗化保证可读）。 */
@@ -4328,6 +4448,12 @@ class MainActivity : AppCompatActivity() {
         private const val SORT_NAME = "name"
         private const val SORT_RECENT = "recent"
         private const val SORT_RANDOM = "random"
+        /**
+         * 切歌后「新首帧」的等待宽限期（2.13）。
+         * 旧播放器的余帧会在这个时间内继续触发 onSurfaceTextureUpdated，
+         * 期间到达的帧不算新视频的首帧。
+         */
+        private const val FRAME_GRACE_MS = 120L
         private const val KEY_TITLE_FROM_FILENAME = "title_from_filename"
         private const val KEY_DESKTOP_ON = "desktop_lyrics_on"
         private const val KEY_DESKTOP_SIZE = "desktop_lyrics_size"

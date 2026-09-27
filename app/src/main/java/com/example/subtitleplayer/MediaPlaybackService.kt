@@ -450,22 +450,32 @@ class MediaPlaybackService : Service() {
             if (useExo) {
                 // Exo 接受 null 表示脱离画面
                 exoPlayer?.setVideoSurface(surface)
+                PlaybackLog.log("video attach(exo): ${if (surface != null) "bind" else "detach"}")
             } else {
-                val mp = mediaPlayer ?: return
+                val mp = mediaPlayer
+                if (mp == null) {
+                    // 播放器尚未创建（切歌瞬间/重建中）：只记下 surface，等 startMp 里补绑。
+                    // 原实现这里直接 return，虽同样不崩，但**日志里看不到**，
+                    // 真出全黑时无从判断是「没绑」还是「绑了没输出」（2.13 补日志）
+                    PlaybackLog.log(
+                        "video attach: player not ready, deferred (surface=${surface != null})"
+                    )
+                    return
+                }
                 if (surface != null) {
                     // 先清空再重设：强制重建渲染通道让画面输出。
                     // 注意：不在此处 pause/seek（seek 在部分设备会卡住解码器导致进度冻结），
                     // 播放/暂停一律走 Service 的 play()/pause() 保持状态一致。
                     mp.setSurface(null)
                     mp.setSurface(surface)
-                    android.util.Log.d("ShiYinVideo", "attachVideoSurface: rebind surface")
+                    PlaybackLog.log("video attach: rebind surface ok")
                 } else {
                     mp.setSurface(null)
-                    android.util.Log.d("ShiYinVideo", "attachVideoSurface: detach")
+                    PlaybackLog.log("video attach: detach ok")
                 }
             }
         } catch (e: Exception) {
-            android.util.Log.e("ShiYinVideo", "attachVideoSurface failed: ${e.message}")
+            PlaybackLog.log("video attach FAILED: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
@@ -707,10 +717,15 @@ class MediaPlaybackService : Service() {
             attachedVideoSurface?.let { surf ->
                 try {
                     mp.setSurface(surf)
-                    android.util.Log.d("ShiYinVideo", "playCurrent: rebind surface $surf")
+                    // 2.13：视频诊断日志接入 PlaybackLog（原先只走 android.util.Log.d，
+                    // 粉丝从「导出运行日志」里看不到任何视频记录，无法定位问题）
+                    PlaybackLog.log("video playCurrent: rebind surface")
                 } catch (e: Exception) {
-                    android.util.Log.e("ShiYinVideo", "playCurrent rebind failed: ${e.message}")
+                    PlaybackLog.log("video playCurrent rebind FAILED: ${e.message}")
                 }
+            }
+            if (attachedVideoSurface == null) {
+                PlaybackLog.log("video playCurrent: no surface attached")
             }
             mp.setWakeMode(this, PowerManager.PARTIAL_WAKE_LOCK)
             mp.setOnPreparedListener { player ->
@@ -724,7 +739,7 @@ class MediaPlaybackService : Service() {
                 handlePreparedResume()
             }
             mp.setOnVideoSizeChangedListener { _, w, h ->
-                android.util.Log.d("ShiYinVideo", "onVideoSizeChanged: ${w}x$h")
+                PlaybackLog.log("video size changed: ${w}x$h")
                 if (w > 0 && h > 0) {
                     videoWidth = w
                     videoHeight = h
