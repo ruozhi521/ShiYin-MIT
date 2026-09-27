@@ -42,9 +42,21 @@ object LibraryTree {
             // 最后一层挂歌单（该文件夹本身有歌）；仅空位挂载，避免覆盖同名虚拟歌单
             if (parent != null && parent.playlist == null) parent.playlist = p
         }
-        // 排序：纯目录在前，其余按名称
+        // 排序：纯目录在前，其余按名称。
+        // （2.13）树形目录**始终**按名称排，不跟随库页的「随机/最近播放」——
+        // 树形是「按文件夹路径浏览」的心智模型，打乱会让人找不到文件夹。
+        // 用 Collator(Locale.CHINA) 让中文按拼音排（默认比较按 Unicode 码位，「周」会排在「安」前）。
+        val collator = java.text.Collator.getInstance(java.util.Locale.CHINA)
         fun sort(list: MutableList<TreeNode>) {
-            list.sortWith(compareBy({ it.playlist != null }, { it.name }))
+            list.sortWith { a, b ->
+                val d = (a.playlist != null).compareTo(b.playlist != null)
+                // Collator 不保证自反性（compare==0 不代表相等），必须用原串比较兜底，
+                // 否则 sortWith 可能抛 "Comparison method violates its general contract!"
+                if (d != 0) d else {
+                    val c = collator.compare(a.name, b.name)
+                    if (c != 0) c else a.name.compareTo(b.name)
+                }
+            }
             for (n in list) sort(n.children)
         }
         sort(roots)

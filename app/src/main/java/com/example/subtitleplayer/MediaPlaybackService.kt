@@ -671,6 +671,11 @@ class MediaPlaybackService : Service() {
         val song = currentSong() ?: return
         releasePlayer()
         speed = 1f // 切歌/换播放器后倍速重置
+        // 视频尺寸清零（2.13）：videoWidth/Height 是「上一首」解出的值，切歌后必须清掉。
+        // 否则新歌 onPrepared 之前若界面读 currentVideoSize() 会拿到旧值（可能 0x0 或别的比例），
+        // 用它 fit 画面就把新视频按上一首的比例压成一条窄带 / 显示成上一首的样子。
+        videoWidth = 0
+        videoHeight = 0
         PlaybackLog.log(
             "playCurrent #$index engine=${if (useExo) "exo" else "media"} ${song.uri.lastPathSegment}"
         )

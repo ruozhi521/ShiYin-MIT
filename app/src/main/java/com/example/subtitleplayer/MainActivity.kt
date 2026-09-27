@@ -170,6 +170,12 @@ class MainActivity : AppCompatActivity() {
     private var videoDownX = 0f
     private var videoW = 0
     private var videoH = 0
+    /**
+     * 切歌后等待新视频首帧（2.13）。期间画面透明，避免 TextureView 继续显示
+     * 上一个视频的残留帧（粉丝反馈「画面是之前的视频，但音频正常」）。
+     */
+    private var videoFramePending = false
+    private val videoFrameHandler = android.os.Handler(android.os.Looper.getMainLooper())
     /** 视频页是否处于全屏（系统栏已隐藏）。 */
     private var videoImmersive = false
     private val videoLongPressHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -206,6 +212,26 @@ class MainActivity : AppCompatActivity() {
 
     private var library: MusicLibrary? = null
     private var scanning = false
+
+    /**
+     * ASR 逐窗实时翻译：已提交到第几行（2.13 增量翻译游标）。
+     * 只翻译行号 ≥ 此值的「新增行」，杜绝累计全文反复重发。
+     */
+    private var asrTranslatedLineCount = 0
+    /**
+     * 失败行重试计数：uri -> (行号 -> 已失败次数)（2.13 熔断）。
+     * 超过 [MAX_LINE_RETRY] 的行不再重发——否则永久失败的行会被每窗重试，
+     * 把费用放大到几十倍（这是一小时 10 元的主因）。
+     */
+    private val transFailCount = HashMap<String, HashMap<Int, Int>>()
+
+    /** ASR 逐窗实时翻译状态（切歌时清空）。 */
+    private fun resetAsrTranslateState() {
+        asrTranslatedLineCount = 0
+    }
+
+    /** 随机顺序：会话级固定种子，保证列表不闪跳（2.13）。 */
+    private var randomSeed = System.currentTimeMillis()
 
     private var currentSongs: List<Song> = emptyList()
     private var lyricLines: List<SubtitleLine> = emptyList()
@@ -255,6 +281,10 @@ class MainActivity : AppCompatActivity() {
             hasSong = song != null
             findViewById<ImageButton>(R.id.btnVideo).visibility =
                 if (isVideoFile(song?.uri)) View.VISIBLE else View.GONE
+            // 切歌：隐藏上一个视频的残留帧，等新视频首帧再显示（2.13）
+            awaitVideoFirstFrame()
+            // 切歌：重置 ASR 逐窗翻译游标（新歌的行号从 0 重新计数，2.13）
+            resetAsrTranslateState()
             // 播放页/歌词页显示时不拉起底部迷你条（避免双进度条），换歌也不复现
             if (song != null && page != Page.PLAYER && page != Page.LYRICS) {
                 if (miniPlayer.visibility != View.VISIBLE) {
@@ -582,6 +612,12 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {
+                // 新视频首帧到达：结束「等首帧」状态，显示画面（2.13）
+                if (videoFramePending) {
+                    videoFramePending = false
+                    videoFrameHandler.removeCallbacksAndMessages(null)
+                    videoSurface.alpha = 1f
+                }
             }
         }
         videoSurface.setOnTouchListener { v, ev -> handleVideoTouch(v, ev) }
@@ -657,6 +693,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnRefreshDiscover).setOnClickListener { loadDiscover() }
 
         // ---- 音乐库页：歌单展示（默认网格大图标，设置里可切树形目录）----
+        // 歌单排序入口（2.13）：库页「歌单/歌手」行最右端的下拉箭头
+        findViewById<TextView>(R.id.btnPlaylistSort).setOnClickListener {
+            showPlaylistSortDialog()
+        }
         gridAdapter = PlaylistGridAdapter(
             { pos -> playlistList().getOrNull(pos)?.let { openPlaylist(it) } },
             { pos -> playlistList().getOrNull(pos)?.let { showPlaylistCoverMenu(it.name) } }
@@ -1712,7 +1752,61 @@ class MainActivity : AppCompatActivity() {
         val lib = library ?: return emptyList()
         val lists = mutableListOf(Playlist(getString(R.string.all_songs), lib.allSongs))
         lists.addAll(lib.playlists)
-        return lists
+        // 「全部歌曲」这一项固定排在最前（不是歌单，不该参与排序，2.13）
+        return applyPlaylistSort(lists)
+    }
+
+    /**
+     * 音乐库页歌单排序（2.13）。
+     * - 「全部歌曲」永远排第一位，不参与排序；
+     * - 随机顺序用**会话级固定种子**，否则每次重绘顺序都变（用户会以为列表在跳）；
+     * - 按名称用 Collator(Locale.CHINA)，中文按拼音排而不是 Unicode 码位。
+     * 排序只影响展示，不改任何持久化数据。
+     */
+    private fun applyPlaylistSort(lists: List<Playlist>): List<Playlist> {
+        if (lists.isEmpty()) return lists
+        val head = lists.first()
+        val rest = lists.drop(1)
+        val mode = prefs.getString(KEY_PLAYLIST_SORT, SORT_DEFAULT) ?: SORT_DEFAULT
+        val sorted = when (mode) {
+            SORT_NAME -> PlaylistSorter.byName(rest)
+            SORT_RECENT -> PlaylistSorter.byRecent(rest, RecentPlaylist.load(this))
+            SORT_RANDOM -> PlaylistSorter.shuffledStable(rest, randomSeed)
+            else -> rest
+        }
+        return listOf(head) + sorted
+    }
+
+    /** 歌单排序弹窗（点库页「歌单」右侧的下拉箭头触发）。 */
+    private fun showPlaylistSortDialog() {
+        val labels = arrayOf(
+            getString(R.string.sort_default),
+            getString(R.string.sort_name),
+            getString(R.string.sort_recent),
+            getString(R.string.sort_random)
+        )
+        val values = arrayOf(SORT_DEFAULT, SORT_NAME, SORT_RECENT, SORT_RANDOM)
+        val cur = prefs.getString(KEY_PLAYLIST_SORT, SORT_DEFAULT) ?: SORT_DEFAULT
+        val idx = values.indexOf(cur).coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.playlist_sort)
+            .setSingleChoiceItems(labels, idx) { d, which ->
+                val chosen = values[which]
+                // 从没播放记录时选「按最近播放」没意义：提示并保持原样
+                if (chosen == SORT_RECENT && RecentPlaylist.load(this).isEmpty()) {
+                    d.dismiss()
+                    toast(getString(R.string.sort_recent_empty))
+                    return@setSingleChoiceItems
+                }
+                prefs.edit().putString(KEY_PLAYLIST_SORT, chosen).apply()
+                if (chosen == SORT_RANDOM) {
+                    // 每次主动选「随机」都换一批顺序（同一次会话内保持稳定）
+                    randomSeed = System.currentTimeMillis()
+                }
+                applyLibLayout()
+                d.dismiss()
+            }
+            .show()
     }
 
     // ---------- 发现页 ----------
@@ -1732,6 +1826,9 @@ class MainActivity : AppCompatActivity() {
         segArtists.setTextColor(getColor(if (songs) R.color.text_hint else R.color.text_primary))
         recyclerPlaylists.visibility = if (songs) View.VISIBLE else View.GONE
         recyclerArtists.visibility = if (songs) View.GONE else View.VISIBLE
+        // 排序入口只对歌单视图有意义（2.13）
+        findViewById<View>(R.id.btnPlaylistSort).visibility =
+            if (songs) View.VISIBLE else View.GONE
         if (!songs) loadArtistsIfNeeded()
     }
 
@@ -1911,7 +2008,19 @@ class MainActivity : AppCompatActivity() {
         }
         // 记录队列来源页：只有「列表页发起」才记（队列对话框里切歌时 page 是播放页，不能覆盖）
         if (page in queueSourcePages) queueSourcePage = page
+        // 记录该歌单的最近播放时刻（2.13，「按最近播放排序」用）。
+        // 用当前歌曲所属歌单名反查，而不是调用方的列表——同一个歌单可能从搜索/收藏进入。
+        recordPlaylistPlayed(songs.getOrNull(index))
         showPage(Page.PLAYER)
+    }
+
+    /** 记下该歌所属歌单的播放时刻（2.13）。找不到对应歌单则忽略（如全库队列）。 */
+    private fun recordPlaylistPlayed(song: Song?) {
+        val s = song ?: return
+        val name = library?.playlists
+            ?.firstOrNull { it.songs.any { it.uri == s.uri } }
+            ?.name ?: return
+        RecentPlaylist.markPlayed(this, name)
     }
 
     /** 可作为播放队列来源、返回时可重新展示的列表页。 */
@@ -2919,13 +3028,26 @@ class MainActivity : AppCompatActivity() {
         try {
             val r = android.media.MediaMetadataRetriever()
             r.setDataSource(this, song.uri)
-            videoW = r
+            var mw = r
                 .extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
                 ?.toIntOrNull() ?: 0
-            videoH = r
+            var mh = r
                 .extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
                 ?.toIntOrNull() ?: 0
+            // MMR 给的是「存储尺寸」，不含旋转角（2.13 修复）：
+            // 手机竖拍的视频常以横屏存储 + rotation=90，直接用会让宽高比颠倒，
+            // fitVideoSurface 按错比例缩放 → 画面被压成一条窄带/只显示一部分。
+            val rot = r
+                .extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                ?.toIntOrNull() ?: 0
             r.release()
+            if (rot == 90 || rot == 270) {
+                val t = mw
+                mw = mh
+                mh = t
+            }
+            videoW = mw
+            videoH = mh
         } catch (e: Exception) {
         }
         // 优先用播放器解码后的真实尺寸（retriever 给的是存储方向，旋转视频会错）
@@ -2944,6 +3066,8 @@ class MainActivity : AppCompatActivity() {
         // 播放器后续解出/修正尺寸时同步
         playbackService?.onVideoSizeChanged = { w, h -> onVideoSizeReady(w, h) }
         showPage(Page.VIDEO)
+        // 打开视频页时若正等待新帧（切歌后立刻进视频页），保持隐藏态；否则显示画面
+        videoSurface.alpha = if (videoFramePending) 0f else 1f
         seekVideo.max = playbackService?.currentDuration() ?: 0
         txtVideoHint.visibility =
             if (playbackService?.isPlayingSafe() == true) View.GONE else View.VISIBLE
@@ -2998,6 +3122,10 @@ class MainActivity : AppCompatActivity() {
     /** 关闭视频页：脱离画面（播放不中断），恢复竖屏。 */
     private fun closeVideoPage() {
         videoLongPressHandler.removeCallbacksAndMessages(null)
+        // 清掉「等首帧」状态，避免回到视频页时残留隐藏态（2.13）
+        videoFrameHandler.removeCallbacksAndMessages(null)
+        videoFramePending = false
+        videoSurface.alpha = 1f
         if (videoSpeedUp) {
             videoSpeedUp = false
             playbackService?.setSpeed(1f)
@@ -3067,6 +3195,28 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 切歌时隐藏旧帧（2.13）。
+     * TextureView 会保留上一个视频的最后一帧，新视频首帧到来前一直显示旧画面——
+     * 粉丝反馈的「点不同视频画面是之前的视频，但音频正常」就是这个。
+     * 做法：先把画面设为透明（露出黑色底），等 onSurfaceTextureUpdated 收到新首帧再显示。
+     * 必须有超时兜底：个别设备/纯音频不回调 updated，否则会一直黑屏。
+     */
+    private fun awaitVideoFirstFrame() {
+        if (page != Page.VIDEO) return
+        videoFramePending = true
+        videoSurface.alpha = 0f
+        videoFrameHandler.removeCallbacksAndMessages(null)
+        videoFrameHandler.postDelayed({
+            // 超时兜底：2 秒还没等到新帧就直接显示（宁可短暂旧帧，不能黑屏）
+            if (videoFramePending) {
+                videoFramePending = false
+                videoSurface.alpha = 1f
+                PlaybackLog.log("video first-frame timeout, show anyway")
+            }
+        }, 2000)
+    }
+
     /** 播放页背景：封面背景 > 自定义背景图 > 封面主色渐变（暗化保证可读）。 */
     private fun applyPlayerBackground(cover: Bitmap?) {
         // 封面背景开启且有封面时，以封面铺满为准，不再叠主色渐变（2.12.1）
@@ -3105,6 +3255,32 @@ class MainActivity : AppCompatActivity() {
             prefs.getString(KEY_TRANS_KEY, null),
             prefs.getString(KEY_TRANS_MODEL, null)
         )
+
+    /**
+     * 该行是否已达重试上限、应跳过（2.13 熔断）。
+     * 防止「永久失败的行」被每个窗口反复重发把费用放大几十倍。
+     */
+    private fun shouldSkipLine(uriKey: String, line: Int): Boolean =
+        (transFailCount[uriKey]?.get(line) ?: 0) >= MAX_LINE_RETRY
+
+    /**
+     * 记录一次翻译尝试的结果（2.13 熔断）。
+     * 成功的行清掉计数（说明只是偶发失败，下次不再拦）；失败的行累计。
+     */
+    private fun recordTranslateAttempt(
+        uriKey: String,
+        attempted: List<Pair<Int, String>>,
+        result: LyricTranslator.TransResult
+    ) {
+        val m = transFailCount.getOrPut(uriKey) { HashMap() }
+        for ((line, _) in attempted) {
+            if (line in result.translations) {
+                m.remove(line)
+            } else {
+                m[line] = (m[line] ?: 0) + 1
+            }
+        }
+    }
 
     private fun translateCurrentLyric() {
         val lines = lyricLines
@@ -3636,9 +3812,11 @@ class MainActivity : AppCompatActivity() {
         asrCancelled = false
         asrLiveUri = null
         asrLiveLines = emptyList()
+        // 重置逐窗翻译游标与失败计数（2.13）：本次识别从第 0 行重新开始
+        resetAsrTranslateState()
         val uriKey = uri.toString()
         if (uriKey == lastSong?.uri?.toString()) {
-            // 为当前播放的歌识别：激活「边听边出」实时歌词
+            // 为当前播放的歌识别：激活「边听边出」实时歌词（含逐窗翻译预览）
             asrLiveUri = uriKey
         }
         asrStatusRowVisible(true)
@@ -3658,23 +3836,44 @@ class MainActivity : AppCompatActivity() {
                     }
                 },
                 onWindowDone = { linesSoFar ->
-                    // 识别线程：逐窗实时翻译（已配置 API 时），更新预览
+                    // 识别线程：逐窗实时翻译（已配置 API 时），更新预览。
+                    // 2.13 关键改造（成本止损）：
+                    // 旧实现用 `linesSoFar.filter { 行号 !in cache }` 求待翻译行——linesSoFar 是
+                    // **累计全文**，于是任何一行只要没进 cache，就会在**后续每个窗口被重发一次**。
+                    // 翻译失败的行（模型跳过 / 解析失败 / 网络错）因此被反反复复重发，
+                    // 一小时音频模拟实测可放大到 60 倍费用（理想 0.16 元 → 全失败 8.7 元）。
+                    // 现在改为「只翻译本窗新增行」+ 失败行重试上限，双保险。
+                    //
+                    // 另外：非当前播放歌的识别不做逐窗翻译——逐窗翻译只为「边听边出」预览，
+                    // 非当前歌没有预览需求，等识别完成后一次翻完更省（走 translateGeneratedLyrics）。
                     val cfg = translationConfig()
-                    if (cfg != null) {
+                    if (cfg != null && asrLiveUri != null) {
                         try {
                             val cache = translationCache.getOrPut(uriKey) { HashMap() }
-                            val todo = linesSoFar
-                                .mapIndexed { i, l -> i to l.text }
-                                .filter { it.first !in cache }
-                            if (todo.isNotEmpty()) {
-                                val result = try {
-                                    LyricTranslator.translate(todo, cfg)
-                                } catch (e: Exception) {
-                                    LyricTranslator.TransResult(emptyMap(), "请求异常：${e.message}")
-                                }
-                                if (result.translations.isNotEmpty()) {
-                                    cache.putAll(result.translations)
-                                    LyricTranslationCache.save(applicationContext, translationCache)
+                            // 增量：只取「行号 ≥ 上次已提交游标」的新增行
+                            val newCount = linesSoFar.size - asrTranslatedLineCount
+                            if (newCount > 0) {
+                                val todo = (asrTranslatedLineCount until linesSoFar.size)
+                                    .map { i -> i to linesSoFar[i].text }
+                                    .filter { it.first !in cache && !shouldSkipLine(uriKey, it.first) }
+                                // 游标无论如何都推进：已处理过的行不再进入下一窗的「新增」
+                                asrTranslatedLineCount = linesSoFar.size
+                                if (todo.isNotEmpty()) {
+                                    val result = try {
+                                        LyricTranslator.translate(todo, cfg)
+                                    } catch (e: Exception) {
+                                        LyricTranslator.TransResult(emptyMap(), "请求异常：${e.message}")
+                                    }
+                                    if (result.translations.isNotEmpty()) {
+                                        cache.putAll(result.translations)
+                                        LyricTranslationCache.save(applicationContext, translationCache)
+                                    }
+                                    // 记账：成功清空失败计数；失败累计（超限后 shouldSkipLine 拦掉）
+                                    recordTranslateAttempt(uriKey, todo, result)
+                                    PlaybackLog.log(
+                                        "asr live translate: ok=${result.translations.size}/${todo.size} " +
+                                            "err=${result.error}"
+                                    )
                                 }
                             }
                         } catch (e: Exception) {
@@ -4118,6 +4317,17 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_TRANS_KEY = "trans_key"
         private const val KEY_TRANS_MODEL = "trans_model"
         private const val KEY_AUTO_TRANS = "auto_translate"
+        /**
+         * 单行翻译失败的最大重试次数（2.13 熔断）。
+         * 超过后该行不再重发，避免永久失败行把费用放大几十倍。
+         */
+        private const val MAX_LINE_RETRY = 2
+        /** 歌单排序方式（2.13）。 */
+        private const val KEY_PLAYLIST_SORT = "playlist_sort"
+        private const val SORT_DEFAULT = "default"
+        private const val SORT_NAME = "name"
+        private const val SORT_RECENT = "recent"
+        private const val SORT_RANDOM = "random"
         private const val KEY_TITLE_FROM_FILENAME = "title_from_filename"
         private const val KEY_DESKTOP_ON = "desktop_lyrics_on"
         private const val KEY_DESKTOP_SIZE = "desktop_lyrics_size"

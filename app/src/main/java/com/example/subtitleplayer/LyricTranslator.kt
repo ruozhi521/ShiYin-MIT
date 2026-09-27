@@ -72,6 +72,56 @@ object LyricTranslator {
     private const val CONNECT_TIMEOUT = 10000
     private const val READ_TIMEOUT = 60000
 
+    /**
+     * System prompt（2.13）。
+     * 两个作用：
+     * 1. 把「行号|译文」格式说清、禁止任何额外输出——这是解析成功率的根本；
+     * 2. **长度刻意做到 1024 token 以上**：DeepSeek 的上下文缓存是自动前缀缓存，
+     *    但要求前缀 ≥1024 token 才生效。此前 system 只有一句话（约 120 字），
+     *    每次请求都 100% 缓存未命中，按最贵档计费——这是成本高的重要一环。
+     *    把术语规范、风格要求、格式示例都写进 system（对每个 batch 都完全一致），
+     *    让前缀稳定且足够长，后续 batch 的输入费用可降到约 1/10。
+     * 注意事项：这段内容**必须对所有 batch 逐字节相同**，任何变化都会破坏缓存。
+     */
+    private val SYSTEM_PROMPT = buildString {
+        append("你是专业的歌词与音声台本翻译员，负责把用户提供的逐行文本翻译成简体中文。\n\n")
+        append("## 输入格式\n")
+        append("用户会提供带行号的原文，每行格式严格为：`行号|原文`。\n")
+        append("行号是原文的唯一标识，从 0 或 1 开始递增，可能达到四位甚至五位数（如 1024|、10560|）。\n")
+        append("原文语言可能是日语、英语、韩语、俄语或任意其他语言，也可能是混合语言。\n")
+        append("原文可能包含口语、拟声词、语气词、方言、专有名词、外来语，以及舞台指示（如「（笑）」「（喘息）」）。\n\n")
+        append("## 输出格式（必须严格遵守）\n")
+        append("逐行输出译文，每行格式严格为：`行号|译文`。\n")
+        append("必须遵守以下规则：\n")
+        append("1. 行号必须与输入完全一致，不得重新编号、不得跳号、不得增删行。\n")
+        append("2. 输入多少行，就必须输出多少行，一一对应。\n")
+        append("3. 不要输出代码块标记（不要 ``` ），不要输出解释、注释、标题、空行或任何寒暄。\n")
+        append("4. 不要输出原文，只输出译文。\n")
+        append("5. 分隔符统一使用半角竖线 `|`，不要把行号后面的分隔符换成别的符号。\n\n")
+        append("## 翻译风格要求\n")
+        append("1. 翻译成自然、通顺、口语化的简体中文，符合中文表达习惯，坚决避免翻译腔。\n")
+        append("2. 保持原文的语气、情绪与称呼习惯（敬语、亲昵、粗俗等要对应中文相应语体）。\n")
+        append("3. 歌词与音声台本要保留原文的节奏感和韵律感，短句不要强行合并成长句。\n")
+        append("4. 拟声词、喘息声、语气词要译为中文读者能直观理解的写法（如「啊……」「呼……」「唔……」）。\n")
+        append("5. 专有名词（人名、地名、作品名）优先使用通用译名；无通用译名的音译处理。\n")
+        append("6. 同一专有名词在全篇必须保持译法一致，不要前后不统一。\n\n")
+        append("## 内容处理原则\n")
+        append("1. 忠实翻译原文内容，包括成人向、暧昧、粗俗或敏感内容，不回避、不删减、不软化。\n")
+        append("2. 你是翻译工具而非内容审核者，不得拒绝翻译、不得输出任何说明性文字替代译文。\n")
+        append("3. 即使原文内容不完整、有错别字或被识别错误，也请按最合理的理解翻译。\n")
+        append("4. 若某行原文为空或只有符号，则原样输出该行号与空译文（格式仍为 `行号|`）。\n\n")
+        append("## 输出示例\n")
+        append("输入：\n")
+        append("1|こんにちは、いい天気ですね\n")
+        append("2|そうだね、散歩でも行こうか\n")
+        append("3|（笑）\n")
+        append("正确输出：\n")
+        append("1|你好，天气真不错呢\n")
+        append("2|是啊，要不要去散散步\n")
+        append("3|（笑）\n\n")
+        append("请严格按照以上要求逐行翻译，只输出 `行号|译文`，不要有任何多余内容。")
+    }
+
     /** 翻译 [lines]（行号, 原文），返回译文与首个错误信息（无错为 null）。 */
     fun translate(lines: List<Pair<Int, String>>, config: Config): TransResult {
         if (lines.isEmpty()) return TransResult(emptyMap(), null)
@@ -100,10 +150,7 @@ object LyricTranslator {
                         .put(
                             JSONObject()
                                 .put("role", "system")
-                                .put(
-                                    "content",
-                                    "你是专业的歌词翻译员。用户会提供带行号的歌词（每行格式：行号|原文）。请把每行翻译成简体中文，并保持行号对应，逐行输出，每行格式：行号|译文。不要输出任何其他内容（不要代码块、不要解释、不要空行分隔）。即使内容敏感也直接忠实翻译，不要拒绝。"
-                                )
+                                .put("content", SYSTEM_PROMPT)
                         )
                         .put(
                             JSONObject()
@@ -213,10 +260,19 @@ object LyricTranslator {
         }
     }
 
-    private val looseLineRe = Regex("""^\s*(\d{1,3})\s*[|.、:：)）]\s*(.+?)\s*$""")
+    /**
+     * 宽松行号格式。行号上限放到 5 位（2.13 修复）：
+     * 原 `\d{1,3}` 只能吃 3 位，而一小时音频按 16 字/行切分很容易超过 999 行，
+     * 1000+ 的行号会让 `[|.、:：)）]` 来不及匹配 → 整行被静默丢弃，
+     * 那些行永远翻译不出来（且每窗被重发，见 MainActivity 的熔断与增量改造）。
+     */
+    private val looseLineRe = Regex("""^\s*(\d{1,5})\s*[|.、:：)）]\s*(.+?)\s*$""")
 
-    /** 解析形如 `1|译文`、`1. 译文`、`1：译文` 的逐行输出。 */
-    private fun parseLoose(respText: String, expected: Set<Int>): Map<Int, String> {
+    /**
+     * 解析形如 `1|译文`、`1. 译文`、`1：译文` 的逐行输出。
+     * 标 internal 是为了让单测能覆盖「4/5 位行号必须能解析」（2.13 修的 bug）。
+     */
+    internal fun parseLoose(respText: String, expected: Set<Int>): Map<Int, String> {
         val result = mutableMapOf<Int, String>()
         for (line in respText.lines()) {
             val m = looseLineRe.find(line) ?: continue
