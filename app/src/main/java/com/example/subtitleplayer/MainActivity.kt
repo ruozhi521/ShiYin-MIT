@@ -46,7 +46,7 @@ import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
-    private enum class Page { DISCOVER, LIBRARY, PLAYLIST, SEARCH, PLAYER, LYRICS, FAVORITES, VIDEOS, VIDEO }
+    // Page 定义已提到顶层（Page.kt，2.13）：便于 MiniPlayerRules 与单测引用
 
     // ---- 页面视图 ----
     private lateinit var viewDiscover: View
@@ -161,6 +161,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var txtVideosEmpty: TextView
     private lateinit var videoAdapter: SongAdapter
     private var videoSongs: List<Song> = emptyList()
+    /**
+     * uri -> 是否含真实视频轨（2.13）。`isVideoFile` 要读文件头，而打开视频列表会对
+     * 库里每一首都调它；缓存后同一文件只探测一次，避免列表卡顿。
+     * 重新扫描库时清空（文件可能被替换）。
+     */
+    private val videoFlagCache =
+        java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    /** 是否已有后台线程在预热 [videoFlagCache]（2.13）：避免反复进出列表时不断起线程。 */
+    private val videoWarmRunning = java.util.concurrent.atomic.AtomicBoolean(false)
+    /** 预热进行中又被请求了一次（库更新）：等本轮结束再补跑（2.13）。 */
+    private var videoWarmPending = false
     private lateinit var videoSurface: android.view.TextureView
     private lateinit var txtVideoHint: android.widget.TextView
     private lateinit var seekVideo: SeekBar
@@ -291,21 +302,8 @@ class MainActivity : AppCompatActivity() {
             awaitVideoFirstFrame()
             // 切歌：重置 ASR 逐窗翻译游标（新歌的行号从 0 重新计数，2.13）
             resetAsrTranslateState()
-            // 播放页/歌词页显示时不拉起底部迷你条（避免双进度条），换歌也不复现
-            if (song != null && page != Page.PLAYER && page != Page.LYRICS) {
-                if (miniPlayer.visibility != View.VISIBLE) {
-                    miniPlayer.visibility = View.VISIBLE
-                    miniPlayer.alpha = 0f
-                    miniPlayer.translationY = 40f
-                    miniPlayer.animate()
-                        .alpha(1f)
-                        .translationY(0f)
-                        .setDuration(250)
-                        .start()
-                }
-            } else if (song == null) {
-                miniPlayer.visibility = View.GONE
-            }
+            // 底部迷你条显隐（与 showPage 共用同一个判定，避免两处副本走样）
+            updateMiniPlayerVisibility()
             lyricLines = lines
             currentLyricHighlight = -1
             lyricAdapter.submit(lines)
@@ -403,10 +401,13 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(OpenTreePersistable()) { uri ->
             uri ?: return@registerForActivityResult
             persistRead(uri)
+            // 判断是不是新增的根（要在 addTreeUri 之前比）
+            val isNewRoot = savedTreeUris().none { it.toString() == uri.toString() }
             addTreeUri(uri)
             // 2.1：这次选文件夹已同时申请写权限，扫描完成后把之前只能存应用内的识别歌词补写回音乐文件夹
             pendingLrcFlush = true
-            scanLibrary()
+            // 2.13：新增文件夹只扫新根再与已有库合并；重选已添加过的文件夹仍走全量
+            if (isNewRoot) scanLibraryIncremental(uri) else scanLibrary()
         }
 
     /** 是否要在下次扫描完成后补写「应用内兜底」的识别歌词（重选文件夹拿到写权限时置真）。 */
@@ -1460,12 +1461,24 @@ class MainActivity : AppCompatActivity() {
         } else if (p != Page.PLAYER && p != Page.LYRICS) {
             if (bottomNav.visibility != View.VISIBLE) bottomNav.visibility = View.VISIBLE
         }
-        // 播放页/歌词页不显示底部迷你条，避免双进度条
-        if (p == Page.PLAYER || p == Page.LYRICS || p == Page.VIDEO) {
-            if (miniPlayer.visibility != View.GONE) {
-                miniPlayer.visibility = View.GONE
-            }
-        } else if (hasSong && miniPlayer.visibility != View.VISIBLE) {
+        // 底部迷你条显隐（与 onSongChanged 共用同一个判定，避免两处副本走样）
+        updateMiniPlayerVisibility()
+    }
+
+    /**
+     * 底部迷你播放条显隐（单一判定点，2.13）。
+     *
+     * 播放页 / 歌词页 / **视频页**都不显示：它们各自有完整播放控件或全屏画面，
+     * 再挂一条迷你条会出现「双进度条」或压在视频画面下方。
+     *
+     * 为什么抽成一个函数：此前 showPage() 与 onSongChanged() 各写了一份同样的判定，
+     * 视频页只加进了其中一份 —— 于是「从视频列表点进视频」这条路径（先 onSongChanged
+     * 再 showPage）漏判，视频页下方冒出迷你条（回归 bug）。判定只有一处就不会再走样。
+     */
+    private fun updateMiniPlayerVisibility() {
+        if (!MiniPlayerRules.shouldShow(hasSong, page)) {
+            if (miniPlayer.visibility != View.GONE) miniPlayer.visibility = View.GONE
+        } else if (miniPlayer.visibility != View.VISIBLE) {
             miniPlayer.visibility = View.VISIBLE
             miniPlayer.alpha = 0f
             miniPlayer.translationY = 40f
@@ -1483,10 +1496,56 @@ class MainActivity : AppCompatActivity() {
 
     /** 导航栏「视频」：列出库中全部视频文件，点按即播放（2.0）。 */
     private fun openVideoList() {
-        videoSongs = library?.allSongs?.filter { isVideoFile(it.uri) } ?: emptyList()
+        refreshVideoList()
+        showPage(Page.VIDEOS)
+        // 兜底：库就绪时通常已预热过；万一没有（如直接加载缓存后立刻进来），这里补一次
+        warmVideoFlags()
+    }
+
+    /** 用当前已知的「是否含视频轨」结果刷新视频列表（2.13）。 */
+    private fun refreshVideoList() {
+        // 用只查缓存的版本：列表过滤在**主线程**，不能逐首读文件头。
+        // 未命中时按扩展名兜底为「是视频」→ 列表先显示、预热完成后自动收窄（只会先多后准）
+        videoSongs = library?.allSongs?.filter { isVideoFileCached(it.uri) } ?: emptyList()
         videoAdapter.submit(videoSongs)
         txtVideosEmpty.visibility = if (videoSongs.isEmpty()) View.VISIBLE else View.GONE
-        showPage(Page.VIDEOS)
+    }
+
+    /**
+     * 后台补全「是否含视频轨」判定（2.13）。
+     *
+     * `isVideoFile` 要读文件头，而打开列表与切歌都在主线程，逐首探测会卡顿；
+     * 这里在后台把结果填进 [videoFlagCache]，完成后回主线程刷新列表。
+     * 尚未探测的文件在 [isVideoFileCached] 里按扩展名兜底为「是视频」，所以列表**只会先多后准**，
+     * 不会把真视频漏掉。
+     *
+     * 状态都只在主线程读写（探测循环除外）：同一时刻只跑一个后台线程，
+     * 期间若又请求了一次（库更新），等它结束再补跑一轮。
+     */
+    private fun warmVideoFlags() {
+        val lib = library ?: return
+        if (!videoWarmRunning.compareAndSet(false, true)) {
+            videoWarmPending = true
+            return
+        }
+        val targets = lib.allSongs.map { it.uri }.distinct()
+        Thread {
+            for (u in targets) {
+                // 与 isVideoFile 共用同一条规则，避免两处判断走样
+                if (!VideoFileRules.couldBeVideo(u.lastPathSegment)) continue
+                val key = u.toString()
+                if (videoFlagCache.containsKey(key)) continue
+                videoFlagCache[key] = VideoFileRules.resolve(true, probeVideoTrack(u))
+            }
+            runOnUiThread {
+                videoWarmRunning.set(false)
+                if (videoWarmPending) {
+                    videoWarmPending = false
+                    warmVideoFlags() // 回主线程重新取库快照再跑一轮
+                }
+                if (!isFinishing && !isDestroyed) refreshVideoList()
+            }
+        }.apply { isDaemon = true }.start()
     }
 
     private fun updatePlayModeButton(mode: Int) {
@@ -1664,43 +1723,116 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 null
             }
-            if (lib != null && lib.allSongs.isNotEmpty()) {
-                LibraryCache.save(applicationContext, lib)
+            runOnUiThread { finishScan(lib, silent) }
+        }.start()
+    }
+
+    /**
+     * 添加文件夹后的**增量**扫描（2.13）：只扫新根，与已有库合并，不重扫原有文件夹。
+     *
+     * 大库（几万首）时全量重扫要遍历所有目录，而新增一个文件夹本不需要碰旧目录。
+     * 做法：把「已有库」当成一个虚拟根，与新根的扫描结果一起交给 [LibraryScanner.mergeRootScans]，
+     * 走的合并规则与全量完全一致。
+     *
+     * **安全阀**：跨根同名子文件夹会触发消歧（已有的 `Music` 也要改名 `根A/Music`），
+     * 那种情况增量无法等同全量 —— 检测到撞名就自动退回全量重扫（正确性优先于速度）。
+     *
+     * @param newRoot 刚添加的根
+     */
+    private fun scanLibraryIncremental(newRoot: Uri, silent: Boolean = false) {
+        if (scanning) return
+        val old = library
+        // 没有旧库可合并 → 没有「增量」可言，直接全量
+        if (old == null || old.allSongs.isEmpty()) {
+            scanLibrary(silent)
+            return
+        }
+        scanning = true
+        if (!silent) toast(getString(R.string.scanning))
+        Thread {
+            val scanner = LibraryScanner(this, contentResolver)
+            val fresh = try {
+                scanner.scanOneRoot(newRoot)
+            } catch (e: Exception) {
+                null
             }
-            runOnUiThread {
-                scanning = false
-                when {
-                    lib == null -> if (!silent) toast(getString(R.string.choose_folder_again))
-                    lib.allSongs.isEmpty() -> if (!silent) toast(getString(R.string.no_audio))
-                    else -> {
-                        val changed = library?.allSongs?.size != lib.allSongs.size ||
-                            library?.playlists?.size != lib.playlists.size
-                        library = lib
-                        if (!silent || changed) {
-                            toast(
-                                getString(
-                                    R.string.loaded_summary,
-                                    lib.allSongs.size,
-                                    lib.playlists.size
-                                )
-                            )
-                        }
-                        onLibraryReady()
-                        refreshOpenViews()
-                        // 刚拿到音乐文件夹写权限（重选了文件夹）：把应用内兜底的识别歌词补写回音频同目录
-                        if (pendingLrcFlush) {
-                            pendingLrcFlush = false
-                            flushInternalLrc()
-                        }
-                        // 歌词映射同步到服务：ASR 新生成的 lrc 无需切歌立即可用（1.33.1）。
-                        // refreshLyricMap 走 onSongChanged 会把倍速按钮重置为 1x，需回写真实速度
-                        playbackService?.refreshLyricMap(lib.lyrics)
-                        val spd = playbackService?.currentSpeed() ?: 1f
-                        btnSpeed.text = if (spd == 1f) "1x" else "${spd}x"
-                    }
+            if (fresh == null) {
+                runOnUiThread {
+                    scanning = false
+                    if (!silent) toast(getString(R.string.choose_folder_again))
                 }
+                return@Thread
+            }
+            // 撞名检测：新根的相对路径若与已有歌单名重合，消歧会改动旧歌单名 → 必须全量
+            val oldNames = old.allSongs.map { it.folder }.toSet() +
+                old.lyrics.keys.map { it.substringBeforeLast('/') }.toSet()
+            val newRels = fresh.songs.map { it.folder }.toSet() +
+                fresh.lyrics.keys.map { it.substringBeforeLast('/') }.toSet()
+            val needFull = LibraryScanner.needsFullRescan(oldNames, newRels)
+            if (needFull) {
+                PlaybackLog.log("add folder: name clash -> full rescan")
+                runOnUiThread {
+                    scanning = false
+                    scanLibrary(silent)
+                }
+                return@Thread
+            }
+            val merged = try {
+                LibraryScanner.rebuildFromExisting(old, fresh)
+            } catch (e: Exception) {
+                null
+            }
+            if (merged == null) {
+                runOnUiThread {
+                    scanning = false
+                    scanLibrary(silent)
+                }
+            } else {
+                PlaybackLog.log("add folder: incremental scan ok (+${fresh.songs.size})")
+                runOnUiThread { finishScan(merged, silent) }
             }
         }.start()
+    }
+
+    /**
+     * 扫描完成后的统一收尾（全量与增量共用，避免两份副本走样）。
+     * 负责：写缓存、更新内存库、提示、刷新界面与服务。
+     */
+    private fun finishScan(lib: MusicLibrary?, silent: Boolean) {
+        scanning = false
+        if (lib != null && lib.allSongs.isNotEmpty()) {
+            LibraryCache.save(applicationContext, lib)
+        }
+        when {
+            lib == null -> if (!silent) toast(getString(R.string.choose_folder_again))
+            lib.allSongs.isEmpty() -> if (!silent) toast(getString(R.string.no_audio))
+            else -> {
+                val changed = library?.allSongs?.size != lib.allSongs.size ||
+                    library?.playlists?.size != lib.playlists.size
+                library = lib
+                if (!silent || changed) {
+                    toast(
+                        getString(
+                            R.string.loaded_summary,
+                            lib.allSongs.size,
+                            lib.playlists.size
+                        )
+                    )
+                }
+                onLibraryReady()
+                refreshOpenViews()
+                // 刚拿到音乐文件夹写权限（重选了文件夹）：把应用内兜底的识别歌词补写回音频同目录
+                if (pendingLrcFlush) {
+                    pendingLrcFlush = false
+                    flushInternalLrc()
+                }
+                // 歌词映射同步到服务：ASR 新生成的 lrc 无需切歌立即可用（1.33.1）。
+                // refreshLyricMap 走 onSongChanged 会把倍速按钮重置为 1x，需回写真实速度
+                playbackService?.refreshLyricMap(lib.lyrics)
+                val spd = playbackService?.currentSpeed() ?: 1f
+                btnSpeed.text = if (spd == 1f) "1x" else "${spd}x"
+            }
+        }
     }
 
     /**
@@ -1747,6 +1879,9 @@ class MainActivity : AppCompatActivity() {
         if (page == Page.LIBRARY && !segArtistsShown()) {
             // 保持当前分段
         }
+        // 库变了 → 之前的「是否含视频轨」判定作废（文件可能被替换/删除），清掉重新探测
+        videoFlagCache.clear()
+        warmVideoFlags()
         maybeResumeLastSong()
     }
 
@@ -3014,18 +3149,48 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ---------- 视频播放页 ----------
+    /**
+     * 该文件是否能作为视频播放（是否含**真实视频轨**）。
+     *
+     * 2.13 修复：原实现只看扩展名（`.mp4` / `.m4v` 一律算视频），
+     * 但音声作品的纯音频文件常被改名为 `.mp4`（实测 `トラック01/03/06` 均只有一条 aac 音轨、
+     * 零条视频轨）。这类文件混进视频列表后点开只有声音、画面是黑的或残留上一部视频的帧。
+     *
+     * **会读文件头**（首次判定某文件时有 IO），别在列表循环里逐首调用；
+     * 列表过滤请用 [isVideoFileCached]。
+     */
     private fun isVideoFile(uri: android.net.Uri?): Boolean {
-        val p = uri?.lastPathSegment?.lowercase(Locale.getDefault()) ?: return false
-        if (p.endsWith(".mp4") || p.endsWith(".m4v")) return true
-        // b 站缓存视频流 m4s（fMP4 含视频轨）也可进视频页；纯音频 m4s 不显示视频按钮
-        if (p.endsWith(".m4s")) return hasVideoTrack(uri)
-        return false
+        if (uri == null) return false
+        // 扩展名不像视频容器 → 直接否（零 IO）
+        if (!VideoFileRules.couldBeVideo(uri.lastPathSegment)) return false
+        val key = uri.toString()
+        videoFlagCache[key]?.let { return it }
+        val has = VideoFileRules.resolve(true, probeVideoTrack(uri))
+        videoFlagCache[key] = has
+        return has
     }
 
-    private fun hasVideoTrack(uri: android.net.Uri): Boolean {
+    /**
+     * 只查缓存的版本（2.13）：**不读文件头**，主线程可安全逐首调用。
+     * 缓存未命中时按扩展名兜底为「是视频」，所以列表只会**先多后准**、不会漏掉真视频。
+     * 结果由 [warmVideoFlags] 在后台补全后触发刷新。
+     */
+    private fun isVideoFileCached(uri: android.net.Uri?): Boolean {
+        if (uri == null) return false
+        if (!VideoFileRules.couldBeVideo(uri.lastPathSegment)) return false
+        return videoFlagCache[uri.toString()] ?: true
+    }
+
+    /**
+     * 探测文件是否含视频轨。
+     * @return true/false = 探测成功；null = 无法判断（调用方按扩展名兜底）
+     *
+     * 用 `applicationContext`：本方法会被后台预热线程调用，不该持有 Activity 引用。
+     */
+    private fun probeVideoTrack(uri: android.net.Uri): Boolean? {
         return try {
             val ex = android.media.MediaExtractor()
-            ex.setDataSource(this, uri, null)
+            ex.setDataSource(applicationContext, uri, null)
             var has = false
             for (i in 0 until ex.trackCount) {
                 val mime = ex.getTrackFormat(i).getString(android.media.MediaFormat.KEY_MIME)
@@ -3037,7 +3202,8 @@ class MainActivity : AppCompatActivity() {
             ex.release()
             has
         } catch (e: Exception) {
-            false
+            PlaybackLog.log("video track probe failed: ${e.javaClass.simpleName}")
+            null
         }
     }
 

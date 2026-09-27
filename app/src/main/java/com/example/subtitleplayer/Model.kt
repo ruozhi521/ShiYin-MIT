@@ -33,6 +33,17 @@ data class Playlist(
     val songs: List<Song>
 )
 
+/**
+ * 单个根目录的扫描结果（2.13）：
+ * `label` 是根显示名（消歧前缀用），`songs`/`lyrics` 里的 folder/key 都是**相对路径**，
+ * 尚未按多根规则消歧。增量添加文件夹时，把它当作「多一个根」交给合并逻辑即可。
+ */
+data class RootScan(
+    val label: String,
+    val songs: List<Song>,
+    val lyrics: Map<String, LyricRef>
+)
+
 /** 一次扫描得到的整个音乐库。 */
 data class MusicLibrary(
     val playlists: List<Playlist>,
