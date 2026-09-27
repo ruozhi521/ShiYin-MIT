@@ -64,4 +64,59 @@ class LyricTranslatorTest {
         assertEquals("sk-1", c.apiKey)
         assertEquals("glm-5", c.model)
     }
+
+    // ---- parseLoose：行号位数（2.13 修复「4 位行号被丢弃」）----
+
+    @Test
+    fun `三位以内行号正常解析`() {
+        val r = LyricTranslator.parseLoose(
+            "1|一\n99|九十九\n999|九百九十九",
+            setOf(1, 99, 999)
+        )
+        assertEquals(mapOf(1 to "一", 99 to "九十九", 999 to "九百九十九"), r)
+    }
+
+    @Test
+    fun `四位行号必须能解析 一小时台本必然超过 999 行`() {
+        // 这是 2.13 修的 bug：原正则 \d{1,3} 只吃 3 位，1000+ 的行整行被丢弃
+        val r = LyricTranslator.parseLoose(
+            "1000|一千\n1024|一零二四\n1234|一二三四",
+            setOf(1000, 1024, 1234)
+        )
+        assertEquals(
+            "4 位行号必须全部解析出来（否则这些行永远翻译不出来）",
+            mapOf(1000 to "一千", 1024 to "一零二四", 1234 to "一二三四"),
+            r
+        )
+    }
+
+    @Test
+    fun `五位行号也能解析`() {
+        val r = LyricTranslator.parseLoose("10560|一万零五百六十", setOf(10560))
+        assertEquals(mapOf(10560 to "一万零五百六十"), r)
+    }
+
+    @Test
+    fun `不在期望集合里的行号被忽略`() {
+        val r = LyricTranslator.parseLoose("1|一\n2|二", setOf(1))
+        assertEquals(mapOf(1 to "一"), r)
+    }
+
+    @Test
+    fun `多种分隔符都支持`() {
+        val r = LyricTranslator.parseLoose(
+            "1|竖线\n2. 点号\n3、顿号\n4：全角冒号\n5:半角冒号",
+            setOf(1, 2, 3, 4, 5)
+        )
+        assertEquals(
+            mapOf(1 to "竖线", 2 to "点号", 3 to "顿号", 4 to "全角冒号", 5 to "半角冒号"),
+            r
+        )
+    }
+
+    @Test
+    fun `空译文与乱格式行不写入结果`() {
+        val r = LyricTranslator.parseLoose("1|\n没有行号的行\n2|有", setOf(1, 2))
+        assertEquals(mapOf(2 to "有"), r)
+    }
 }
