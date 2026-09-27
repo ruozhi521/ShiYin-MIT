@@ -72,6 +72,21 @@
             android:text="@string/segment_artists"
             android:textColor="@color/text_hint"
             android:textSize="14sp" />
+
+        <!-- 歌单排序入口（2.13）：放在整行最右端，不破坏「歌单/歌手」两等分布局；
+             只在「歌单」分段显示（排序对歌手视图无意义） -->
+        <TextView
+            android:id="@+id/btnPlaylistSort"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:background="?attr/selectableItemBackground"
+            android:contentDescription="@string/playlist_sort"
+            android:gravity="center"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:text="⌄"
+            android:textColor="@color/text_normal"
+            android:textSize="18sp" />
     </LinearLayout>
 
     <TextView
