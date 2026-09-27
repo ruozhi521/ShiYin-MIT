@@ -3176,56 +3176,50 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 视频画面完整显示（fit：等比缩放、宁可黑边不裁切）。画面区域 = 视频 FrameLayout，不含底部进度条。
+     * 视频画面完整显示（fit：等比缩放、居中、宁可黑边不裁切）。
+     * 画面区域 = 视频 FrameLayout，不含底部进度条。
      *
-     * 2.13 修复（粉丝反馈「画面被放大到只剩局部」「点别的就黑了」）：
-     * 旧实现在尺寸未知时直接 `return`，**不更新 transform** —— 而 TextureView 的矩阵是
-     * 「上次设定的」那一份，于是沿用**上一个视频**的缩放/位移：竖屏视频的矩阵去摆横屏视频
-     * 就会放大裁切（只剩局部），位移过大时画面整个跑出可视区（全黑）。
-     * 现在的约定：**任何一次调用都必须给出确定的矩阵**，绝不沿用旧值。
-     * 尺寸信息不全时退回 [idleTransform]，它按 view 尺寸给一个「正好铺满」的中性变换。
+     * 关键：`TextureView` 默认把画面**拉伸铺满**自己的边界（fitXY），
+     * 且 `setTransform` 的矩阵作用在 **view 空间** —— 所以缩放比必须是「目标尺寸 / view 尺寸」。
+     * 早先写成「view 像素 / 视频像素」会二次缩放：view 比视频大时画面被放大溢出、四周被裁，
+     * 表现为「只显示一部分 / 画面不完整 / 被拉伸」（粉丝与弱志实测均为此）。
+     * 几何计算抽到 [VideoFit]（纯函数 + 单测覆盖），这里只负责落地成矩阵。
+     *
+     * 另：任何一次调用都必须给出确定矩阵 —— 尺寸不全时退回 [idleTransform]，
+     * 绝不能什么都不做（那会沿用上一个视频的矩阵）。
      */
     private fun fitVideoSurface(viewW: Int, viewH: Int) {
-        if (videoW <= 0 || videoH <= 0 || viewW <= 0 || viewH <= 0) {
+        val f = VideoFit.fit(viewW, viewH, videoW, videoH)
+        if (f == null) {
+            // 尺寸不全：退回「按 16:9 估」的中性变换，目的是覆盖掉上一个视频的矩阵
             videoSurface.setTransform(idleTransform(viewW, viewH))
             PlaybackLog.log(
                 "video fit fallback (size unknown) v=${videoW}x$videoH view=${viewW}x$viewH"
             )
             return
         }
-        val scale = minOf(
-            viewW.toFloat() / videoW,
-            viewH.toFloat() / videoH
-        )
-        val dx = (viewW - videoW * scale) / 2f
-        val dy = (viewH - videoH * scale) / 2f
+        applyFit(f)
+        PlaybackLog.log("video fit ${videoW}x$videoH -> ${viewW}x$viewH")
+    }
+
+    /** 把适配结果落成矩阵。 */
+    private fun applyFit(f: VideoFit.Fit) {
         val m = android.graphics.Matrix()
-        m.setScale(scale, scale)
-        m.postTranslate(dx, dy)
+        m.setScale(f.scaleX, f.scaleY)
+        m.postTranslate(f.dx, f.dy)
         videoSurface.setTransform(m)
     }
 
     /**
-     * 尺寸未知时的中性变换（2.13）。
-     *
-     * 唯一目标：**主动覆盖掉上一个视频的矩阵**，给一个"看起来正常"的画面，绝不黑屏/只露一角。
-     * 做法：假设最常见的横屏 16:9，等比缩放到**刚好放得下**（宁可留黑边）。
-     * 视频坐标是像素，所以先把 view 尺寸当作 16:9 的基准算缩放比，再把假设的
-     * 1920×1080 像素画面按该比例摆进去 —— 这样尺度与真实视频一致（不会放大到只剩局部）。
+     * 尺寸未知时的中性变换（2.13）：按横屏 16:9 估算，**按比例完整放进** view。
+     * 唯一目的是主动覆盖掉上一个视频的矩阵；绝不放大到只剩局部。
      */
     private fun idleTransform(viewW: Int, viewH: Int): android.graphics.Matrix {
         val m = android.graphics.Matrix()
-        if (viewW <= 0 || viewH <= 0) return m
-        // 假设视频是 1920x1080（横屏常见），求出"刚好放得下"的缩放比
-        val assumedW = 1920f
-        val assumedH = 1080f
-        val scale = minOf(viewW / assumedW, viewH / assumedH)
-        if (scale <= 0f) return m
-        m.setScale(scale, scale)
-        m.postTranslate(
-            (viewW - assumedW * scale) / 2f,
-            (viewH - assumedH * scale) / 2f
-        )
+        VideoFit.fit(viewW, viewH, 1920, 1080)?.let {
+            m.setScale(it.scaleX, it.scaleY)
+            m.postTranslate(it.dx, it.dy)
+        }
         return m
     }
 
