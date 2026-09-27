@@ -37,7 +37,11 @@ class LibraryTreeTest {
         assertEquals(2, dirA.children.size)
         assertEquals("B", dirA.children[0].name)
         assertEquals(2, dirA.children[0].children.size)
-        assertEquals("周杰伦", dirA.children[0].children[0].name)
+        // 2.13 起树形目录按中文**拼音**排序（Collator(Locale.CHINA)）：林 lin < 周 zhou。
+        // 注意：旧实现用 Kotlin 默认 String 比较（Unicode 码位），
+        // 「周」U+5468 < 「林」U+6797，顺序恰好相反——本断言随该变更更新（2.13）。
+        assertEquals("林俊杰", dirA.children[0].children[0].name)
+        assertEquals("周杰伦", dirA.children[0].children[1].name)
         // 子树歌曲数汇总
         assertEquals(3, dirA.totalSongs)
     }

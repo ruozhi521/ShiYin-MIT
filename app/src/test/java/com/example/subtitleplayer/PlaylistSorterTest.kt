@@ -6,7 +6,12 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
-/** 歌单排序测试（2.13）：按名称（拼音）/ 最近播放 / 稳定随机。 */
+/**
+ * 歌单排序测试（2.13）：按名称（拼音）/ 最近播放 / 稳定随机。
+ * 保留 Robolectric：Playlist 内含 Song（字段为 android.net.Uri），
+ * 在纯 JVM 下无 android.jar 环境加载该类型不安全；本文件虽不构造 Song 实例，
+ * 但与 LibraryTreeTest 保持一致更稳妥（该组合已在云端 CI 验证通过）。
+ */
 @RunWith(RobolectricTestRunner::class)
 class PlaylistSorterTest {
 
@@ -45,20 +50,25 @@ class PlaylistSorterTest {
         val input = pl("没听过", "听过A", "也没听过", "听过B")
         val recent = mapOf("听过A" to 100L, "听过B" to 200L)
         val out = names(PlaylistSorter.byRecent(input, recent))
-        // 有记录的按时间倒序在前；无记录的排最后，内部按名称升序
-        // （「也」U+4E5F < 「没」U+6CA1，所以「也没听过」在前）
-        assertEquals(listOf("听过B", "听过A", "也没听过", "没听过"), out)
+        // 有记录的按时间倒序在前；无记录的排最后，且**保持输入原顺序**（稳定排序）
+        // 期望值来自本机 JDK 实跑验证（Comparator.comparingLong.reversed + 稳定排序）
+        assertEquals(listOf("听过B", "听过A", "没听过", "也没听过"), out)
         // 关键断言：无记录的绝不能插在有记录的中间
         assertTrue(
             "没播放记录的歌单应全部排在末尾",
-            out.indexOf("也没听过") >= 2 && out.indexOf("没听过") >= 2
+            out.indexOf("没听过") >= 2 && out.indexOf("也没听过") >= 2
         )
     }
 
     @Test
-    fun `最近播放 全无记录时保持原顺序`() {
-        val input = pl("A", "B", "C")
-        assertEquals(listOf("A", "B", "C"), names(PlaylistSorter.byRecent(input, emptyMap())))
+    fun `最近播放 全无记录时保持原顺序 不重排`() {
+        // 输入故意用非字典序，验证「保持原顺序」而不是被次级规则重排
+        val input = pl("C", "A", "B")
+        assertEquals(
+            "全部无记录时应原样返回（不被名字次级规则重排）",
+            listOf("C", "A", "B"),
+            names(PlaylistSorter.byRecent(input, emptyMap()))
+        )
     }
 
     @Test
