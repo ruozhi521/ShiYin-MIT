@@ -491,6 +491,19 @@
                     android:text="@string/about" />
             </LinearLayout>
 
+            <!-- 2.14：删除（隐藏）的内容可以在这里查看与恢复 -->
+            <LinearLayout style="@style/SettingsBtnRow"
+                android:layout_marginTop="4dp">
+
+                <Button
+                    android:id="@+id/btnHidden"
+                    style="@style/BtnStyle"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/hidden_entry" />
+            </LinearLayout>
+
             <TextView
                 style="@style/SettingsHint"
                 android:layout_marginTop="0dp"

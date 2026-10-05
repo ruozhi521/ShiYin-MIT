@@ -21,9 +21,24 @@ class SongAdapter(
     private var items: List<Song> = emptyList()
     private var uiSizeSp = 15f
     private var currentIndex = -1
+    /** 是否显示拖拽把手（2.14）。只有「可排序的歌单页」才开。 */
+    private var dragHandleVisible = false
+    /**
+     * 把手按下 → 请求外部发起拖拽（2.14）。
+     * 由 MainActivity 接到后调 `ItemTouchHelper.startDrag(holder)`。
+     * 这样「拖拽」只在按把手时触发，长按手势就空出来给菜单用了。
+     */
+    var onStartDrag: ((RecyclerView.ViewHolder) -> Unit)? = null
 
     fun submit(list: List<Song>) {
         items = list
+        notifyDataSetChanged()
+    }
+
+    /** 是否显示拖拽把手（与 dragEnabled 同步，2.14）。 */
+    fun setDragHandleVisible(visible: Boolean) {
+        if (dragHandleVisible == visible) return
+        dragHandleVisible = visible
         notifyDataSetChanged()
     }
 
@@ -87,6 +102,20 @@ class SongAdapter(
             onLongClick?.invoke(song)
             true
         }
+        // 拖拽把手（2.14）：按住它才能拖，长按其它区域留给菜单——两个手势各走各的。
+        // 不可排序时（歌手页/搜索结果/收藏）整个把手隐藏，列表观感与以前一致。
+        holder.dragHandle.visibility = if (dragHandleVisible) View.VISIBLE else View.GONE
+        if (dragHandleVisible) {
+            holder.dragHandle.setOnTouchListener { v, ev ->
+                if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+                    onStartDrag?.invoke(holder)
+                }
+                // 返回 false：把手自己不做拖动动画，交给 ItemTouchHelper 接管（它会重绘该项）
+                false
+            }
+        } else {
+            holder.dragHandle.setOnTouchListener(null)
+        }
     }
 
     override fun getItemCount(): Int = items.size
@@ -96,6 +125,7 @@ class SongAdapter(
         val title: TextView = itemView.findViewById(R.id.txtSongTitle)
         val lyricMark: TextView = itemView.findViewById(R.id.txtHasLyric)
         val cover: ImageView = itemView.findViewById(R.id.imgCover)
+        val dragHandle: ImageView = itemView.findViewById(R.id.imgDragHandle)
     }
 }
 

@@ -15,7 +15,9 @@ import androidx.recyclerview.widget.RecyclerView
 class SearchAdapter(
     private val hasLyric: (Song) -> Boolean,
     private val onPlaylistClick: (Int) -> Unit,
-    private val onSongClick: (Int) -> Unit
+    private val onSongClick: (Int) -> Unit,
+    /** 2.14：搜索结果里长按弹菜单（删除/收藏/加歌单/封面），与其它歌曲列表一致。 */
+    private val onSongLongClick: ((Song) -> Unit)? = null
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     private class SongGroup(val folder: String, val songs: List<Song>)
@@ -123,6 +125,11 @@ class SearchAdapter(
                     }
                 }
                 h.itemView.setOnClickListener { onSongClick(item.globalIndex) }
+                // 2.14：长按弹菜单。用全限定名传 song，避免闭包里再取下标
+                h.itemView.setOnLongClickListener {
+                    onSongLongClick?.invoke(song)
+                    onSongLongClick != null
+                }
             }
         }
     }

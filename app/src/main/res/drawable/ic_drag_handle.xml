@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  拖拽把手图标（2.14）：三条横线（≡），iOS/Android 通行的「可拖动」标识。
+  用途：歌单页的歌曲列表用它发起拖拽排序，把「长按」这个手势让给菜单。
+  tint 由代码按主题色设置，这里只定义形状。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M3,7h18v2H3z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M3,11h18v2H3z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M3,15h18v2H3z" />
+</vector>

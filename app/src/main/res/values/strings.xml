@@ -55,6 +55,24 @@
     <string name="playlist_songs_empty">这个歌单还没有歌\n在歌曲上长按选「添加到歌单」即可</string>
     <string name="playlist_remove_from">从本歌单移除</string>
     <string name="playlist_removed">已移除</string>
+
+    <!-- 删除/隐藏（2.14）：按弱志要求，删除不碰手机里的真实文件，实质是从播放器隐藏 -->
+    <string name="hide_song">删除这首歌</string>
+    <string name="hide_song_confirm">从播放器里移除「%1$s」？\n\n手机里的音频文件不会被删除，可在「设置 → 已隐藏的内容」里恢复。</string>
+    <string name="hide_song_done">已隐藏「%1$s」</string>
+    <string name="hide_folder">删除这个歌单</string>
+    <string name="hide_folder_confirm">从播放器里移除歌单「%1$s」及其全部子文件夹？\n\n手机里的音频文件不会被删除，可在「设置 → 已隐藏的内容」里恢复。</string>
+    <string name="hide_folder_done">已隐藏「%1$s」</string>
+    <string name="hidden_title">已隐藏的内容</string>
+    <string name="hidden_entry">已隐藏的内容</string>
+    <string name="hidden_group_songs">歌曲（%1$d）</string>
+    <string name="hidden_group_folders">歌单 / 文件夹（%1$d）</string>
+    <string name="hidden_empty">没有已隐藏的内容</string>
+    <string name="hidden_restore_all">全部恢复</string>
+    <string name="hidden_restore_all_confirm">恢复全部已隐藏的歌曲与歌单？</string>
+    <string name="hidden_restored">已恢复</string>
+    <string name="hidden_restored_all">已全部恢复</string>
+    <string name="hidden_song_missing">（文件已不在曲库中）</string>
     <string name="nav_default_page">默认启动页</string>
     <string name="nav_default_mark">默认</string>
     <string name="nav_move_up">↑</string>
@@ -205,6 +223,7 @@
     <string name="next">下一首</string>
     <string name="folder">文件夹</string>
     <string name="cover">封面</string>
+    <string name="song_drag_handle">拖动排序</string>
     <string name="no_lyric">未找到歌词</string>
     <string name="songs_count">%1$d 首</string>
     <string name="loaded_summary">已加载 %1$d 首歌曲 · %2$d 个歌单</string>

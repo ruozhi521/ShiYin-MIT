@@ -238,6 +238,22 @@ class MainActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences("player", Context.MODE_PRIVATE) }
 
     private var library: MusicLibrary? = null
+
+    /**
+     * **未过滤**的完整曲库（2.14）。
+     *
+     * 为什么留两份：删除功能按弱志要求「不碰手机里的真实文件」，实质是隐藏。
+     * 于是：
+     * - [fullLibrary] = 扫描/缓存的**原始**结果，永不删数据；
+     * - [library] = 按隐藏名单过滤后的**可见**曲库，所有界面照旧读它。
+     *
+     * 好处：① 界面代码一行不用改；② 恢复时只要重新过滤一次，不用重扫；
+     * ③ 数据永不丢失（用户随时能在「已隐藏的内容」里找回）。
+     * 过滤发生在**内存层**而不是文件系统层，所以重新扫描后隐藏依然生效
+     * （否则「删了下次扫描又回来」）。
+     */
+    private var fullLibrary: MusicLibrary? = null
+
     private var scanning = false
 
     /**
@@ -595,7 +611,9 @@ class MainActivity : AppCompatActivity() {
                     playSong(videoSongs, pos)
                     openVideoPage()
                 }
-            }
+            },
+            // 2.14：视频列表里也能长按删（与其它歌曲列表一致）
+            onLongClick = { song -> showSongMenu(song) }
         )
         recyclerVideos.layoutManager = LinearLayoutManager(this)
         recyclerVideos.adapter = videoAdapter
@@ -743,7 +761,7 @@ class MainActivity : AppCompatActivity() {
         treeAdapter = FolderTreeAdapter(
             { node -> openTreeFolder(node) },
             { pl -> openPlaylist(pl) },
-            { pl -> showPlaylistCoverMenu(pl.name) }
+            { node -> showTreeNodeMenu(node) }
         )
         txtTreePath = findViewById(R.id.txtTreePath)
         txtTreePath.setOnClickListener { backTree() }
@@ -769,8 +787,13 @@ class MainActivity : AppCompatActivity() {
                 if (currentSongs.isNotEmpty()) {
                     playSong(currentSongs, pos)
                 }
-            }
+            },
+            // 2.14：长按 = 菜单（删除/收藏/加歌单/封面）。原来长按是拖拽排序，
+            // 加删除后两者会抢同一个手势，所以拖拽改由右侧≡把手发起（见下）。
+            onLongClick = { song -> showSongMenu(song) }
         )
+        // 把手按下 → 交给 ItemTouchHelper 开始拖拽（2.14）
+        songAdapter.onStartDrag = { holder -> playlistTouchHelper.startDrag(holder) }
         recyclerSongs.layoutManager = LinearLayoutManager(this)
         recyclerSongs.adapter = songAdapter
         playlistTouchHelper.attachToRecyclerView(recyclerSongs)
@@ -801,7 +824,9 @@ class MainActivity : AppCompatActivity() {
                 if (searchSongs.isNotEmpty() && pos in searchSongs.indices) {
                     playSong(searchSongs, pos)
                 }
-            }
+            },
+            // 2.14：搜索结果里也能长按删歌（与其它列表一致）
+            onSongLongClick = { song -> showSongMenu(song) }
         )
         recyclerSearch.layoutManager = LinearLayoutManager(this)
         recyclerSearch.adapter = searchAdapter
@@ -1852,11 +1877,44 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * 按隐藏名单过滤曲库，返回可见曲库（2.14）。
+     *
+     * 过滤三处：`allSongs`（含视频列表、搜索、收藏、全部歌曲）、
+     * `playlists`（文件夹歌单，含树形）、`lyrics`（隐藏内容不该还占着歌词映射）。
+     *
+     * 用 [HideRules] 的纯函数判定，两类隐藏：单曲 uri / 文件夹（含子文件夹）。
+     */
+    private fun applyHidden(full: MusicLibrary): MusicLibrary {
+        val hiddenUris = HiddenStore.hiddenSongs(this)
+        val hiddenFolders = HiddenStore.hiddenFolders(this)
+        if (hiddenUris.isEmpty() && hiddenFolders.isEmpty()) return full
+
+        fun visible(s: Song): Boolean = !HideRules.isSongHidden(
+            s.uri.toString(), s.folder, hiddenUris, hiddenFolders
+        )
+
+        val songs = full.allSongs.filter(::visible)
+        val playlists = full.playlists
+            .filterNot { HideRules.isPlaylistHidden(it.name, hiddenFolders) }
+            .map { pl -> Playlist(pl.name, pl.songs.filter(::visible)) }
+            // 过滤后可能整张空掉（该文件夹只有被隐藏的歌）→ 不留空歌单
+            .filter { it.songs.isNotEmpty() }
+        // 歌词**刻意不过滤**（2.14）。
+        // 歌词 key 格式是「文件夹/stem」，里面**没有音频 uri**，无法反查它属于哪一首。
+        // 硬删会引入 bug：同一文件夹里同名不同格式（a1.mp3 与 a1.flac）共用同一个 key，
+        // 删掉会让**没被隐藏的那首**一起丢歌词。
+        // 保留也无害：被隐藏的歌已不在 allSongs 里、不会被播放，这些 key 只是占一点内存。
+        return MusicLibrary(playlists, songs, full.lyrics)
+    }
+
+    /**
      * 扫描完成后的统一收尾（全量与增量共用，避免两份副本走样）。
      * 负责：写缓存、更新内存库、提示、刷新界面与服务。
      */
     private fun finishScan(lib: MusicLibrary?, silent: Boolean) {
         scanning = false
+        // 缓存存**完整**库（隐藏的是显示层的事，不该把内容从缓存里抹掉——
+        // 否则恢复时还得重扫，且清缓存会真的丢数据）
         if (lib != null && lib.allSongs.isNotEmpty()) {
             LibraryCache.save(applicationContext, lib)
         }
@@ -1864,15 +1922,17 @@ class MainActivity : AppCompatActivity() {
             lib == null -> if (!silent) toast(getString(R.string.choose_folder_again))
             lib.allSongs.isEmpty() -> if (!silent) toast(getString(R.string.no_audio))
             else -> {
-                val changed = library?.allSongs?.size != lib.allSongs.size ||
-                    library?.playlists?.size != lib.playlists.size
-                library = lib
+                fullLibrary = lib
+                val shown = applyHidden(lib)
+                val changed = library?.allSongs?.size != shown.allSongs.size ||
+                    library?.playlists?.size != shown.playlists.size
+                library = shown
                 if (!silent || changed) {
                     toast(
                         getString(
                             R.string.loaded_summary,
-                            lib.allSongs.size,
-                            lib.playlists.size
+                            shown.allSongs.size,
+                            shown.playlists.size
                         )
                     )
                 }
@@ -1885,7 +1945,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 // 歌词映射同步到服务：ASR 新生成的 lrc 无需切歌立即可用（1.33.1）。
                 // refreshLyricMap 走 onSongChanged 会把倍速按钮重置为 1x，需回写真实速度
-                playbackService?.refreshLyricMap(lib.lyrics)
+                playbackService?.refreshLyricMap(shown.lyrics)
                 val spd = playbackService?.currentSpeed() ?: 1f
                 btnSpeed.text = if (spd == 1f) "1x" else "${spd}x"
             }
@@ -1958,12 +2018,15 @@ class MainActivity : AppCompatActivity() {
             toast(getString(R.string.no_cache))
             return
         }
-        library = cached
+        // 2.14：缓存存的是完整库，显示前先按隐藏名单过滤
+        fullLibrary = cached
+        val shown = applyHidden(cached)
+        library = shown
         toast(
             getString(
                 R.string.loaded_summary,
-                cached.allSongs.size,
-                cached.playlists.size
+                shown.allSongs.size,
+                shown.playlists.size
             )
         )
         onLibraryReady()
@@ -2103,17 +2166,36 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- 歌单手动排序 ----------
 
-    /** 是否允许歌单页长按拖拽排序（普通歌单 true，歌手页/搜索结果 false）。 */
+    /**
+     * 是否允许歌单页拖拽排序（普通歌单 true，歌手页/搜索结果/收藏 false）。
+     *
+     * 2.14：拖拽**改由右侧≡把手发起**（长按已让给菜单），所以这个标志同时控制
+     * 把手显隐。用 setter 自动同步而不是在三处赋值点各写一次——漏掉一处就会出现
+     * 「歌手页还显示把手」（点了没反应）或「歌单页没有把手」（拖不动）。
+     */
     private var dragEnabled = false
+        set(value) {
+            field = value
+            if (::songAdapter.isInitialized) songAdapter.setDragHandleVisible(value)
+        }
 
     private val playlistTouchHelper by lazy {
         ItemTouchHelper(object : ItemTouchHelper.Callback() {
-            override fun isLongPressDragEnabled() = dragEnabled
+            /**
+             * **关闭长按拖拽**（2.14）。
+             *
+             * 长按这个手势现在归「打开歌曲菜单」（删除/收藏/加歌单/封面），
+             * 拖拽改由列表项右侧的≡把手触发（见 SongAdapter.onStartDrag）。
+             * 这是弱志当场指出的冲突：原来长按 = 拖拽，删除也只能长按，两者会打架。
+             */
+            override fun isLongPressDragEnabled() = false
             override fun isItemViewSwipeEnabled() = false
             override fun getMovementFlags(
                 recyclerView: androidx.recyclerview.widget.RecyclerView,
                 viewHolder: androidx.recyclerview.widget.RecyclerView.ViewHolder
             ): Int = makeMovementFlags(
+                // 仍要给出可上下移动的 flags，否则 startDrag（把手触发）不会生效。
+                // 不可排序的页面（歌手/搜索/收藏）由 dragEnabled 拦掉。
                 if (dragEnabled) ItemTouchHelper.UP or ItemTouchHelper.DOWN else 0,
                 0
             )
@@ -2644,6 +2726,8 @@ class MainActivity : AppCompatActivity() {
                 .remove(KEY_TREES)
                 .remove(KEY_TREE)
                 .apply()
+            // 两份都要清：只清可见库会让「隐藏名单仍生效于一份空库」这种状态残留
+            fullLibrary = null
             library = null
             toast("已清除全部扫描文件夹")
             true
@@ -2654,6 +2738,11 @@ class MainActivity : AppCompatActivity() {
         }
         view.findViewById<Button>(R.id.btnExportLog).setOnClickListener {
             showPlaybackLogDialog()
+        }
+        // 2.14：查看/恢复已删除（隐藏）的内容
+        view.findViewById<Button>(R.id.btnHidden).setOnClickListener {
+            settingsDialog?.dismiss()
+            showHiddenDialog()
         }
         view.findViewById<Button>(R.id.btnAbout).setOnClickListener {
             settingsDialog?.dismiss()
@@ -3093,16 +3182,23 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- 自定义封面 ----------
 
+    /** 这个歌单名是否是**真实文件夹歌单**（「全部歌曲」「收藏」是虚拟项，不能删）。 */
+    private fun isFolderPlaylist(name: String): Boolean =
+        library?.playlists?.any { it.name == name } == true
+
     private fun showPlaylistCoverMenu(name: String) {
+        val labels = mutableListOf(
+            getString(R.string.cover_set),
+            getString(R.string.cover_clear),
+            getString(R.string.batch_cover)
+        )
+        // 2.14：真实文件夹歌单才能删（「全部歌曲」是虚拟项、删了没意义）
+        val canDelete = isFolderPlaylist(name)
+        if (canDelete) labels.add(getString(R.string.hide_folder))
+        val idxDelete = if (canDelete) 3 else -1
         AlertDialog.Builder(this)
             .setTitle(name)
-            .setItems(
-                arrayOf(
-                    getString(R.string.cover_set),
-                    getString(R.string.cover_clear),
-                    getString(R.string.batch_cover)
-                )
-            ) { _, which ->
+            .setItems(labels.toTypedArray()) { _, which ->
                 when (which) {
                     0 -> {
                         pendingCoverTarget = "pl:$name"
@@ -3115,8 +3211,76 @@ class MainActivity : AppCompatActivity() {
                         toast(getString(R.string.cover_cleared))
                     }
                     2 -> showBatchCoverPicker(name)
+                    idxDelete -> confirmHideFolder(name)
                 }
             }
+            .show()
+    }
+
+    /**
+     * 树形目录页的节点菜单（2.14）。
+     *
+     * 目录行与歌单行用同一套菜单项：能设封面的（有歌单的）才给封面项，
+     * 都能删（删除按 [TreeNode.path] 整棵子树隐藏——「这个系列我全不要了」）。
+     */
+    private fun showTreeNodeMenu(node: TreeNode) {
+        val labels = mutableListOf<String>()
+        val pl = node.playlist
+        if (pl != null) {
+            labels.add(getString(R.string.cover_set))
+            labels.add(getString(R.string.cover_clear))
+            labels.add(getString(R.string.batch_cover))
+        }
+        labels.add(getString(R.string.hide_folder))
+        val idxDelete = labels.size - 1
+        val idxCoverSet = if (pl != null) 0 else -1
+        val idxCoverClear = if (pl != null) 1 else -1
+        val idxBatch = if (pl != null) 2 else -1
+        AlertDialog.Builder(this)
+            .setTitle(node.name)
+            .setItems(labels.toTypedArray()) { _, which ->
+                // 先判删除：没有歌单的目录行 idxDelete 恰好是 0，
+                // 若把它放进 when 的末尾，会被前面的 `0 -> 设置封面` 截胡（点删除反而弹选图）。
+                // 三个封面项同理用变量判定，不写死序号。
+                when (which) {
+                    idxCoverSet -> {
+                        pendingCoverTarget = "pl:${pl?.name}"
+                        coverPicker.launch("image/*")
+                    }
+                    idxCoverClear -> {
+                        val n = pl?.name ?: return@setItems
+                        CoverManager.clearPlaylistCover(this, n)
+                        CoverLoader.invalidate("pl:$n")
+                        refreshLibGrid()
+                        toast(getString(R.string.cover_cleared))
+                    }
+                    idxBatch -> pl?.let { showBatchCoverPicker(it.name) }
+                    idxDelete -> confirmHideFolder(node.path)
+                }
+            }
+            .show()
+    }
+
+    /**
+     * 删除歌单/文件夹（2.14）——实为**按文件夹路径隐藏，含全部子文件夹**。
+     *
+     * 按弱志要求不碰手机里的真实文件。只隐藏显示层：文件还在原处，
+     * 下次扫描也不会复活（见 [HiddenStore] 与 [applyHidden]）。
+     */
+    private fun confirmHideFolder(folderPath: String) {
+        if (folderPath.isEmpty()) return
+        val label = folderPath.substringAfterLast('/')
+        AlertDialog.Builder(this)
+            .setTitle(R.string.hide_folder)
+            .setMessage(getString(R.string.hide_folder_confirm, label))
+            .setPositiveButton(R.string.ok) { _, _ ->
+                HiddenStore.hideFolder(this, folderPath)
+                toast(getString(R.string.hide_folder_done, label))
+                // 若正停在这个歌单页，退回音乐库（否则停在已被隐藏的歌单上）
+                if (page == Page.PLAYLIST) showPage(Page.LIBRARY)
+                reapplyHiddenAndRefresh()
+            }
+            .setNegativeButton(R.string.cancel, null)
             .show()
     }
 
@@ -3200,6 +3364,10 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.cover_clear)
         )
         if (inCurrent) labels.add(getString(R.string.playlist_remove_from))
+        // 2.14：删除（= 全局隐藏，不碰手机文件）。放最后，与上面几个"轻量"操作分开
+        labels.add(getString(R.string.hide_song))
+        val idxRemoveFromPlaylist = if (inCurrent) 4 else -1
+        val idxHide = labels.size - 1
         AlertDialog.Builder(this)
             .setTitle(song.title)
             .setItems(labels.toTypedArray()) { _, which ->
@@ -3223,16 +3391,60 @@ class MainActivity : AppCompatActivity() {
                         refreshLibGrid()
                         toast(getString(R.string.cover_cleared))
                     }
-                    4 -> {
+                    idxRemoveFromPlaylist -> {
                         // 只从歌单里移除，不动手机里的文件
                         CustomPlaylistStore.remove(this, curPlaylist, song.uri.toString())
                         toast(getString(R.string.playlist_removed))
                         openCustomPlaylist(curPlaylist)
                         refreshPlaylistsPage()
                     }
+                    idxHide -> confirmHideSong(song)
                 }
             }
             .show()
+    }
+
+    /**
+     * 删除一首歌（2.14）——实为**全局隐藏**：音乐库/搜索/收藏/所有歌单/视频列表都不再出现。
+     *
+     * 按弱志要求不碰手机里的真实文件，所以文案必须讲清楚"文件还在、可恢复"，
+     * 否则用户会以为真删了文件而不敢用。
+     */
+    private fun confirmHideSong(song: Song) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.hide_song)
+            .setMessage(getString(R.string.hide_song_confirm, song.title))
+            .setPositiveButton(R.string.ok) { _, _ ->
+                HiddenStore.hideSong(this, song.uri.toString())
+                toast(getString(R.string.hide_song_done, song.title))
+                reapplyHiddenAndRefresh()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /**
+     * 重新按隐藏名单过滤并刷新全部界面（2.14）。
+     *
+     * 删除/恢复后调用：数据都在 [fullLibrary] 里，只需重新过滤一次，
+     * 不用重新扫描（这也是"删除不碰文件"能立刻生效的原因）。
+     */
+    private fun reapplyHiddenAndRefresh() {
+        val full = fullLibrary ?: return
+        val shown = applyHidden(full)
+        library = shown
+        onLibraryReady()
+        refreshOpenViews()
+        playbackService?.refreshLyricMap(shown.lyrics)
+        // 树形目录/发现页/歌手页都要跟着更新
+        applyLibLayout()
+        loadDiscover()
+        if (segArtistsShown()) {
+            artistLoaded = false
+            artistGroups = emptyList()
+            artistAdapter.submit(emptyList())
+            loadArtistsIfNeeded()
+        }
     }
 
     /** 播放页心形按钮状态同步。 */
@@ -4650,8 +4862,10 @@ class MainActivity : AppCompatActivity() {
         Thread {
             try {
                 val prefix = "$parentDocId/"
-                // 复用现有曲库里这个文件夹的歌单名（含多根前缀，保证归类一致）
-                val folderName = library?.allSongs?.firstOrNull { s ->
+                // 复用现有曲库里这个文件夹的歌单名（含多根前缀，保证归类一致）。
+                // 2.14：读**完整库**——该文件夹的歌可能已被隐藏，可见库里找不到，
+                // 会退化成不带根前缀的短名，导致歌词归类与其它歌不一致。
+                val folderName = (fullLibrary ?: library)?.allSongs?.firstOrNull { s ->
                     try {
                         DocumentsContract.getDocumentId(s.uri).startsWith(prefix)
                     } catch (e: Exception) {
@@ -4677,7 +4891,10 @@ class MainActivity : AppCompatActivity() {
         newSongs: List<Song>,
         newLyrics: Map<String, LyricRef>
     ) {
-        val lib = library
+        // 2.14 关键：以**完整库**为基础合并，不能以 library（过滤后）为基础。
+        // 否则「隐藏的歌」会被当成"这个文件夹里没有的歌"而从结果里消失，
+        // 接着被写进缓存 → 用户点「恢复」也找不回来了（数据真丢）。
+        val lib = fullLibrary ?: library
         if (lib == null) {
             scanLibrary(silent = true)
             return
@@ -4698,15 +4915,89 @@ class MainActivity : AppCompatActivity() {
         val playlists = all.groupBy { it.folder }
             .map { Playlist(it.key, it.value.sortedBy { s -> s.title }) }
             .sortedBy { it.name }
-        val newLib = MusicLibrary(playlists, all, lyrics)
-        LibraryCache.save(applicationContext, newLib)
-        library = newLib
+        val newFull = MusicLibrary(playlists, all, lyrics)
+        // 缓存写完整库；显示用过滤后的库
+        LibraryCache.save(applicationContext, newFull)
+        fullLibrary = newFull
+        val shown = applyHidden(newFull)
+        library = shown
         onLibraryReady()
         refreshOpenViews()
         // 新 lrc 已在歌词映射里：当前歌无需切歌立即显示
-        playbackService?.refreshLyricMap(newLib.lyrics)
+        playbackService?.refreshLyricMap(shown.lyrics)
         val spd = playbackService?.currentSpeed() ?: 1f
         btnSpeed.text = if (spd == 1f) "1x" else "${spd}x"
+    }
+
+    /**
+     * 「已隐藏的内容」（2.14）：查看删除过什么，并可逐个 / 全部恢复。
+     *
+     * 存在的意义：删除按弱志要求不碰真实文件，所以必须给用户一条"反悔"的路——
+     * 否则误删就只能去清应用数据了。恢复只是把条目从名单里去掉并重新过滤，
+     * 不需要重新扫描（数据一直在 [fullLibrary] 里）。
+     */
+    private fun showHiddenDialog() {
+        val uris = HiddenStore.hiddenSongs(this).toList()
+        val folders = HiddenStore.hiddenFolders(this).toList()
+        if (uris.isEmpty() && folders.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.hidden_title)
+                .setMessage(R.string.hidden_empty)
+                .setPositiveButton(R.string.close, null)
+                .show()
+            return
+        }
+        // 用「分组标题 + 条目」的形式列出：标题行不可点，条目行点了就恢复
+        val byUri = fullLibrary?.allSongs?.associateBy { it.uri.toString() } ?: emptyMap()
+        val labels = mutableListOf<String>()
+        val actions = mutableListOf<() -> Unit>()
+        if (folders.isNotEmpty()) {
+            labels.add(getString(R.string.hidden_group_folders, folders.size))
+            actions.add {}
+            folders.forEach { f ->
+                labels.add("　$f")
+                actions.add {
+                    HiddenStore.restoreFolder(this, f)
+                    toast(getString(R.string.hidden_restored))
+                    reapplyHiddenAndRefresh()
+                    showHiddenDialog()
+                }
+            }
+        }
+        if (uris.isNotEmpty()) {
+            labels.add(getString(R.string.hidden_group_songs, uris.size))
+            actions.add {}
+            uris.forEach { u ->
+                // 曲库里找不到（文件被移走/改名）时标注一下，用户才知道为什么"恢复了但没出现"
+                val title = byUri[u]?.title ?: getString(R.string.hidden_song_missing)
+                labels.add("　$title")
+                actions.add {
+                    HiddenStore.restoreSong(this, u)
+                    toast(getString(R.string.hidden_restored))
+                    reapplyHiddenAndRefresh()
+                    showHiddenDialog()
+                }
+            }
+        }
+        val builder = AlertDialog.Builder(this)
+            .setTitle(R.string.hidden_title)
+            .setItems(labels.toTypedArray()) { _, which -> actions.getOrNull(which)?.invoke() }
+            .setNegativeButton(R.string.close, null)
+        if (uris.isNotEmpty() || folders.isNotEmpty()) {
+            builder.setPositiveButton(R.string.hidden_restore_all) { _, _ ->
+                AlertDialog.Builder(this)
+                    .setTitle(R.string.hidden_restore_all)
+                    .setMessage(R.string.hidden_restore_all_confirm)
+                    .setPositiveButton(R.string.ok) { _, _ ->
+                        HiddenStore.restoreAll(this)
+                        toast(getString(R.string.hidden_restored_all))
+                        reapplyHiddenAndRefresh()
+                    }
+                    .setNegativeButton(R.string.cancel, null)
+                    .show()
+            }
+        }
+        builder.show()
     }
 
     private fun showPlaybackLogDialog() {

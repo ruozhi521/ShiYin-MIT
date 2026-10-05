@@ -12,12 +12,16 @@ import androidx.recyclerview.widget.RecyclerView
  * 每行 = 左侧封面 + 右侧名称；目录行右侧 "›"，歌单行右侧歌曲数。
  * - 点击目录：进入下一级（MainActivity 维护路径栈）
  * - 点击歌单：打开歌曲列表
- * - 长按目录（自身有歌）：打开该文件夹歌单；长按歌单：设置封面
+ * - 长按任意行：交给调用方弹菜单（2.14）
+ *
+ * 2.14 改动：长按从「目录=打开歌单 / 歌单=设封面」统一改为**弹菜单**。
+ * 因为删除功能也要挂在长按上，而一个手势不能有两个含义——菜单里同时放
+ * 「设封面」与「删除」，两种情况（目录/歌单）都由调用方按 node 决定菜单项。
  */
 class FolderTreeAdapter(
     private val onOpenFolder: (TreeNode) -> Unit,
     private val onOpenPlaylist: (Playlist) -> Unit,
-    private val onLongClickPlaylist: (Playlist) -> Unit
+    private val onLongClickNode: (TreeNode) -> Unit
 ) : RecyclerView.Adapter<FolderTreeAdapter.Holder>() {
 
     private var nodes: List<TreeNode> = emptyList()
@@ -89,12 +93,9 @@ class FolderTreeAdapter(
             }
         }
         holder.itemView.setOnLongClickListener {
-            if (isDir) {
-                // 目录自身有歌：长按直接打开该文件夹歌单
-                node.playlist?.let(onOpenPlaylist)
-            } else {
-                node.playlist?.let(onLongClickPlaylist)
-            }
+            // 2.14：统一交给调用方弹菜单（目录行也能删）。原来的「目录=打开歌单」
+            // 改由点击进入后自然看到，不再占用长按。
+            onLongClickNode(node)
             true
         }
     }

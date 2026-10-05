@@ -50,4 +50,20 @@
         android:textSize="15sp"
         android:visibility="gone" />
 
+    <!--
+      拖拽把手（2.14）：只有歌单页（可排序）才显示。
+      存在的意义是**把手势分开**：按住这里 = 拖拽排序，长按其它区域 = 弹菜单。
+      全部用长按会让「排序」与「打开菜单」抢同一个手势（用户当场指出的冲突）。
+      放右端而不是左端：① 是 iOS/Android 的通行位置；② 不打乱封面/序号的既有顺序。
+    -->
+    <ImageView
+        android:id="@+id/imgDragHandle"
+        android:layout_width="32dp"
+        android:layout_height="32dp"
+        android:layout_marginStart="6dp"
+        android:contentDescription="@string/song_drag_handle"
+        android:padding="4dp"
+        android:src="@drawable/ic_drag_handle"
+        android:visibility="gone" />
+
 </LinearLayout>
