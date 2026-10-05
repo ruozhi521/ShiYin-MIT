@@ -850,6 +850,44 @@ object SpeechRecManager {
         return LrcTarget(null, File(dir, "$stem.lrc"), "应用内 asr_lrc/$stem.lrc")
     }
 
+    /**
+     * 在 parentDocId 目录下按显示名精确查找已有文件，返回其 uri（2.14）。
+     *
+     * 为什么必须先查：SAF 的 `createDocument` **同名不覆盖**，而是自动加序号再建一个
+     * （`lrc.lrc` → `lrc(1).lrc` → `lrc(2).lrc` …）。于是每点一次「生成歌词」就多一份残留，
+     * 而且这些残留会被「台本检测」当成本子读回去，歌词匹配也会因「同目录多份同名」而
+     * 拒配（粉丝反馈：多个重复名时读不到歌词）。先查后写，存在就复用，从根上不再产生带序号的垃圾。
+     */
+    private fun findChildByName(
+        context: Context,
+        tree: Uri,
+        parentDocId: String,
+        name: String
+    ): Uri? {
+        return try {
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentDocId)
+            context.contentResolver.query(
+                childrenUri,
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                ),
+                null, null, null
+            )?.use { c ->
+                while (c.moveToNext()) {
+                    val dn = c.getString(1)
+                    if (dn != null && dn.equals(name, ignoreCase = true)) {
+                        return DocumentsContract.buildDocumentUriUsingTree(tree, c.getString(0))
+                    }
+                }
+                null
+            }
+        } catch (e: Exception) {
+            PlaybackLog.log("asr findChild $name THREW: ${e.message}")
+            null
+        }
+    }
+
     /** 识别开始前创建 lrc 目标：SAF 同目录优先（自动入歌词库），兜底应用私有目录。 */
     private fun createLrcTarget(context: Context, audioUri: Uri, treeUris: List<Uri>): LrcTarget {
         val docId = try {
@@ -869,16 +907,34 @@ object SpeechRecManager {
                         docId.substringBeforeLast('/')
                     } else treeDocId
                     val parentUri = DocumentsContract.buildDocumentUriUsingTree(tree, parentDocId)
+                    val lrcName = "$stem.lrc"
+                    // 2.14：先查同名是否已存在——存在就复用（覆写），绝不新建带序号的副本。
+                    // 这是「重复点生成歌词产生 lrc(1)/(2)/(3)」的直接修复点。
+                    val existing = findChildByName(context, tree, parentDocId, lrcName)
+                    if (existing != null) {
+                        val ok = try {
+                            context.contentResolver.openOutputStream(existing)?.use {
+                                it.write(" ".toByteArray())
+                            } != null
+                        } catch (e: Exception) {
+                            false
+                        }
+                        if (ok) {
+                            PlaybackLog.log("asr lrc target reuse existing $lrcName")
+                            return LrcTarget(existing, null, "音频同目录 $lrcName")
+                        }
+                        PlaybackLog.log("asr lrc target: existing $lrcName not writable")
+                    }
                     val lrcUri = DocumentsContract.createDocument(
-                        context.contentResolver, parentUri, "text/plain", "$stem.lrc"
+                        context.contentResolver, parentUri, "text/plain", lrcName
                     )
                     if (lrcUri != null) {
                         // 创建后立刻试写一次：确认可写，不可写走兜底
                         context.contentResolver.openOutputStream(lrcUri)?.use {
                             it.write(" ".toByteArray())
                         }
-                        PlaybackLog.log("asr lrc target OK (SAF) $stem.lrc")
-                        return LrcTarget(lrcUri, null, "音频同目录 $stem.lrc")
+                        PlaybackLog.log("asr lrc target OK (SAF) $lrcName")
+                        return LrcTarget(lrcUri, null, "音频同目录 $lrcName")
                     }
                     PlaybackLog.log("asr lrc target: createDocument null")
                 } catch (e: Exception) {

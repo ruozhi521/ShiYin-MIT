@@ -8,5 +8,7 @@ package com.example.subtitleplayer
  * 本枚举是纯 Kotlin，无 Android 依赖。
  */
 internal enum class Page {
-    DISCOVER, LIBRARY, PLAYLIST, SEARCH, PLAYER, LYRICS, FAVORITES, VIDEOS, VIDEO
+    DISCOVER, LIBRARY, PLAYLIST, SEARCH, PLAYER, LYRICS, FAVORITES, VIDEOS, VIDEO,
+    /** 歌单列表页（2.14）：首页形态，内含「收藏」+ 用户自建歌单。 */
+    PLAYLISTS
 }

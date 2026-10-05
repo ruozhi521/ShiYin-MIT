@@ -154,6 +154,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var favoritesAdapter: SongAdapter
     private var favoriteSongs: List<Song> = emptyList()
 
+    // ---- 歌单列表页（2.14：导航「歌单」的落地页，内含「收藏」+ 自建歌单）----
+    private lateinit var viewPlaylistsPage: View
+    private lateinit var recyclerPlaylistsPage: RecyclerView
+    private lateinit var txtPlaylistsEmpty: TextView
+    private lateinit var playlistsPageAdapter: PlaylistGridAdapter
+    /** 当前展示的歌单项（第一项恒为「收藏」）。 */
+    private var playlistsPageItems: List<Playlist> = emptyList()
+    /** 「收藏」项在列表里的名字，点它走原有的收藏页。用常量避免与自建歌单重名歧义。 */
+    private val favoritesEntryName: String get() = getString(R.string.favorites_title)
+
     // ---- 视频页 ----
     private lateinit var viewVideo: View
     private lateinit var viewVideos: View
@@ -494,6 +504,8 @@ class MainActivity : AppCompatActivity() {
                 toast(getString(R.string.cover_saved))
                 refreshLibGrid()
                 refreshCdCover()
+                // 2.14：新歌单页是独立的 adapter，封面变化要单独通知它
+                refreshPlaylistsPage()
             } else {
                 toast(getString(R.string.cover_failed))
             }
@@ -564,6 +576,11 @@ class MainActivity : AppCompatActivity() {
             updateFavoriteButton(song)
             if (page == Page.FAVORITES) openFavorites()
         }
+
+        // ---- 歌单列表页（2.14）----
+        viewPlaylistsPage = findViewById(R.id.pagePlaylists)
+        recyclerPlaylistsPage = findViewById(R.id.recyclerPlaylistsPage)
+        txtPlaylistsEmpty = findViewById(R.id.txtPlaylistsEmpty)
 
         viewVideo = findViewById(R.id.pageVideo)
         // 视频列表页（导航栏「视频」，2.0）
@@ -799,6 +816,27 @@ class MainActivity : AppCompatActivity() {
         recyclerFavorites.layoutManager = LinearLayoutManager(this)
         recyclerFavorites.adapter = favoritesAdapter
 
+        // ---- 歌单列表页（2.14）----
+        playlistsPageAdapter = PlaylistGridAdapter(
+            onClick = { pos ->
+                val item = playlistsPageItems.getOrNull(pos) ?: return@PlaylistGridAdapter
+                // 第一项「收藏」走原有收藏页；其余是自建歌单，进歌单详情
+                if (item.name == favoritesEntryName) openFavorites() else openCustomPlaylist(item.name)
+            },
+            onLongClick = { pos ->
+                val item = playlistsPageItems.getOrNull(pos) ?: return@PlaylistGridAdapter
+                if (item.name == favoritesEntryName) {
+                    // 收藏是固定项，不支持改名/删除（删了收藏页就没入口了）
+                    showPlaylistCoverMenu(item.name)
+                } else {
+                    showCustomPlaylistMenu(item.name)
+                }
+            }
+        )
+        recyclerPlaylistsPage.layoutManager = GridLayoutManager(this, 2)
+        recyclerPlaylistsPage.adapter = playlistsPageAdapter
+        findViewById<Button>(R.id.btnNewPlaylist).setOnClickListener { showCreatePlaylistDialog() }
+
         // ---- 底部导航 ----
 
         // ---- 播放页控制 ----
@@ -983,7 +1021,7 @@ class MainActivity : AppCompatActivity() {
             MODULE_DISCOVER -> showPage(Page.DISCOVER)
             MODULE_LIBRARY -> { showPage(Page.LIBRARY); showSegment(true) }
             MODULE_ARTISTS -> { showPage(Page.LIBRARY); showSegment(false) }
-            MODULE_FAVORITES -> openFavorites()
+            MODULE_FAVORITES -> openPlaylistsPage()
             MODULE_VIDEO -> openVideoList()
             else -> showPage(Page.LIBRARY)
         }
@@ -1033,7 +1071,9 @@ class MainActivity : AppCompatActivity() {
         MODULE_LIBRARY -> R.string.tab_library
         MODULE_ARTISTS -> R.string.nav_artists
         MODULE_VIDEO -> R.string.tab_video
-        else -> R.string.nav_favorites
+        // 2.14：这个入口从「收藏」升级为「歌单」页（收藏变成里面的固定第一项）。
+        // MODULE_FAVORITES 这个 key 值**保持不动**，老用户保存的导航配置才继续有效。
+        else -> R.string.nav_playlists
     }
 
     /** 导航栏设置弹窗：开关显示、上下移动排序、默认启动页。 */
@@ -1432,6 +1472,7 @@ class MainActivity : AppCompatActivity() {
             viewPlayer to (p == Page.PLAYER),
             viewLyrics to (p == Page.LYRICS),
             viewFavorites to (p == Page.FAVORITES),
+            viewPlaylistsPage to (p == Page.PLAYLISTS),
             viewVideos to (p == Page.VIDEOS),
             viewVideo to (p == Page.VIDEO)
         )
@@ -1639,7 +1680,9 @@ class MainActivity : AppCompatActivity() {
             Page.LYRICS -> backFromLyricsPage()
             Page.PLAYER -> backFromPlayerPage()
             Page.VIDEO -> closeVideoPage()
-            Page.PLAYLIST, Page.SEARCH, Page.FAVORITES -> showPage(Page.LIBRARY)
+            Page.PLAYLIST, Page.SEARCH -> showPage(Page.LIBRARY)
+            // 2.14：收藏页现在是「歌单」页的子页（从那里点进来），返回它才是对的
+            Page.FAVORITES -> openPlaylistsPage()
             else -> super.onBackPressed()
         }
     }
@@ -1668,6 +1711,20 @@ class MainActivity : AppCompatActivity() {
         if (src == Page.PLAYLIST) {
             val song = playbackService?.currentSongSafe()
             val lib = library
+            // 2.14：先看是不是自建歌单发起的队列。自建歌单不属于 lib.playlists
+            // （它是用户手写的集合），必须单独查，否则从自建歌单播放后按返回会
+            // 找不到歌单、退回主导航页。
+            if (song != null) {
+                val uriStr = song.uri.toString()
+                val own = CustomPlaylistStore.load(this).entries.firstOrNull { (_, uris) ->
+                    uris.contains(uriStr)
+                }
+                if (own != null) {
+                    openCustomPlaylist(own.key)
+                    showPage(Page.PLAYLIST, slide)
+                    return true
+                }
+            }
             val pl = if (song != null && lib != null) {
                 lib.playlists.firstOrNull {
                     it.name == song.folder && it.songs.any { s -> s.uri == song.uri }
@@ -1680,7 +1737,7 @@ class MainActivity : AppCompatActivity() {
                 showPage(Page.PLAYLIST, slide)
                 return true
             }
-            // 当前队列没有对应文件夹歌单（全库队列等）→ 回列表页会显示旧数据，放弃
+            // 当前队列没有对应歌单（全库队列等）→ 回列表页会显示旧数据，放弃
             return false
         }
         showPage(src, slide)
@@ -1862,9 +1919,17 @@ class MainActivity : AppCompatActivity() {
     private fun refreshOpenViews() {
         if (page == Page.PLAYLIST) {
             val name = txtPlaylistTitle.text.toString()
-            playlistList().firstOrNull { it.name == name }?.let { openPlaylist(it) }
+            // 自建歌单不在 lib.playlists 里，得从自己的数据源刷新。
+            // 用字段而不是按名字查——重名时按名字查会刷新错来源。
+            if (playlistIsCustom) {
+                openCustomPlaylist(name)
+            } else {
+                playlistList().firstOrNull { it.name == name }?.let { openPlaylist(it) }
+            }
         } else if (page == Page.FAVORITES) {
             openFavorites()
+        } else if (page == Page.PLAYLISTS) {
+            refreshPlaylistsPage()
         } else if (page == Page.VIDEOS) {
             openVideoList()
         }
@@ -2017,12 +2082,24 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** 只填充歌单页数据（标题/列表），不切页——恢复播放等后台场景用。 */
-    private fun bindPlaylist(playlist: Playlist) {
+    private fun bindPlaylist(playlist: Playlist, isCustom: Boolean = false) {
+        playlistIsCustom = isCustom
         txtPlaylistTitle.text = playlist.name
         dragEnabled = true
         currentSongs = applyPlaylistOrder(playlist.songs, playlist.name)
         songAdapter.submit(currentSongs)
     }
+
+    /**
+     * 当前歌单页展示的是否为**自建歌单**（2.14）。
+     *
+     * 为什么用字段而不是 `isCustomPlaylist(歌单名)` 现查：自建歌单和文件夹歌单允许重名
+     * （用户可能建一个也叫「Music」的歌单）。按名字查会误判成自建，
+     * 于是拖拽排序把顺序写进了 CustomPlaylistStore——而文件夹歌单的顺序本该写 prefs，
+     * 结果是「排序当场生效、重进就还原」。
+     * 由打开方显式声明来源，就不存在这种歧义。
+     */
+    private var playlistIsCustom = false
 
     // ---------- 歌单手动排序 ----------
 
@@ -2074,6 +2151,18 @@ class MainActivity : AppCompatActivity() {
         val name = txtPlaylistTitle.text.toString()
         if (name.isEmpty() || !dragEnabled) return
         val uris = currentSongs.map { it.uri.toString() }
+        // 2.14：自建歌单的顺序写回它自己的数据源；文件夹歌单仍走 prefs。
+        // 两者数据源不同，不能混写（用字段而不是按名字查——重名时会写错地方）。
+        if (playlistIsCustom) {
+            // 不能直接覆盖：currentSongs 是**解析后**的列表，库中临时找不到的 uri
+            // （扫描未完成、文件被移走）会被 resolveUris 跳过。直接覆盖＝那些歌被
+            // 永久移出歌单。所以把这些 uri 原序追加到末尾，只调整看得见的顺序。
+            val kept = CustomPlaylistStore.uris(this, name)
+            val visible = uris.toHashSet()
+            val merged = uris + kept.filter { it !in visible }
+            CustomPlaylistStore.replaceSongs(this, name, merged)
+            return
+        }
         prefs.edit()
             .putString("playlist_order_$name", uris.joinToString("\n"))
             .apply()
@@ -2081,6 +2170,8 @@ class MainActivity : AppCompatActivity() {
 
     /** 有自定义顺序则按顺序重排，否则原样返回。 */
     private fun applyPlaylistOrder(songs: List<Song>, name: String): List<Song> {
+        // 2.14：自建歌单的顺序直接存在 Store 里（openCustomPlaylist 已按序取回），不读 prefs
+        if (playlistIsCustom) return songs
         val saved = prefs.getString("playlist_order_$name", null) ?: return songs
         val uriOrder = saved.split("\n").filter { it.isNotEmpty() }
         if (uriOrder.size != songs.size) return songs // 歌单内容变了，顺序失效
@@ -3091,35 +3182,53 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /** 歌曲长按统一菜单：收藏 + 封面设置。 */
+    /** 歌曲长按统一菜单：收藏 + 添加到歌单 + 封面设置。 */
     private fun showSongMenu(song: Song) {
         val fav = FavoritesManager.isFavorite(this, song.uri.toString())
+        // 2.14：已在某自建歌单里时，菜单里给「从本歌单移除」。
+        // 必须限定 page == PLAYLIST——txtPlaylistTitle 是歌单页的控件，
+        // 在收藏/搜索/库页时它保留的是「上一次进过的歌单名」，
+        // 不判定页面就会在别处误显示「从本歌单移除」，点下去移除的是不相干的歌单。
+        val inPlaylistPage = page == Page.PLAYLIST && playlistIsCustom
+        val curPlaylist = if (inPlaylistPage) txtPlaylistTitle.text.toString() else ""
+        val inCurrent = inPlaylistPage &&
+            CustomPlaylistStore.uris(this, curPlaylist).contains(song.uri.toString())
+        val labels = mutableListOf(
+            getString(if (fav) R.string.unfavorite else R.string.favorite),
+            getString(R.string.playlist_add_to),
+            getString(R.string.cover_set),
+            getString(R.string.cover_clear)
+        )
+        if (inCurrent) labels.add(getString(R.string.playlist_remove_from))
         AlertDialog.Builder(this)
             .setTitle(song.title)
-            .setItems(
-                arrayOf(
-                    getString(if (fav) R.string.unfavorite else R.string.favorite),
-                    getString(R.string.cover_set),
-                    getString(R.string.cover_clear)
-                )
-            ) { _, which ->
+            .setItems(labels.toTypedArray()) { _, which ->
                 when (which) {
                     0 -> {
                         val on = FavoritesManager.toggle(this, song.uri.toString())
                         toast(getString(if (on) R.string.favorited else R.string.unfavorited))
                         updateFavoriteButton(song)
+                        refreshPlaylistsPage()
                     }
-                    1 -> {
+                    1 -> showAddToPlaylistDialog(song)
+                    2 -> {
                         pendingCoverTarget = "song:${song.uri}"
                         pendingCoverSong = song
                         coverPicker.launch("image/*")
                     }
-                    2 -> {
+                    3 -> {
                         CoverManager.clearSongCover(this, song.uri.toString(), song.size)
                         CoverLoader.invalidate(song.uri.toString())
                         refreshCdCover()
                         refreshLibGrid()
                         toast(getString(R.string.cover_cleared))
+                    }
+                    4 -> {
+                        // 只从歌单里移除，不动手机里的文件
+                        CustomPlaylistStore.remove(this, curPlaylist, song.uri.toString())
+                        toast(getString(R.string.playlist_removed))
+                        openCustomPlaylist(curPlaylist)
+                        refreshPlaylistsPage()
                     }
                 }
             }
@@ -3146,6 +3255,224 @@ class MainActivity : AppCompatActivity() {
         txtFavoritesEmpty.visibility =
             if (favoriteSongs.isEmpty()) View.VISIBLE else View.GONE
         showPage(Page.FAVORITES)
+    }
+
+    // ---------- 歌单列表页与自定义歌单（2.14）----------
+
+    /**
+     * 打开歌单列表页：固定第一项「收藏」+ 用户自建歌单。
+     *
+     * 为什么「收藏」放在这里而不是继续单列一个导航页：粉丝的诉求是「能自由搭配的播放列表」，
+     * 而收藏本质就是一个只能加不能减的单曲集合。并进同一个列表后，
+     * 「收藏」= 系统预置歌单、自建 = 用户歌单，语义一致，导航栏也少一个入口。
+     */
+    private fun openPlaylistsPage() {
+        refreshPlaylistsPage()
+        showPage(Page.PLAYLISTS)
+    }
+
+    /** 重新计算歌单列表页内容（收藏 + 自建）并刷新。 */
+    private fun refreshPlaylistsPage() {
+        if (!::playlistsPageAdapter.isInitialized) return
+        val items = mutableListOf<Playlist>()
+        // 第一项恒为「收藏」：封面用收藏里第一首的封面，数量是收藏数
+        val favSongs = library?.allSongs?.filter {
+            FavoritesManager.isFavorite(this, it.uri.toString())
+        } ?: emptyList()
+        items.add(Playlist(favoritesEntryName, favSongs))
+        // 自建歌单：按存储顺序（创建顺序）
+        val own = CustomPlaylistStore.load(this)
+        for ((name, uris) in own) {
+            items.add(Playlist(name, resolveUris(uris)))
+        }
+        playlistsPageItems = items
+        playlistsPageAdapter.submit(items)
+        txtPlaylistsEmpty.visibility =
+            if (own.isEmpty()) View.VISIBLE else View.GONE
+    }
+
+    /** 把 uri 列表还原成 Song 列表（跳过已失效的 uri——文件可能被删或移走）。 */
+    private fun resolveUris(uris: List<String>): List<Song> {
+        val lib = library ?: return emptyList()
+        if (uris.isEmpty()) return emptyList()
+        val byUri = lib.allSongs.associateBy { it.uri.toString() }
+        return uris.mapNotNull { byUri[it] }
+    }
+
+    /**
+     * 打开自建歌单详情：复用歌单页（Page.PLAYLIST），播放/拖拽排序/返回全部现成。
+     * 必须传 isCustom = true，否则拖拽排序会把顺序写进 prefs（文件夹歌单的数据源），
+     * 自建歌单的顺序反而没保存。
+     */
+    private fun openCustomPlaylist(name: String) {
+        val songs = resolveUris(CustomPlaylistStore.uris(this, name))
+        // 空歌单进去是一片白，用户不知道下一步做什么 —— 给一句指引
+        if (songs.isEmpty()) toast(getString(R.string.playlist_songs_empty))
+        bindPlaylist(Playlist(name, songs), isCustom = true)
+        showPage(Page.PLAYLIST)
+    }
+
+    /** 新建歌单：输入名称。 */
+    private fun showCreatePlaylistDialog() {
+        val et = android.widget.EditText(this).apply {
+            hint = getString(R.string.playlist_name_hint)
+            setSingleLine(true)
+        }
+        val box = android.widget.FrameLayout(this).apply {
+            val m = dp(20f)
+            setPadding(m, dp(8f), m, 0)
+            addView(
+                et,
+                android.widget.FrameLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.playlist_create)
+            .setView(box)
+            .setPositiveButton(R.string.ok) { _, _ ->
+                val name = et.text.toString().trim()
+                when {
+                    name.isEmpty() || name.length > CustomPlaylistStore.MAX_NAME_LEN ->
+                        toast(
+                            getString(
+                                R.string.playlist_name_invalid,
+                                CustomPlaylistStore.MAX_NAME_LEN
+                            )
+                        )
+                    // 与「收藏」入口重名会造成点击歧义，直接拒绝
+                    name == favoritesEntryName -> toast(getString(R.string.playlist_exists))
+                    CustomPlaylistStore.create(this, name) -> {
+                        toast(getString(R.string.playlist_created, name))
+                        refreshPlaylistsPage()
+                    }
+                    else -> toast(getString(R.string.playlist_exists))
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** 自建歌单长按菜单：重命名 / 删除 / 设置封面。 */
+    private fun showCustomPlaylistMenu(name: String) {
+        AlertDialog.Builder(this)
+            .setTitle(name)
+            .setItems(
+                arrayOf(
+                    getString(R.string.playlist_rename),
+                    getString(R.string.playlist_delete),
+                    getString(R.string.cover_set),
+                    getString(R.string.cover_clear)
+                )
+            ) { _, which ->
+                when (which) {
+                    0 -> showRenamePlaylistDialog(name)
+                    1 -> confirmDeletePlaylist(name)
+                    // 自建歌单的封面与文件夹歌单共用同一套封面存储（按歌单名），
+                    // 所以直接用现有的设置封面流程即可
+                    2 -> {
+                        pendingCoverTarget = "pl:$name"
+                        coverPicker.launch("image/*")
+                    }
+                    3 -> {
+                        CoverManager.clearPlaylistCover(this, name)
+                        CoverLoader.invalidate("pl:$name")
+                        refreshPlaylistsPage()
+                        toast(getString(R.string.cover_cleared))
+                    }
+                }
+            }
+            .show()
+    }
+
+    /** 重命名自建歌单。 */
+    private fun showRenamePlaylistDialog(old: String) {
+        val et = android.widget.EditText(this).apply {
+            hint = getString(R.string.playlist_name_hint)
+            setSingleLine(true)
+            setText(old)
+            setSelection(old.length)
+        }
+        val box = android.widget.FrameLayout(this).apply {
+            val m = dp(20f)
+            setPadding(m, dp(8f), m, 0)
+            addView(
+                et,
+                android.widget.FrameLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.playlist_rename)
+            .setView(box)
+            .setPositiveButton(R.string.ok) { _, _ ->
+                val name = et.text.toString().trim()
+                when {
+                    name.isEmpty() || name.length > CustomPlaylistStore.MAX_NAME_LEN ->
+                        toast(
+                            getString(
+                                R.string.playlist_name_invalid,
+                                CustomPlaylistStore.MAX_NAME_LEN
+                            )
+                        )
+                    name == favoritesEntryName -> toast(getString(R.string.playlist_exists))
+                    CustomPlaylistStore.rename(this, old, name) -> {
+                        toast(getString(R.string.playlist_renamed, name))
+                        refreshPlaylistsPage()
+                    }
+                    else -> toast(getString(R.string.playlist_exists))
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /**
+     * 删除自建歌单。
+     *
+     * **只删歌单记录，绝不碰手机里的音频文件**（用户明确要求）。
+     * 文案里也把这一点写给用户看，避免他们以为会删文件而不敢用。
+     */
+    private fun confirmDeletePlaylist(name: String) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.playlist_delete)
+            .setMessage(getString(R.string.playlist_delete_confirm, name))
+            .setPositiveButton(R.string.ok) { _, _ ->
+                CustomPlaylistStore.delete(this, name)
+                CoverManager.clearPlaylistCover(this, name)
+                toast(getString(R.string.playlist_deleted, name))
+                refreshPlaylistsPage()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** 「添加到歌单」：列出自建歌单（含「新建歌单」入口）。 */
+    private fun showAddToPlaylistDialog(song: Song) {
+        val uri = song.uri.toString()
+        val names = CustomPlaylistStore.names(this)
+        val labels = names.toMutableList()
+        labels.add(getString(R.string.playlist_create))
+        AlertDialog.Builder(this)
+            .setTitle(R.string.playlist_add_to)
+            .setItems(labels.toTypedArray()) { _, which ->
+                if (which == names.size) {
+                    showCreatePlaylistDialog()
+                } else {
+                    val name = names[which]
+                    if (CustomPlaylistStore.add(this, name, uri)) {
+                        toast(getString(R.string.playlist_added_to, name))
+                    } else {
+                        toast(getString(R.string.playlist_already_in, name))
+                    }
+                    refreshPlaylistsPage()
+                }
+            }
+            .show()
     }
 
     // ---------- 视频播放页 ----------
@@ -3995,7 +4322,10 @@ class MainActivity : AppCompatActivity() {
                 val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
                     tree, parentDocId
                 )
-                val candidates = mutableListOf<Pair<Uri, String>>()
+                // 2.14：先收集本目录全部 (docId, 文件名)，再在内存里筛选。
+                // 识别「自动序号残留」需要知道原名在不在（见 LrcResidueRules），
+                // 而原名可能排在编号文件之后，所以必须收完再判，不能边扫边判。
+                val entries = mutableListOf<Pair<String, String>>()
                 contentResolver.query(
                     childrenUri,
                     arrayOf(
@@ -4005,13 +4335,25 @@ class MainActivity : AppCompatActivity() {
                     null, null, null
                 )?.use { c ->
                     while (c.moveToNext()) {
+                        val id = c.getString(0) ?: continue
                         val name = c.getString(1) ?: continue
-                        val lower = name.lowercase(Locale.getDefault())
-                        if (lower.endsWith(".txt") || lower.endsWith(".srt")) {
-                            candidates.add(
-                                DocumentsContract.buildDocumentUriUsingTree(tree, c.getString(0)) to name
-                            )
+                        entries.add(id to name)
+                    }
+                }
+                val allNames = entries.map { it.second }.toHashSet()
+                val candidates = mutableListOf<Pair<Uri, String>>()
+                for ((id, name) in entries) {
+                    val lower = name.lowercase(Locale.getDefault())
+                    if (lower.endsWith(".txt") || lower.endsWith(".srt")) {
+                        // 跳过 SAF 自动序号残留（如 台本(1).txt）——那多半是识别产物，
+                        // 当台本用会把上一次的歌词喂回去，越滚越脏（粉丝反馈的闭环）。
+                        if (LrcResidueRules.isResidue(name, allNames)) {
+                            PlaybackLog.log("asr script skip residue: $name")
+                            continue
                         }
+                        candidates.add(
+                            DocumentsContract.buildDocumentUriUsingTree(tree, id) to name
+                        )
                     }
                 }
                 for ((u, name) in candidates) {
@@ -4038,6 +4380,11 @@ class MainActivity : AppCompatActivity() {
     private fun startAsrForCurrentSong() {
         val song = lastSong
         when {
+            // 2.14 防呆：识别进行中就不要再弹这个对话框。
+            // 旧实现只在 startAsrTranscribe 里拦 asrRunning，但对话框已经弹出来了——
+            // 用户看到对话框会以为可以再来一次，反复点「生成歌词」，每次都走到
+            // createLrcTarget；这正是「lrc(1)/(2)/(3)」残留的入口（粉丝反馈）。
+            asrRunning -> toast(getString(R.string.asr_busy_running))
             song == null -> toast(getString(R.string.no_song))
             !SpeechRecManager.isModelReady(this) -> showAsrDialog()
             else -> {
@@ -4069,6 +4416,11 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread {
             findViewById<View>(R.id.asrStatusRow).visibility =
                 if (visible) View.VISIBLE else View.GONE
+            // 2.14 防呆：识别进行中把「生成歌词」置灰。
+            // 与 startAsrForCurrentSong 开头的拦截是双保险——按钮灰掉让用户一眼看出
+            // 「现在不能再点」，而不是点了弹提示；两者都指向同一个目的：
+            // 不让识别被重复触发（重复触发正是 lrc(1)/(2)/(3) 残留的来源）。
+            findViewById<Button>(R.id.btnGenLyric)?.isEnabled = !visible
         }
     }
 
@@ -4085,7 +4437,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun startAsrTranscribe(uri: Uri, scriptText: String?) {
         if (asrRunning) {
-            toast("已有识别在进行中")
+            toast(getString(R.string.asr_busy_running))
             return
         }
         asrRunning = true
@@ -4513,6 +4865,8 @@ class MainActivity : AppCompatActivity() {
         gridAdapter.applyUiSize(uiSize)
         treeAdapter.applyUiSize(uiSize)
         discoverAdapter.applyUiSize(uiSize)
+        // 2.14：新建的「歌单」页也用同一个字号设置（网格样式与库页一致）
+        if (::playlistsPageAdapter.isInitialized) playlistsPageAdapter.applyUiSize(uiSize)
     }
 
     private fun applyDarkMode(dark: Boolean) {

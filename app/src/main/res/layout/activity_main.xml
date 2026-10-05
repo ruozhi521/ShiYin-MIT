@@ -24,6 +24,8 @@
 
         <include layout="@layout/page_favorites" />
 
+        <include layout="@layout/page_playlists" />
+
         <include layout="@layout/page_video" />
         <include layout="@layout/page_videos" />
 
