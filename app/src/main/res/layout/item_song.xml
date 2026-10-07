@@ -10,6 +10,19 @@
     android:paddingEnd="6dp"
     android:foreground="?attr/selectableItemBackground">
 
+    <!--
+      多选勾选框（2.15 批量删除）：默认隐藏，进入批量模式才显示。
+      放最左、且进入批量模式时隐藏序号——避免「序号 + 勾选」两个数字并排看混。
+    -->
+    <ImageView
+        android:id="@+id/imgCheck"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:layout_marginEnd="4dp"
+        android:contentDescription="@string/batch_select"
+        android:src="@drawable/ic_check_off"
+        android:visibility="gone" />
+
     <ImageView
         android:id="@+id/imgCover"
         android:layout_width="44dp"

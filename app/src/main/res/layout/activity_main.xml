@@ -29,6 +29,60 @@
         <include layout="@layout/page_video" />
         <include layout="@layout/page_videos" />
 
+        <!--
+          批量操作栏（2.15 批量删除）：进入多选模式时覆盖在页面顶部。
+          做成覆盖层而不是挤压布局，是为了避免进入/退出时列表跳动；
+          同时它盖住页面自己的标题栏，视觉上明确表达「已进入选择模式」。
+        -->
+        <LinearLayout
+            android:id="@+id/batchBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top"
+            android:background="@color/surface"
+            android:elevation="6dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:visibility="gone">
+
+            <Button
+                android:id="@+id/btnBatchCancel"
+                style="@style/BtnStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="64dp"
+                android:text="@string/batch_cancel" />
+
+            <TextView
+                android:id="@+id/txtBatchCount"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:textColor="@color/text_primary"
+                android:textSize="15sp" />
+
+            <Button
+                android:id="@+id/btnBatchAll"
+                style="@style/BtnStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="64dp"
+                android:text="@string/batch_select_all" />
+
+            <Button
+                android:id="@+id/btnBatchDelete"
+                style="@style/BtnStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="64dp"
+                android:text="@string/batch_delete" />
+        </LinearLayout>
+
     </FrameLayout>
 
     <!-- 全局迷你播放条 -->

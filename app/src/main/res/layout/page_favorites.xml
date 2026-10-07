@@ -13,10 +13,20 @@
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
+        <!-- 2.15：收藏页现在是歌单页的子页，缺了返回入口（粉丝反馈「左上角丢失了返回图标」） -->
+        <Button
+            android:id="@+id/btnBackFav"
+            style="@style/BtnStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="64dp"
+            android:text="@string/back" />
+
         <TextView
             android:id="@+id/txtFavoritesTitle"
-            android:layout_width="match_parent"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_weight="1"
             android:ellipsize="end"
             android:singleLine="true"
             android:gravity="center"
@@ -24,6 +34,11 @@
             android:textColor="@color/text_primary"
             android:textSize="18sp"
             android:textStyle="bold" />
+
+        <!-- 右侧等宽占位：抵消左侧返回按钮的宽度，让标题真正居中 -->
+        <View
+            android:layout_width="64dp"
+            android:layout_height="0dp" />
     </LinearLayout>
 
     <androidx.recyclerview.widget.RecyclerView

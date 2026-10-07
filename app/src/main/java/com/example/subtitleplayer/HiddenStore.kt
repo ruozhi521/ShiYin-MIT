@@ -77,6 +77,23 @@ object HiddenStore {
         }
     }
 
+    /**
+     * 批量隐藏（2.15 批量删除）。
+     *
+     * 一次写入而不是循环调 [hideSong]：每条都 load+save 一遍的话，
+     * 选 50 首就要读写 50 次文件（还有 50 次原子替换），既慢又平白增加写坏的概率。
+     */
+    fun hideSongs(c: Context, uris: Collection<String>) {
+        val add = uris.filter { it.isNotEmpty() }.toSet()
+        if (add.isEmpty()) return
+        synchronized(lock) {
+            val (s, f) = load(c)
+            val merged = s + add
+            if (merged.size > MAX_SONGS) return
+            save(c, merged, f)
+        }
+    }
+
     /** 隐藏一个文件夹（及全部子文件夹，见 [HideRules]）。 */
     fun hideFolder(c: Context, folder: String) {
         val n = folder.trim().trim('/')

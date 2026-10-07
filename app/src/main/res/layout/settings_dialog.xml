@@ -380,6 +380,35 @@
                     android:text="30s" />
             </RadioGroup>
 
+            <View style="@style/SettingsDivider" />
+
+            <!-- 2.15：返回键级数（粉丝反馈返回跳太多） -->
+            <TextView
+                style="@style/SettingsLabel"
+                android:layout_marginTop="10dp"
+                android:text="@string/back_step_label" />
+
+            <RadioGroup
+                android:id="@+id/rgBackStep"
+                style="@style/SettingsSegment">
+
+                <!-- tag=0 逐级（默认）：歌词 → 播放页 → 列表 -->
+                <RadioButton
+                    style="@style/SettingsSegItem"
+                    android:tag="0"
+                    android:text="@string/back_step_stepwise" />
+
+                <!-- tag=1 直跳：歌词 → 列表（2.12 旧行为） -->
+                <RadioButton
+                    style="@style/SettingsSegItem"
+                    android:tag="1"
+                    android:text="@string/back_step_jump" />
+            </RadioGroup>
+
+            <TextView
+                style="@style/SettingsHint"
+                android:text="@string/back_step_hint" />
+
             <Button
                 android:id="@+id/btnEqSettings"
                 style="@style/BtnStyle"

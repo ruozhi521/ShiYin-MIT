@@ -163,4 +163,52 @@ class HiddenStoreTest {
         assertEquals(setOf("u1"), HiddenStore.hiddenSongs(ctx))
         assertEquals(0, HiddenStore.hiddenFolders(ctx).size)
     }
+
+    // ---- 批量（2.15 批量删除）----
+
+    @Test
+    fun `批量隐藏一次写入全部生效`() {
+        HiddenStore.hideSongs(ctx, listOf("u1", "u2", "u3"))
+        assertEquals(setOf("u1", "u2", "u3"), HiddenStore.hiddenSongs(ctx))
+    }
+
+    @Test
+    fun `批量隐藏与已有名单合并而非覆盖`() {
+        HiddenStore.hideSong(ctx, "old")
+        HiddenStore.hideSongs(ctx, listOf("a", "b"))
+        assertEquals(setOf("old", "a", "b"), HiddenStore.hiddenSongs(ctx))
+    }
+
+    @Test
+    fun `批量隐藏会去重`() {
+        HiddenStore.hideSongs(ctx, listOf("u1", "u1", "u2"))
+        assertEquals(2, HiddenStore.hiddenSongs(ctx).size)
+    }
+
+    @Test
+    fun `批量隐藏跳过空字符串`() {
+        HiddenStore.hideSongs(ctx, listOf("", "u1", ""))
+        assertEquals(setOf("u1"), HiddenStore.hiddenSongs(ctx))
+    }
+
+    @Test
+    fun `批量隐藏传空集合无副作用`() {
+        HiddenStore.hideSongs(ctx, emptyList())
+        assertTrue(HiddenStore.isEmpty(ctx))
+    }
+
+    @Test
+    fun `批量隐藏不影响文件夹名单`() {
+        HiddenStore.hideFolder(ctx, "A")
+        HiddenStore.hideSongs(ctx, listOf("u1", "u2"))
+        assertEquals(setOf("A"), HiddenStore.hiddenFolders(ctx))
+        assertEquals(setOf("u1", "u2"), HiddenStore.hiddenSongs(ctx))
+    }
+
+    @Test
+    fun `批量隐藏后可逐条恢复`() {
+        HiddenStore.hideSongs(ctx, listOf("u1", "u2", "u3"))
+        HiddenStore.restoreSong(ctx, "u2")
+        assertEquals(setOf("u1", "u3"), HiddenStore.hiddenSongs(ctx))
+    }
 }

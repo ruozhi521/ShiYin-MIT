@@ -30,9 +30,62 @@ class SongAdapter(
      */
     var onStartDrag: ((RecyclerView.ViewHolder) -> Unit)? = null
 
+    /**
+     * 多选模式（2.15 批量删除）。
+     * 选择用**位置索引**记录——列表刷新（[submit]）时会清空，
+     * 避免删除后索引错位选错东西。
+     */
+    private var batchMode = false
+    private val selected = LinkedHashSet<Int>()
+
+    /** 选择数量变化回调（顶部操作栏显示「已选 N 项」用）。 */
+    var onSelectionChanged: ((Int) -> Unit)? = null
+
     fun submit(list: List<Song>) {
         items = list
+        // 列表换了 → 位置索引失效，选择必须清掉（否则会选错/越界）
+        selected.clear()
         notifyDataSetChanged()
+        if (batchMode) onSelectionChanged?.invoke(0)
+    }
+
+    /** 进入/退出多选模式（退出时清空已选）。 */
+    fun setBatchMode(on: Boolean) {
+        if (batchMode == on) return
+        batchMode = on
+        selected.clear()
+        notifyDataSetChanged()
+        onSelectionChanged?.invoke(0)
+    }
+
+    fun isBatchMode(): Boolean = batchMode
+
+    /** 点一下切换选中（多选模式下点整行就是勾选，不再播放）。 */
+    fun toggleSelect(position: Int) {
+        if (!batchMode || position !in items.indices) return
+        if (!selected.remove(position)) selected.add(position)
+        notifyItemChanged(position)
+        onSelectionChanged?.invoke(selected.size)
+    }
+
+    fun selectedCount(): Int = selected.size
+
+    /** 已选中的歌曲（按列表顺序）。 */
+    fun selectedSongs(): List<Song> = selected.sorted().mapNotNull { items.getOrNull(it) }
+
+    fun selectAll() {
+        if (!batchMode) return
+        selected.clear()
+        selected.addAll(items.indices)
+        notifyDataSetChanged()
+        onSelectionChanged?.invoke(selected.size)
+    }
+
+    fun clearSelection() {
+        if (selected.isEmpty()) return
+        selected.clear()
+        notifyDataSetChanged()
+        onSelectionChanged?.invoke(0)
     }
 
     /** 是否显示拖拽把手（与 dragEnabled 同步，2.14）。 */
@@ -97,15 +150,37 @@ class SongAdapter(
                 holder.cover.setImageBitmap(bmp)
             }
         }
-        holder.itemView.setOnClickListener { onClick(position) }
+        // 多选（2.15）：批量模式下左侧显示勾选框、隐藏序号（避免两个数字并排看混）
+        holder.check.visibility = if (batchMode) View.VISIBLE else View.GONE
+        holder.index.visibility = if (batchMode) View.GONE else View.VISIBLE
+        if (batchMode) {
+            holder.check.setImageResource(
+                if (position in selected) R.drawable.ic_check_on else R.drawable.ic_check_off
+            )
+            holder.title.setTextColor(
+                ContextCompat.getColor(holder.itemView.context, R.color.text_primary)
+            )
+            holder.title.typeface = if (position in selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+        }
+        holder.itemView.setOnClickListener {
+            // 批量模式下点整行 = 勾选/取消（不再播放，否则一边选一边跳走）
+            if (batchMode) toggleSelect(position) else onClick(position)
+        }
         holder.itemView.setOnLongClickListener {
-            onLongClick?.invoke(song)
-            true
+            // 批量模式下长按不弹菜单（已在选择中，菜单会打断）
+            if (batchMode) {
+                true
+            } else {
+                onLongClick?.invoke(song)
+                true
+            }
         }
         // 拖拽把手（2.14）：按住它才能拖，长按其它区域留给菜单——两个手势各走各的。
         // 不可排序时（歌手页/搜索结果/收藏）整个把手隐藏，列表观感与以前一致。
-        holder.dragHandle.visibility = if (dragHandleVisible) View.VISIBLE else View.GONE
-        if (dragHandleVisible) {
+        // 批量模式下也隐藏：正在选东西时不该能拖动。
+        val showHandle = dragHandleVisible && !batchMode
+        holder.dragHandle.visibility = if (showHandle) View.VISIBLE else View.GONE
+        if (showHandle) {
             holder.dragHandle.setOnTouchListener { v, ev ->
                 if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
                     onStartDrag?.invoke(holder)
@@ -126,6 +201,7 @@ class SongAdapter(
         val lyricMark: TextView = itemView.findViewById(R.id.txtHasLyric)
         val cover: ImageView = itemView.findViewById(R.id.imgCover)
         val dragHandle: ImageView = itemView.findViewById(R.id.imgDragHandle)
+        val check: ImageView = itemView.findViewById(R.id.imgCheck)
     }
 }
 

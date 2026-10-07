@@ -74,6 +74,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnMiniPlay: Button
     private lateinit var miniSeekBar: SeekBar
 
+    // ---- 批量删除（2.15，粉丝建议）----
+    private lateinit var batchBar: View
+    private lateinit var txtBatchCount: TextView
+    /**
+     * 当前处于批量模式的页面（null = 未进入）。
+     *
+     * 用页面记而不是「哪个 adapter 开着批量模式」：退出时要还原**原来那个**列表，
+     * 而不是去猜用户现在在哪一页（可能已经在切换途中）。
+     */
+    private var batchPage: Page? = null
+
     // ---- 发现页 ----
     private lateinit var recyclerDiscover: RecyclerView
     private lateinit var discoverAdapter: DiscoverAdapter
@@ -705,6 +716,16 @@ class MainActivity : AppCompatActivity() {
         btnMiniPlay = findViewById(R.id.btnMiniPlay)
         miniSeekBar = findViewById(R.id.miniSeekBar)
 
+        // ---- 批量操作栏（2.15）----
+        batchBar = findViewById(R.id.batchBar)
+        txtBatchCount = findViewById(R.id.txtBatchCount)
+        findViewById<Button>(R.id.btnBatchCancel).setOnClickListener { exitBatchMode() }
+        findViewById<Button>(R.id.btnBatchAll).setOnClickListener {
+            val a = batchAdapter() ?: return@setOnClickListener
+            if (a.selectedCount() == a.itemCount) a.clearSelection() else a.selectAll()
+        }
+        findViewById<Button>(R.id.btnBatchDelete).setOnClickListener { confirmBatchDelete() }
+
         recyclerDiscover = findViewById(R.id.recyclerDiscover)
         searchEntry = findViewById(R.id.searchEntry)
         segPlaylists = findViewById(R.id.segPlaylists)
@@ -865,7 +886,9 @@ class MainActivity : AppCompatActivity() {
         // ---- 底部导航 ----
 
         // ---- 播放页控制 ----
-        findViewById<Button>(R.id.btnBackSongs).setOnClickListener { backFromPlayer() }
+        // 2.15：与系统返回键保持一致（原本直接回主导航页，跳过了队列来源列表 ——
+        // 粉丝反馈的「返回偏向返回主界面，而不是返回上一级」）
+        findViewById<Button>(R.id.btnBackSongs).setOnClickListener { backFromPlayerPage() }
         findViewById<Button>(R.id.btnLyrics).setOnClickListener { showPage(Page.LYRICS, 1) }
         findViewById<ImageButton>(R.id.btnQueue).setOnClickListener { showQueueDialog() }
         findViewById<ImageButton>(R.id.btnLyricsIcon).setOnClickListener { showPage(Page.LYRICS, 1) }
@@ -933,6 +956,8 @@ class MainActivity : AppCompatActivity() {
         // ---- 列表页返回 ----
         findViewById<Button>(R.id.btnBackLib).setOnClickListener { showPage(Page.LIBRARY) }
         findViewById<Button>(R.id.btnBackSearch).setOnClickListener { showPage(Page.LIBRARY) }
+        // 2.15：收藏页返回 → 回歌单页（它是子页）。有「返回键级数」开关时走统一分支。
+        findViewById<Button>(R.id.btnBackFav).setOnClickListener { leaveFavorites() }
 
         // ---- 设置 ----
         findViewById<Button>(R.id.btnSettings).setOnClickListener {
@@ -1489,6 +1514,9 @@ class MainActivity : AppCompatActivity() {
             cancelImmersion()
             exitImmersion()
         }
+        // 切页时退出批量模式（2.15）：批量操作栏是覆盖层，不跟着页面走的话，
+        // 切到别的页面它还在，点「删除」删的却是上一页的选择。
+        if (batchPage != null && batchPage != p) exitBatchMode()
         val shows = listOf(
             viewDiscover to (p == Page.DISCOVER),
             viewLibrary to (p == Page.LIBRARY),
@@ -1696,6 +1724,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onBackPressed() {
+        // 批量模式（2.15）：返回键先退出多选，而不是直接离开页面
+        // （否则用户选了一半按返回，整页跳走、选择全丢）
+        if (batchPage != null) {
+            exitBatchMode()
+            return
+        }
         // 树形目录逐级进入：先返回上一级，不退出
         if (page == Page.LIBRARY && isTreeMode() && treeStack.isNotEmpty()) {
             backTree()
@@ -1707,7 +1741,8 @@ class MainActivity : AppCompatActivity() {
             Page.VIDEO -> closeVideoPage()
             Page.PLAYLIST, Page.SEARCH -> showPage(Page.LIBRARY)
             // 2.14：收藏页现在是「歌单」页的子页（从那里点进来），返回它才是对的
-            Page.FAVORITES -> openPlaylistsPage()
+            // 2.15：与页内返回按钮共用 leaveFavorites()，避免两处行为漂移
+            Page.FAVORITES -> leaveFavorites()
             else -> super.onBackPressed()
         }
     }
@@ -1716,7 +1751,22 @@ class MainActivity : AppCompatActivity() {
      * 歌词页返回（2.11 按弱志反馈）：队列来自某个列表页时直接回该页
      * （歌单播放 → 该歌单的音轨界面），不再先绕回播放页、再退回主页。
      */
+    /** 返回键是否为「逐级返回」模式（2.15，默认）。false = 直跳列表（2.12 旧行为）。 */
+    private fun backIsStepwise(): Boolean =
+        prefs.getInt(KEY_BACK_STEP, BACK_STEP_WISE) != BACK_STEP_JUMP
+
+    /**
+     * 歌词页返回（2.15 起受「返回键级数」开关控制）。
+     *
+     * - 逐级（默认）：歌词 → 播放页，再按一次才回列表。粉丝反馈「返回回退的级数有点高、
+     *   偏向返回主界面而不是上一级」，这就是他要的。
+     * - 直跳：歌词 → 队列来源列表（2.12 按 up 的建议做的行为），保留给喜欢少按一次的用户。
+     */
     private fun backFromLyricsPage() {
+        if (backIsStepwise()) {
+            showPage(Page.PLAYER, -1)
+            return
+        }
         if (backToQueueSource(slide = -1)) return
         showPage(Page.PLAYER, -1)
     }
@@ -2618,6 +2668,9 @@ class MainActivity : AppCompatActivity() {
         checkByTag(rgLibLayout, if (prefs.getString(KEY_LIB_LAYOUT, "grid") == "tree") 1 else 0)
         val rgSeekStep = view.findViewById<RadioGroup>(R.id.rgSeekStep)
         checkByTag(rgSeekStep, prefs.getInt(KEY_SEEK_STEP, 10))
+        // 2.15：返回键级数（0 逐级 / 1 直跳）
+        val rgBackStep = view.findViewById<RadioGroup>(R.id.rgBackStep)
+        checkByTag(rgBackStep, prefs.getInt(KEY_BACK_STEP, BACK_STEP_WISE))
         val chkAlarmPlay = view.findViewById<CheckBox>(R.id.chkAlarmPlay)
         chkAlarmPlay.isChecked = prefs.getBoolean(MediaPlaybackService.KEY_ALARM_ON, false)
         val chkAlarmOnce = view.findViewById<CheckBox>(R.id.chkAlarmOnce)
@@ -2696,6 +2749,7 @@ class MainActivity : AppCompatActivity() {
                     .putBoolean(MediaPlaybackService.KEY_ALARM_ONCE, chkAlarmOnce.isChecked)
                     .putString(KEY_LIB_LAYOUT, if (tagOf(rgLibLayout) == 1) "tree" else "grid")
                     .putInt(KEY_SEEK_STEP, tagOf(rgSeekStep))
+                    .putInt(KEY_BACK_STEP, tagOf(rgBackStep))
                     .apply()
                 applyAppearance()
                 applyLibLayout()
@@ -3366,8 +3420,13 @@ class MainActivity : AppCompatActivity() {
         if (inCurrent) labels.add(getString(R.string.playlist_remove_from))
         // 2.14：删除（= 全局隐藏，不碰手机文件）。放最后，与上面几个"轻量"操作分开
         labels.add(getString(R.string.hide_song))
+        // 2.15：批量删除入口（粉丝建议）。仅在有对应列表的页面出现——
+        // 播放页 CD 长按也走这个菜单，但那里没有列表可选，加了会是死选项。
+        val canBatch = batchPageOfCurrent() != null
+        if (canBatch) labels.add(getString(R.string.batch_select))
         val idxRemoveFromPlaylist = if (inCurrent) 4 else -1
-        val idxHide = labels.size - 1
+        val idxHide = labels.size - 1 - if (canBatch) 1 else 0
+        val idxBatch = if (canBatch) labels.size - 1 else -1
         AlertDialog.Builder(this)
             .setTitle(song.title)
             .setItems(labels.toTypedArray()) { _, which ->
@@ -3399,6 +3458,7 @@ class MainActivity : AppCompatActivity() {
                         refreshPlaylistsPage()
                     }
                     idxHide -> confirmHideSong(song)
+                    idxBatch -> enterBatchMode()
                 }
             }
             .show()
@@ -3417,6 +3477,85 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton(R.string.ok) { _, _ ->
                 HiddenStore.hideSong(this, song.uri.toString())
                 toast(getString(R.string.hide_song_done, song.title))
+                reapplyHiddenAndRefresh()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    // ---------- 批量删除（2.15，粉丝建议）----------
+
+    /**
+     * 当前页面是否支持批量选择。
+     *
+     * 只覆盖用 [SongAdapter] 的三个列表（歌单页 / 收藏 / 视频列表）。
+     * 搜索页用的是 [SearchAdapter]（分组折叠结构、item 索引与歌曲下标不是一回事），
+     * 硬接多选要重写它的选择模型——收益不抵风险，本轮不给它开这个入口。
+     */
+    private fun batchPageOfCurrent(): Page? = when (page) {
+        Page.PLAYLIST, Page.FAVORITES, Page.VIDEOS -> page
+        else -> null
+    }
+
+    /** 页面 → 它自己的 SongAdapter。 */
+    private fun adapterForPage(p: Page?): SongAdapter? = when (p) {
+        Page.PLAYLIST -> songAdapter
+        Page.FAVORITES -> favoritesAdapter
+        Page.VIDEOS -> videoAdapter
+        else -> null
+    }
+
+    private fun batchAdapter(): SongAdapter? = adapterForPage(batchPage)
+
+    /** 进入多选模式：顶部换成操作栏，点整行变成勾选。 */
+    private fun enterBatchMode() {
+        val p = batchPageOfCurrent() ?: return
+        val a = adapterForPage(p) ?: return
+        batchPage = p
+        a.onSelectionChanged = { updateBatchCount(it) }
+        a.setBatchMode(true)
+        batchBar.visibility = View.VISIBLE
+        updateBatchCount(0)
+    }
+
+    /**
+     * 退出多选模式。
+     * 先把 [batchPage] 置空再关 adapter，这样它的回调会因守卫直接返回，
+     * 不会在已经隐藏的操作栏上再写一次文案。
+     */
+    private fun exitBatchMode() {
+        val a = batchAdapter()
+        batchPage = null
+        a?.setBatchMode(false)
+        if (::batchBar.isInitialized) batchBar.visibility = View.GONE
+    }
+
+    private fun updateBatchCount(n: Int) {
+        if (batchPage == null || !::txtBatchCount.isInitialized) return
+        txtBatchCount.text = getString(R.string.batch_selected_count, n)
+        // 已全选时把按钮改成「取消全选」，省一个按钮位
+        val a = batchAdapter()
+        val all = a != null && a.itemCount > 0 && n == a.itemCount
+        batchBar.findViewById<Button>(R.id.btnBatchAll)?.text =
+            getString(if (all) R.string.batch_select_none else R.string.batch_select_all)
+    }
+
+    /** 确认后批量隐藏选中项（与单曲删除同一套「隐藏」语义，不碰手机文件）。 */
+    private fun confirmBatchDelete() {
+        val a = batchAdapter() ?: return
+        val songs = a.selectedSongs()
+        if (songs.isEmpty()) {
+            toast(getString(R.string.batch_none_selected))
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.batch_delete)
+            .setMessage(getString(R.string.batch_delete_confirm, songs.size))
+            .setPositiveButton(R.string.ok) { _, _ ->
+                // 一次写入（不是循环单条），选 50 首也只落盘一次
+                HiddenStore.hideSongs(this, songs.map { it.uri.toString() })
+                toast(getString(R.string.batch_delete_done, songs.size))
+                exitBatchMode()
                 reapplyHiddenAndRefresh()
             }
             .setNegativeButton(R.string.cancel, null)
@@ -3458,12 +3597,26 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    /** 离开收藏页：回歌单页——收藏是歌单页的子项（返回按钮与系统返回键共用）。 */
+    private fun leaveFavorites() {
+        openPlaylistsPage()
+    }
+
     /** 打开收藏列表页。 */
     private fun openFavorites() {
-        favoriteSongs = library?.allSongs?.filter {
-            FavoritesManager.isFavorite(this, it.uri.toString())
-        } ?: emptyList()
+        // 2.15：用一次 asSet() 过滤（原来在 filter 里逐首调 isFavorite 会重复解析 JSON，
+        // 曲库上千首时就是上千次 parse —— 粉丝反馈的「点收藏歌单明显卡顿」）。
+        val favSet = FavoritesManager.asSet(this)
+        val all = library?.allSongs
+        favoriteSongs = if (all == null) emptyList() else all.filter { it.uri.toString() in favSet }
         favoritesAdapter.submit(favoriteSongs)
+        // 三态提示（2.15）：曲库还没加载好时，收藏记录其实还在（只是匹配不到歌曲），
+        // 必须说清楚，否则用户会以为收藏被清空了（粉丝反馈的「覆盖安装丢收藏」可能就是这个观感）。
+        txtFavoritesEmpty.text = if (all == null && favSet.isNotEmpty()) {
+            getString(R.string.favorites_lib_not_ready)
+        } else {
+            getString(R.string.favorites_empty)
+        }
         txtFavoritesEmpty.visibility =
             if (favoriteSongs.isEmpty()) View.VISIBLE else View.GONE
         showPage(Page.FAVORITES)
@@ -3488,9 +3641,9 @@ class MainActivity : AppCompatActivity() {
         if (!::playlistsPageAdapter.isInitialized) return
         val items = mutableListOf<Playlist>()
         // 第一项恒为「收藏」：封面用收藏里第一首的封面，数量是收藏数
-        val favSongs = library?.allSongs?.filter {
-            FavoritesManager.isFavorite(this, it.uri.toString())
-        } ?: emptyList()
+        // 2.15：一次 asSet() 过滤（原来逐首 isFavorite 会重复解析 JSON → 卡顿）
+        val favSet = FavoritesManager.asSet(this)
+        val favSongs = library?.allSongs?.filter { it.uri.toString() in favSet } ?: emptyList()
         items.add(Playlist(favoritesEntryName, favSongs))
         // 自建歌单：按存储顺序（创建顺序）
         val own = CustomPlaylistStore.load(this)
@@ -5268,6 +5421,15 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_MIX_AUDIO = "mix_audio"
         private const val KEY_LIB_LAYOUT = "lib_layout"
         private const val KEY_SEEK_STEP = "seek_step"
+        /**
+         * 返回键回退级数（2.15）。
+         * 粉丝反馈「返回键回退的级数有点高，偏向返回主界面而非上一级」：
+         * 2.12 按 up 的建议做成了「歌词页返回直接跳队列来源列表」，现在需要让用户自己选。
+         * 0 = 逐级（歌词 → 播放页 → 列表，默认）；1 = 直跳（歌词 → 列表，2.12 旧行为）。
+         */
+        private const val KEY_BACK_STEP = "back_step"
+        private const val BACK_STEP_WISE = 0
+        private const val BACK_STEP_JUMP = 1
         private const val KEY_LYRIC_IDLE_COLOR = "lyric_idle_color"
         private const val IDLE_DEFAULT = 0 // -1 会与"未设"冲突，用 0 表示默认 text_normal
         // 1.30：新增主题靛蓝（八种主题色的第一种），共 9 色，每行 3 个正好三行
