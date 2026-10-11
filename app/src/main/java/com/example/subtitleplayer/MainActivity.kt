@@ -1503,10 +1503,9 @@ class MainActivity : AppCompatActivity() {
         } else {
             BgManager.apply(viewPlayer, bgUri)
             BgManager.apply(viewLyrics, bgUri)
-            // 没有自定义背景图时，播放页才用封面主色渐变（暗化保证可读）
-            if (bgUri == null) applyPlayerBackground(currentCoverBmp)
+            // 未设置背景图时采用主题纯色，让封面而不是整屏渐变成为主视觉。
         }
-        applyLyricTextOnCover(cover != null)
+        applyLyricTextOnCover(cover != null || bgUri != null)
     }
 
     /** 封面背景开关（设置-主题）。 */
@@ -1536,6 +1535,21 @@ class MainActivity : AppCompatActivity() {
         txtPlayerFolder.setTextColor(hint)
         txtTime.setTextColor(primary)
         txtImmersiveLyric.setTextColor(primary)
+        val iconTint = android.content.res.ColorStateList.valueOf(primary)
+        for (id in listOf(R.id.btnPrev, R.id.btnNext, R.id.btnTimer, R.id.btnPlayMode,
+            R.id.btnQueue, R.id.btnLyricsIcon, R.id.btnVideo)) {
+            findViewById<ImageButton>(id).imageTintList = iconTint
+        }
+        for (id in listOf(R.id.btnSeekBack, R.id.btnSpeed, R.id.btnSeekForward)) {
+            findViewById<TextView>(id).setTextColor(hint)
+        }
+        val night = resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        androidx.core.view.WindowCompat.getInsetsController(window, viewPlayer).apply {
+            isAppearanceLightStatusBars = !night
+            isAppearanceLightNavigationBars = !night
+        }
         // 译者行取色在适配器里，状态变了才重刷（避免每次刷背景都全量 notify）
         if (onCover != lastCoverTextState) {
             lastCoverTextState = onCover
