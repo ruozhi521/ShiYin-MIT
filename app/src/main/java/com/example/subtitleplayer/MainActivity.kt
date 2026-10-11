@@ -781,10 +781,9 @@ class MainActivity : AppCompatActivity() {
         txtPlayerFolder = findViewById(R.id.txtPlayerFolder)
         imgCd = findViewById(R.id.imgCd)
         imgCd.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-            val maxSide = (resources.displayMetrics.widthPixels / resources.displayMetrics.density - 40f)
-                .coerceAtLeast(0f)
-            val availableHeight = (viewPlayer.height - dp(250f)).coerceAtLeast(0).toFloat()
-            val side = minOf(dp(320f).toFloat(), maxSide, availableHeight).toInt()
+            // 使用封面容器实际尺寸（全部为 px），避免 dp/px 混算和小屏溢出。
+            val coverArea = imgCd.parent as View
+            val side = minOf(dp(320f), coverArea.width, coverArea.height).coerceAtLeast(0)
             val params = imgCd.layoutParams
             if (side > 0 && (params.width != side || params.height != side)) {
                 params.width = side
@@ -1116,6 +1115,9 @@ class MainActivity : AppCompatActivity() {
         navTabs.forEach { (m, v) ->
             v.setTextColor(if (m == module) accent else getColor(R.color.text_hint))
             v.typeface = if (m == module) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+            v.compoundDrawableTintList = android.content.res.ColorStateList.valueOf(
+                if (m == module) accent else getColor(R.color.text_hint)
+            )
         }
         when (module) {
             MODULE_DISCOVER -> showPage(Page.DISCOVER)
@@ -1135,8 +1137,21 @@ class MainActivity : AppCompatActivity() {
             val tv = android.widget.TextView(this).apply {
                 text = getString(navLabel(m))
                 gravity = android.view.Gravity.CENTER
-                setPadding(dp(10f), dp(10f), dp(10f), dp(10f))
-                textSize = 14f
+                setPadding(dp(4f), dp(6f), dp(4f), dp(6f))
+                textSize = 11f
+                minHeight = dp(56f)
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                val icon = when (m) {
+                    MODULE_DISCOVER -> R.drawable.ic_refresh
+                    MODULE_LIBRARY -> R.drawable.ic_folder_tinted
+                    MODULE_ARTISTS -> R.drawable.ic_music_tinted
+                    MODULE_VIDEO -> R.drawable.ic_video
+                    else -> R.drawable.ic_queue
+                }
+                setCompoundDrawablesWithIntrinsicBounds(0, icon, 0, 0)
+                compoundDrawablePadding = dp(4f)
+                background = getDrawable(android.R.drawable.list_selector_background)
                 layoutParams = android.widget.LinearLayout.LayoutParams(
                     0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f
                 )
@@ -1295,7 +1310,7 @@ class MainActivity : AppCompatActivity() {
         seekVideo.thumbTintList = sbList
         // 播放键图标保持白色（背景由全局遍历 tint，图标 tint 会与背景同色消失）
         // CD 圆形底（bg_play_circle）与全局按钮跟随主题色
-        imgCd.backgroundTintList = list
+        imgCd.backgroundTintList = null
         txtNowLyric.setTextColor(a)
         tintAccentViews(findViewById<View>(android.R.id.content), list)
         selectModule(currentModule)
@@ -1309,7 +1324,10 @@ class MainActivity : AppCompatActivity() {
 
     /** 递归遍历：所有 Button/ImageButton 的背景统一 tint 为主题色（覆盖 BtnStyle/bg_play_circle）。 */
     private fun tintAccentViews(view: View, list: android.content.res.ColorStateList) {
-        if (view is Button || view is ImageButton) {
+        if (view is Button) {
+            view.backgroundTintList = null
+            view.setTextColor(list)
+        } else if (view is ImageButton && view.id == R.id.btnPlayPlayer) {
             view.backgroundTintList = list
         }
         if (view is android.view.ViewGroup) {
@@ -2512,18 +2530,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateCdAnimation(playing: Boolean) {
-        val anim = cdAnimator
-            ?: ObjectAnimator.ofFloat(imgCd, View.ROTATION, 0f, 360f).apply {
-                duration = 20000
-                repeatCount = ObjectAnimator.INFINITE
-                repeatMode = ObjectAnimator.RESTART
-                interpolator = LinearInterpolator()
-            }.also { cdAnimator = it }
-        if (playing) {
-            if (!anim.isStarted) anim.start() else anim.resume()
-        } else {
-            if (anim.isStarted) anim.pause()
-        }
+        // 方形封面保持静止，避免旋转后裁切和阅读干扰。
+        cdAnimator?.cancel()
+        cdAnimator = null
+        imgCd.rotation = 0f
     }
 
     private fun scrollToLyric(idx: Int) {

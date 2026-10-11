@@ -105,4 +105,20 @@
         <item name="android:background">@color/divider</item>
     </style>
 
+    <style name="PlayerTool">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">48dp</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
+        <item name="android:tint">@color/text_normal</item>
+    </style>
+    <style name="PlayerSeekTool">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">48dp</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:gravity">center</item>
+        <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
+        <item name="android:textColor">@color/text_hint</item>
+        <item name="android:textSize">13sp</item>
+    </style>
 </resources>

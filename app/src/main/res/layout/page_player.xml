@@ -1,304 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
 <com.example.subtitleplayer.SwipeFrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/pagePlayer"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:background="@color/bg"
-    android:orientation="vertical"
-    android:paddingStart="20dp"
-    android:paddingEnd="20dp"
-    android:paddingTop="18dp"
-    android:paddingBottom="12dp"
-    android:visibility="gone">
-
-    <LinearLayout
-        android:id="@+id/playerHeader"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/btnBackSongs"
-            style="@style/BtnStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:minWidth="64dp"
-            android:text="@string/back" />
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="14dp"
-            android:layout_weight="1"
-            android:orientation="vertical">
-
-            <TextView
-                android:id="@+id/txtPlayerTitle"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:ellipsize="middle"
-                android:gravity="center"
-                android:singleLine="true"
-                android:textColor="@color/text_primary"
-                android:textSize="18sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/txtPlayerFolder"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:ellipsize="middle"
-                android:gravity="center"
-                android:singleLine="true"
-                android:textColor="@color/text_hint"
-                android:textSize="12sp" />
-        </LinearLayout>
-
-        <TextView
-            android:id="@+id/btnFavorite"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginEnd="10dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/favorite"
-            android:padding="10dp"
-            android:text="♡"
-            android:textColor="@color/text_hint"
-            android:textSize="24sp" />
-
-        <Button
-            android:id="@+id/btnLyrics"
-            style="@style/BtnStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:minWidth="48dp"
-            android:text="@string/lyric_btn" />
+    android:id="@+id/pagePlayer" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:paddingStart="24dp" android:paddingEnd="24dp"
+    android:paddingTop="8dp" android:paddingBottom="8dp" android:visibility="gone">
+    <LinearLayout android:id="@+id/playerHeader" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
+        <Button android:id="@+id/btnBackSongs" style="@style/BtnStyle" android:layout_width="wrap_content" android:layout_height="48dp" android:text="@string/back" />
+        <Space android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
+        <TextView android:id="@+id/btnFavorite" android:layout_width="48dp" android:layout_height="48dp" android:gravity="center" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="@string/favorite" android:text="♡" android:textColor="@color/text_hint" android:textSize="28sp" />
+        <Button android:id="@+id/btnLyrics" style="@style/BtnStyle" android:layout_width="wrap_content" android:layout_height="48dp" android:text="@string/lyric_btn" />
     </LinearLayout>
-
-    <!-- CD 唱片区 -->
-    <FrameLayout
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_marginTop="10dp"
-        android:layout_weight="1">
-
-        <ImageView
-            android:id="@+id/imgCd"
-            android:layout_width="280dp"
-            android:layout_height="280dp"
-            android:layout_gravity="center"
-            android:background="@drawable/bg_play_circle"
-            android:clipToOutline="true"
-            android:contentDescription="@string/cover"
-            android:scaleType="centerCrop"
-            android:src="@drawable/ic_music_tinted" />
-
-        <ImageView
-            android:id="@+id/imgCdHole"
-            android:layout_width="26dp"
-            android:layout_height="26dp"
-            android:layout_gravity="center"
-            android:background="@drawable/bg_cd_hole"
-            android:contentDescription="@string/cd_hole" />
+    <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:layout_marginTop="8dp">
+        <ImageView android:id="@+id/imgCd" android:layout_width="280dp" android:layout_height="280dp" android:layout_gravity="center" android:background="@drawable/bg_cover" android:clipToOutline="true" android:scaleType="centerCrop" android:contentDescription="@string/cover" android:src="@drawable/ic_music_tinted" />
+        <ImageView android:id="@+id/imgCdHole" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone" android:contentDescription="@string/cd_hole" />
     </FrameLayout>
-
-    <!-- 当前歌词行 -->
-    <TextView
-        android:id="@+id/txtNowLyric"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:background="@drawable/bg_mini"
-        android:ellipsize="middle"
-        android:gravity="center"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp"
-        android:paddingTop="12dp"
-        android:paddingBottom="12dp"
-        android:singleLine="true"
-        android:text="@string/no_lyric_now"
-        android:textColor="@color/accent"
-        android:textSize="18sp"
-        android:textStyle="bold" />
-
-    <!-- 沉浸模式歌词（多行） -->
-    <TextView
-        android:id="@+id/txtImmersiveLyric"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
-        android:gravity="center"
-        android:lineSpacingExtra="6dp"
-        android:textSize="16sp"
-        android:textColor="@color/text_primary"
-        android:visibility="gone" />
-
-    <SeekBar
-        android:id="@+id/seekBar"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:max="0" />
-
-    <TextView
-        android:id="@+id/txtTime"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center"
-        android:text="00:00 / 00:00"
-        android:textColor="@color/text_primary"
-        android:textSize="13sp" />
-
-    <!-- 主控行：上一首 / 播放 / 下一首 -->
-    <LinearLayout
-        android:id="@+id/playerControlsMain"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
-        android:gravity="center"
-        android:orientation="horizontal">
-
-        <ImageButton
-            android:id="@+id/btnPrev"
-            android:layout_width="52dp"
-            android:layout_height="52dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/prev"
-            android:src="@drawable/ic_prev"
-            android:tint="?attr/colorControlNormal" />
-
-        <ImageButton
-            android:id="@+id/btnPlayPlayer"
-            android:layout_width="84dp"
-            android:layout_height="84dp"
-            android:layout_marginStart="18dp"
-            android:layout_marginEnd="18dp"
-            android:background="@drawable/bg_play_circle"
-            android:contentDescription="@string/play"
-            android:src="@drawable/ic_play" />
-
-        <ImageButton
-            android:id="@+id/btnNext"
-            android:layout_width="52dp"
-            android:layout_height="52dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/next"
-            android:src="@drawable/ic_next"
-            android:tint="?attr/colorControlNormal" />
+    <TextView android:id="@+id/txtPlayerTitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:ellipsize="end" android:singleLine="true" android:textColor="@color/text_primary" android:textSize="26sp" android:textStyle="bold" />
+    <TextView android:id="@+id/txtPlayerFolder" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:ellipsize="middle" android:singleLine="true" android:textColor="@color/text_hint" android:textSize="13sp" />
+    <TextView android:id="@+id/txtNowLyric" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="18dp" android:minHeight="48dp" android:gravity="center_vertical" android:ellipsize="end" android:singleLine="true" android:text="@string/no_lyric_now" android:textColor="@color/accent" android:textSize="17sp" />
+    <TextView android:id="@+id/txtImmersiveLyric" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:lineSpacingExtra="6dp" android:textColor="@color/text_primary" android:textSize="16sp" android:visibility="gone" />
+    <SeekBar android:id="@+id/seekBar" android:layout_width="match_parent" android:layout_height="32dp" android:max="0" />
+    <TextView android:id="@+id/txtTime" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="end" android:text="00:00 / 00:00" android:textColor="@color/text_hint" android:textSize="12sp" />
+    <LinearLayout android:id="@+id/playerControlsMain" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:gravity="center">
+        <ImageButton android:id="@+id/btnPrev" android:layout_width="56dp" android:layout_height="56dp" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="@string/prev" android:src="@drawable/ic_prev" android:tint="@color/text_primary" />
+        <ImageButton android:id="@+id/btnPlayPlayer" android:layout_width="72dp" android:layout_height="72dp" android:layout_marginStart="24dp" android:layout_marginEnd="24dp" android:background="@drawable/bg_play_circle" android:contentDescription="@string/play" android:src="@drawable/ic_play" />
+        <ImageButton android:id="@+id/btnNext" android:layout_width="56dp" android:layout_height="56dp" android:background="?attr/selectableItemBackgroundBorderless" android:contentDescription="@string/next" android:src="@drawable/ic_next" android:tint="@color/text_primary" />
     </LinearLayout>
-
-    <!-- 功能行：定时 / 播放模式 / 队列 / 全屏歌词 -->
-    <LinearLayout
-        android:id="@+id/playerControlsExtra"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
-        android:background="@drawable/bg_mini"
-        android:gravity="center"
-        android:paddingTop="4dp"
-        android:paddingBottom="4dp"
-        android:orientation="horizontal">
-
-        <ImageButton
-            android:id="@+id/btnTimer"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/timer"
-            android:src="@drawable/ic_timer"
-            android:tint="?attr/colorControlNormal" />
-
-        <ImageButton
-            android:id="@+id/btnPlayMode"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:layout_marginStart="28dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/play_mode_sequence"
-            android:src="@drawable/ic_repeat"
-            android:tint="?attr/colorControlNormal" />
-
-        <ImageButton
-            android:id="@+id/btnQueue"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:layout_marginStart="28dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/queue"
-            android:src="@drawable/ic_queue"
-            android:tint="?attr/colorControlNormal" />
-
-        <ImageButton
-            android:id="@+id/btnLyricsIcon"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:layout_marginStart="28dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/lyrics_full"
-            android:src="@drawable/ic_lyric"
-            android:tint="?attr/colorControlNormal" />
-
-        <ImageButton
-            android:id="@+id/btnVideo"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:layout_marginStart="28dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/video_btn"
-            android:src="@drawable/ic_video"
-            android:tint="?attr/colorControlNormal"
-            android:visibility="gone" />
+    <LinearLayout android:id="@+id/playerControlsExtra" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="6dp" android:gravity="center">
+        <ImageButton android:id="@+id/btnTimer" style="@style/PlayerTool" android:contentDescription="@string/timer" android:src="@drawable/ic_timer" />
+        <ImageButton android:id="@+id/btnPlayMode" style="@style/PlayerTool" android:contentDescription="@string/play_mode_sequence" android:src="@drawable/ic_repeat" />
+        <ImageButton android:id="@+id/btnQueue" style="@style/PlayerTool" android:contentDescription="@string/queue" android:src="@drawable/ic_queue" />
+        <ImageButton android:id="@+id/btnLyricsIcon" style="@style/PlayerTool" android:contentDescription="@string/lyrics_full" android:src="@drawable/ic_lyric" />
+        <ImageButton android:id="@+id/btnVideo" style="@style/PlayerTool" android:contentDescription="@string/video_btn" android:src="@drawable/ic_video" android:visibility="gone" />
     </LinearLayout>
-
-    <LinearLayout
-        android:id="@+id/playerControlsSeek"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:gravity="center"
-        android:orientation="horizontal">
-
-        <TextView
-            android:id="@+id/btnSeekBack"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_mini"
-            android:paddingStart="16dp"
-            android:paddingEnd="16dp"
-            android:paddingTop="6dp"
-            android:paddingBottom="6dp"
-            android:text="-10s"
-            android:textColor="@color/text_primary"
-            android:textSize="13sp" />
-
-        <TextView
-            android:id="@+id/btnSpeed"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="12dp"
-            android:background="@drawable/bg_mini"
-            android:paddingStart="16dp"
-            android:paddingEnd="16dp"
-            android:paddingTop="6dp"
-            android:paddingBottom="6dp"
-            android:text="1x"
-            android:textColor="@color/text_primary"
-            android:textSize="13sp" />
-
-        <TextView
-            android:id="@+id/btnSeekForward"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="12dp"
-            android:background="@drawable/bg_mini"
-            android:paddingStart="16dp"
-            android:paddingEnd="16dp"
-            android:paddingTop="6dp"
-            android:paddingBottom="6dp"
-            android:text="+10s"
-            android:textColor="@color/text_primary"
-            android:textSize="13sp" />
+    <LinearLayout android:id="@+id/playerControlsSeek" android:layout_width="match_parent" android:layout_height="48dp" android:gravity="center">
+        <TextView android:id="@+id/btnSeekBack" style="@style/PlayerSeekTool" android:text="-10s" />
+        <TextView android:id="@+id/btnSpeed" style="@style/PlayerSeekTool" android:text="1x" />
+        <TextView android:id="@+id/btnSeekForward" style="@style/PlayerSeekTool" android:text="+10s" />
     </LinearLayout>
-
 </com.example.subtitleplayer.SwipeFrameLayout>
