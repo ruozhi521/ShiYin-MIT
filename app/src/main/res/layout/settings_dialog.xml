@@ -409,6 +409,37 @@
                 style="@style/SettingsHint"
                 android:text="@string/back_step_hint" />
 
+            <View style="@style/SettingsDivider" />
+
+            <TextView
+                style="@style/SettingsLabel"
+                android:layout_marginTop="10dp"
+                android:text="@string/video_tap_zone_label" />
+
+            <RadioGroup
+                android:id="@+id/rgVideoTapZone"
+                style="@style/SettingsSegment">
+
+                <RadioButton
+                    style="@style/SettingsSegItem"
+                    android:tag="33"
+                    android:text="@string/video_tap_zone_third" />
+
+                <RadioButton
+                    style="@style/SettingsSegItem"
+                    android:tag="50"
+                    android:text="@string/video_tap_zone_half" />
+
+                <RadioButton
+                    style="@style/SettingsSegItem"
+                    android:tag="66"
+                    android:text="@string/video_tap_zone_two_thirds" />
+            </RadioGroup>
+
+            <TextView
+                style="@style/SettingsHint"
+                android:text="@string/video_tap_zone_hint" />
+
             <Button
                 android:id="@+id/btnEqSettings"
                 style="@style/BtnStyle"

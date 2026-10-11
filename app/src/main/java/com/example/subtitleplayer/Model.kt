@@ -30,7 +30,9 @@ data class LyricRef(
 /** 一个歌单（对应扫描到的一个文件夹）。 */
 data class Playlist(
     val name: String,
-    val songs: List<Song>
+    val songs: List<Song>,
+    /** 曲库尚未就绪时可显示持久化记录数量；正常歌单仍使用 songs.size。 */
+    val displayCount: Int? = null
 )
 
 /**

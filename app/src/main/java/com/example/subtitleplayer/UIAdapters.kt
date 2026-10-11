@@ -86,7 +86,7 @@ class PlaylistGridAdapter(
         holder.name.text = playlist.name
         holder.name.setTextSize(uiSizeSp)
         holder.count.text = holder.itemView.context
-            .getString(R.string.songs_count, playlist.songs.size)
+            .getString(R.string.songs_count, playlist.displayCount ?: playlist.songs.size)
         holder.cover.setImageResource(R.drawable.ic_folder_tinted)
         val song = playlist.songs.firstOrNull()
         val custom = CoverManager.playlistCover(holder.itemView.context, playlist.name)

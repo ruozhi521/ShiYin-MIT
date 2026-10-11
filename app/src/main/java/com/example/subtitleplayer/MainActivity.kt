@@ -928,6 +928,7 @@ class MainActivity : AppCompatActivity() {
                 when (mode) {
                     MediaPlaybackService.MODE_SHUFFLE -> getString(R.string.play_mode_shuffle)
                     MediaPlaybackService.MODE_REPEAT_ONE -> getString(R.string.play_mode_repeat_one)
+                    MediaPlaybackService.MODE_SEQUENCE_STOP -> getString(R.string.play_mode_sequence_stop)
                     else -> getString(R.string.play_mode_sequence)
                 }
             )
@@ -1676,6 +1677,7 @@ class MainActivity : AppCompatActivity() {
         val (icon, label) = when (mode) {
             MediaPlaybackService.MODE_SHUFFLE -> R.drawable.ic_shuffle to R.string.play_mode_shuffle
             MediaPlaybackService.MODE_REPEAT_ONE -> R.drawable.ic_repeat_one to R.string.play_mode_repeat_one
+            MediaPlaybackService.MODE_SEQUENCE_STOP -> R.drawable.ic_repeat to R.string.play_mode_sequence_stop
             else -> R.drawable.ic_repeat to R.string.play_mode_sequence
         }
         btn.setImageResource(icon)
@@ -2637,9 +2639,11 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.sleep_30),
             getString(R.string.sleep_45),
             getString(R.string.sleep_60),
+            getString(R.string.sleep_90),
+            getString(R.string.sleep_120),
             getString(R.string.sleep_cancel)
         )
-        val minutes = intArrayOf(15, 30, 45, 60, 0)
+        val minutes = intArrayOf(15, 30, 45, 60, 90, 120, 0)
         AlertDialog.Builder(this)
             .setTitle(R.string.sleep_title)
             .setItems(options) { _, which ->
@@ -2700,6 +2704,8 @@ class MainActivity : AppCompatActivity() {
         // 2.15：返回键级数（0 逐级 / 1 直跳）
         val rgBackStep = view.findViewById<RadioGroup>(R.id.rgBackStep)
         checkByTag(rgBackStep, prefs.getInt(KEY_BACK_STEP, BACK_STEP_WISE))
+        val rgVideoTapZone = view.findViewById<RadioGroup>(R.id.rgVideoTapZone)
+        checkByTag(rgVideoTapZone, prefs.getInt(KEY_VIDEO_TAP_ZONE, VIDEO_TAP_ZONE_DEFAULT))
         val chkAlarmPlay = view.findViewById<CheckBox>(R.id.chkAlarmPlay)
         chkAlarmPlay.isChecked = prefs.getBoolean(MediaPlaybackService.KEY_ALARM_ON, false)
         val chkAlarmOnce = view.findViewById<CheckBox>(R.id.chkAlarmOnce)
@@ -2779,6 +2785,7 @@ class MainActivity : AppCompatActivity() {
                     .putString(KEY_LIB_LAYOUT, if (tagOf(rgLibLayout) == 1) "tree" else "grid")
                     .putInt(KEY_SEEK_STEP, tagOf(rgSeekStep))
                     .putInt(KEY_BACK_STEP, tagOf(rgBackStep))
+                    .putInt(KEY_VIDEO_TAP_ZONE, tagOf(rgVideoTapZone))
                     .apply()
                 applyAppearance()
                 applyLibLayout()
@@ -3672,8 +3679,16 @@ class MainActivity : AppCompatActivity() {
         // 第一项恒为「收藏」：封面用收藏里第一首的封面，数量是收藏数
         // 2.15：一次 asSet() 过滤（原来逐首 isFavorite 会重复解析 JSON → 卡顿）
         val favSet = FavoritesManager.asSet(this)
-        val favSongs = library?.allSongs?.filter { it.uri.toString() in favSet } ?: emptyList()
-        items.add(Playlist(favoritesEntryName, favSongs))
+        val lib = library
+        val favSongs = lib?.allSongs?.filter { it.uri.toString() in favSet } ?: emptyList()
+        // 曲库未就绪时仍显示持久化收藏数量，避免首页出现误导性的「收藏 0 首」。
+        items.add(
+            Playlist(
+                favoritesEntryName,
+                favSongs,
+                displayCount = if (lib == null) favSet.size else null
+            )
+        )
         // 自建歌单：按存储顺序（创建顺序）
         val own = CustomPlaylistStore.load(this)
         for ((name, uris) in own) {
@@ -4151,7 +4166,8 @@ class MainActivity : AppCompatActivity() {
                     val svc = playbackService
                     val dur = svc?.currentDuration() ?: 0
                     val pos = svc?.currentPosition() ?: 0
-                    if (videoDownX < v.width / 2f) {
+                    val leftZone = v.width * videoTapZonePercent() / 100f
+                    if (videoDownX < leftZone) {
                         svc?.seekTo((pos - 10000).coerceAtLeast(0))
                     } else {
                         svc?.seekTo((pos + 10000).coerceAtMost(dur))
@@ -5227,6 +5243,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun seekStepSeconds(): Int = prefs.getInt(KEY_SEEK_STEP, 10)
 
+    /** 视频左侧回退区域百分比，旧版本默认 50%。 */
+    private fun videoTapZonePercent(): Int = prefs.getInt(
+        KEY_VIDEO_TAP_ZONE,
+        VIDEO_TAP_ZONE_DEFAULT
+    ).coerceIn(33, 66)
+
     /** 相对当前进度快进/快退 N 秒（播放页按钮）。 */
     private fun seekRelative(deltaMs: Int) {
         val svc = playbackService ?: return
@@ -5475,6 +5497,8 @@ class MainActivity : AppCompatActivity() {
          * 0 = 逐级（歌词 → 播放页 → 列表，默认）；1 = 直跳（歌词 → 列表，2.12 旧行为）。
          */
         private const val KEY_BACK_STEP = "back_step"
+        private const val KEY_VIDEO_TAP_ZONE = "video_tap_zone"
+        private const val VIDEO_TAP_ZONE_DEFAULT = 50
         private const val BACK_STEP_WISE = 0
         private const val BACK_STEP_JUMP = 1
         private const val KEY_LYRIC_IDLE_COLOR = "lyric_idle_color"

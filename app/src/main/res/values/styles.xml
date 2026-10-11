@@ -7,10 +7,10 @@
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_marginStart">8dp</item>
-        <item name="android:layout_marginTop">18dp</item>
-        <item name="android:layout_marginBottom">6dp</item>
+        <item name="android:layout_marginTop">22dp</item>
+        <item name="android:layout_marginBottom">8dp</item>
         <item name="android:textColor">@color/text_hint</item>
-        <item name="android:textSize">12sp</item>
+        <item name="android:textSize">11sp</item>
         <item name="android:letterSpacing">0.08</item>
     </style>
 
@@ -20,8 +20,9 @@
         <item name="android:layout_height">wrap_content</item>
         <item name="android:orientation">vertical</item>
         <item name="android:background">@drawable/bg_mini</item>
-        <item name="android:paddingTop">2dp</item>
-        <item name="android:paddingBottom">6dp</item>
+        <item name="android:elevation">1dp</item>
+        <item name="android:paddingTop">4dp</item>
+        <item name="android:paddingBottom">8dp</item>
     </style>
 
     <!-- 开关行：文字在左、勾选框在右（rtl 方向 + 重力左对齐实现），整行可点 -->
@@ -30,9 +31,9 @@
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layoutDirection">rtl</item>
         <item name="android:gravity">left|center_vertical</item>
-        <item name="android:minHeight">48dp</item>
-        <item name="android:paddingStart">14dp</item>
-        <item name="android:paddingEnd">14dp</item>
+        <item name="android:minHeight">52dp</item>
+        <item name="android:paddingStart">16dp</item>
+        <item name="android:paddingEnd">16dp</item>
         <item name="android:textColor">@color/text_primary</item>
         <item name="android:textSize">15sp</item>
         <item name="android:background">?android:attr/selectableItemBackground</item>

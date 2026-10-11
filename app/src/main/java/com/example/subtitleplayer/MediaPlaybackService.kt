@@ -71,6 +71,8 @@ class MediaPlaybackService : Service() {
         const val MODE_SEQUENCE = 0
         const val MODE_SHUFFLE = 1
         const val MODE_REPEAT_ONE = 2
+        /** 顺序播放，播完当前队列最后一首后暂停。 */
+        const val MODE_SEQUENCE_STOP = 3
     }
 
     private val binder = PlaybackBinder()
@@ -415,7 +417,7 @@ class MediaPlaybackService : Service() {
 
     /** 点击循环切换模式，返回新模式。 */
     fun cyclePlayMode(): Int {
-        val next = (getPlayMode() + 1) % 3
+        val next = (getPlayMode() + 1) % 4
         getSharedPreferences("player", Context.MODE_PRIVATE)
             .edit().putInt(KEY_PLAY_MODE, next).apply()
         return next
@@ -771,6 +773,15 @@ class MediaPlaybackService : Service() {
                         if (songs.size > 1) {
                             index = randomIndex()
                             playCurrent()
+                        }
+                    }
+                    MODE_SEQUENCE_STOP -> {
+                        if (index < songs.lastIndex) {
+                            index++
+                            playCurrent()
+                        } else {
+                            pause()
+                            PlaybackLog.log("sequence stop: reached playlist end")
                         }
                     }
                     else -> playNext()
