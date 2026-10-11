@@ -257,8 +257,16 @@ class MainActivity : AppCompatActivity() {
     }
     /** 本次会话是否已执行过断点续播（后台静默重扫不再重复拉起）。 */
     private var resumedLastSong = false
-    private val translationCache by lazy {
-        LyricTranslationCache.load(this)
+    private val translationCaches by lazy {
+        LyricTranslationCache.loadByProvider(this)
+    }
+
+    /** 当前 provider 的缓存视图；切换服务商后不会读到其他引擎的译文。 */
+    private val translationCache: MutableMap<String, MutableMap<Int, String>>
+        get() = translationCaches.getOrPut(translationProvider().id) { HashMap() }
+
+    private fun saveTranslationCaches() {
+        LyricTranslationCache.saveByProvider(applicationContext, translationCaches)
     }
 
     // ---- 歌词校准（2.2）：整体 ± 偏移，应用内立即生效 + 防抖写回歌词文件 ----
@@ -772,6 +780,18 @@ class MainActivity : AppCompatActivity() {
         txtPlayerTitle = findViewById(R.id.txtPlayerTitle)
         txtPlayerFolder = findViewById(R.id.txtPlayerFolder)
         imgCd = findViewById(R.id.imgCd)
+        imgCd.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            val maxSide = (resources.displayMetrics.widthPixels / resources.displayMetrics.density - 40f)
+                .coerceAtLeast(0f)
+            val availableHeight = (viewPlayer.height - dp(250f)).coerceAtLeast(0).toFloat()
+            val side = minOf(dp(320f).toFloat(), maxSide, availableHeight).toInt()
+            val params = imgCd.layoutParams
+            if (side > 0 && (params.width != side || params.height != side)) {
+                params.width = side
+                params.height = side
+                imgCd.layoutParams = params
+            }
+        }
         imgCd.setOnLongClickListener {
             val idx = playbackService?.currentIndex() ?: -1
             currentSongs.getOrNull(idx)?.let { showSongMenu(it) }
@@ -3173,21 +3193,88 @@ class MainActivity : AppCompatActivity() {
 
     private fun showTransSettingsDialog() {
         val view = layoutInflater.inflate(R.layout.trans_dialog, null)
+        val providerSpinner = view.findViewById<android.widget.Spinner>(R.id.spTransProvider)
+        val providerIndex = when (translationProvider()) {
+            TranslationProvider.BAIDU -> 1
+            TranslationProvider.YOUDAO -> 2
+            TranslationProvider.OPENAI -> 0
+        }
         val etBase = view.findViewById<android.widget.EditText>(R.id.etTransBase)
         val etKey = view.findViewById<android.widget.EditText>(R.id.etTransKey)
         val etModel = view.findViewById<android.widget.EditText>(R.id.etTransModel)
-        etBase.setText(prefs.getString(KEY_TRANS_BASE, ""))
-        etKey.setText(prefs.getString(KEY_TRANS_KEY, ""))
-        etModel.setText(prefs.getString(KEY_TRANS_MODEL, ""))
+        var loadedProvider = translationProvider()
+        val drafts = mutableMapOf<TranslationProvider, Triple<String, String, String>>()
+        fun stashProviderFields(provider: TranslationProvider) {
+            drafts[provider] = Triple(
+                etBase.text.toString().trim(),
+                etKey.text.toString().trim(),
+                etModel.text.toString().trim()
+            )
+        }
+        fun loadProviderFields(provider: TranslationProvider) {
+            val prefix = provider.id
+            val draft = drafts[provider]
+            etBase.setText(draft?.first ?: prefs.getString("${prefix}_base", if (provider == TranslationProvider.OPENAI) prefs.getString(KEY_TRANS_BASE, "") else ""))
+            etKey.setText(draft?.second ?: prefs.getString("${prefix}_key", if (provider == TranslationProvider.OPENAI) prefs.getString(KEY_TRANS_KEY, "") else ""))
+            etModel.setText(draft?.third ?: prefs.getString("${prefix}_model", if (provider == TranslationProvider.OPENAI) prefs.getString(KEY_TRANS_MODEL, "") else ""))
+            etBase.hint = getString(
+                when (provider) {
+                    TranslationProvider.OPENAI -> R.string.trans_base_hint
+                    TranslationProvider.BAIDU -> R.string.trans_baidu_app_id
+                    TranslationProvider.YOUDAO -> R.string.trans_youdao_app_id
+                }
+            )
+            etKey.hint = getString(
+                when (provider) {
+                    TranslationProvider.OPENAI -> R.string.trans_key_hint
+                    TranslationProvider.BAIDU -> R.string.trans_baidu_secret
+                    TranslationProvider.YOUDAO -> R.string.trans_youdao_secret
+                }
+            )
+            etModel.visibility = if (provider == TranslationProvider.OPENAI) View.VISIBLE else View.GONE
+        }
+        providerSpinner.setSelection(providerIndex)
+        loadProviderFields(translationProvider())
+        providerSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, item: View?, position: Int, id: Long) {
+                val provider = when (position) {
+                    1 -> TranslationProvider.BAIDU
+                    2 -> TranslationProvider.YOUDAO
+                    else -> TranslationProvider.OPENAI
+                }
+                if (provider != loadedProvider) {
+                    stashProviderFields(loadedProvider)
+                    loadedProvider = provider
+                }
+                loadProviderFields(provider)
+            }
+        }
         AlertDialog.Builder(this)
             .setTitle(R.string.trans_settings)
             .setView(view)
             .setPositiveButton(R.string.trans_save) { _, _ ->
+                val provider = when (providerSpinner.selectedItemPosition) {
+                    1 -> TranslationProvider.BAIDU
+                    2 -> TranslationProvider.YOUDAO
+                    else -> TranslationProvider.OPENAI
+                }
+                val base = etBase.text.toString().trim()
+                val key = etKey.text.toString().trim()
+                val model = etModel.text.toString().trim()
                 prefs.edit()
-                    .putString(KEY_TRANS_BASE, etBase.text.toString().trim())
-                    .putString(KEY_TRANS_KEY, etKey.text.toString().trim())
-                    .putString(KEY_TRANS_MODEL, etModel.text.toString().trim())
+                    .putString(KEY_TRANS_PROVIDER, provider.id)
+                    .putString("${provider.id}_base", base)
+                    .putString("${provider.id}_key", key)
+                    .putString("${provider.id}_model", model)
                     .apply()
+                if (provider == TranslationProvider.OPENAI) {
+                    prefs.edit()
+                        .putString(KEY_TRANS_BASE, base)
+                        .putString(KEY_TRANS_KEY, key)
+                        .putString(KEY_TRANS_MODEL, model)
+                        .apply()
+                }
                 toast(getString(R.string.trans_saved))
             }
             .setNegativeButton(R.string.cancel, null)
@@ -4266,12 +4353,58 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun translationConfig(): LyricTranslator.Config? =
-        LyricTranslator.configFrom(
-            prefs.getString(KEY_TRANS_BASE, null),
-            prefs.getString(KEY_TRANS_KEY, null),
-            prefs.getString(KEY_TRANS_MODEL, null)
-        )
+    private fun translationProvider(): TranslationProvider =
+        when (prefs.getString(KEY_TRANS_PROVIDER, TranslationProvider.OPENAI.id)) {
+            TranslationProvider.BAIDU.id -> TranslationProvider.BAIDU
+            TranslationProvider.YOUDAO.id -> TranslationProvider.YOUDAO
+            else -> TranslationProvider.OPENAI
+        }
+
+    private fun translationConfig(): TranslationConfig {
+        val provider = translationProvider()
+        val base = prefs.getString("${provider.id}_base", null)
+            ?: if (provider == TranslationProvider.OPENAI) prefs.getString(KEY_TRANS_BASE, null).orEmpty() else ""
+        val key = prefs.getString("${provider.id}_key", null)
+            ?: if (provider == TranslationProvider.OPENAI) prefs.getString(KEY_TRANS_KEY, null).orEmpty() else ""
+        val model = prefs.getString("${provider.id}_model", null)
+            ?: if (provider == TranslationProvider.OPENAI) prefs.getString(KEY_TRANS_MODEL, null).orEmpty() else ""
+        return when (provider) {
+            TranslationProvider.BAIDU -> TranslationConfig(
+                provider = provider,
+                appId = base,
+                secretKey = key
+            )
+            TranslationProvider.YOUDAO -> TranslationConfig(
+                provider = provider,
+                appId = base,
+                secretKey = key
+            )
+            TranslationProvider.OPENAI -> TranslationConfig(
+                provider = provider,
+                baseUrl = base,
+                apiKey = key,
+                model = model
+            )
+        }
+    }
+
+    private fun translationEngine(): TranslationEngine =
+        TranslationEngines.forProvider(translationProvider())
+
+    private fun hasTranslationConfig(): Boolean {
+        val provider = translationProvider()
+        val base = prefs.getString("${provider.id}_base", null)
+            ?: if (provider == TranslationProvider.OPENAI) prefs.getString(KEY_TRANS_BASE, null).orEmpty() else ""
+        val key = prefs.getString("${provider.id}_key", null)
+            ?: if (provider == TranslationProvider.OPENAI) prefs.getString(KEY_TRANS_KEY, null).orEmpty() else ""
+        val baseValue = base.trim()
+        val keyValue = key.trim()
+        return if (provider == TranslationProvider.OPENAI) {
+            keyValue.isNotEmpty()
+        } else {
+            baseValue.isNotEmpty() && keyValue.isNotEmpty()
+        }
+    }
 
     /**
      * 该行是否已达重试上限、应跳过（2.13 熔断）。
@@ -4287,7 +4420,7 @@ class MainActivity : AppCompatActivity() {
     private fun recordTranslateAttempt(
         uriKey: String,
         attempted: List<Pair<Int, String>>,
-        result: LyricTranslator.TransResult
+        result: EngineTranslationResult
     ) {
         val m = transFailCount.getOrPut(uriKey) { HashMap() }
         for ((line, _) in attempted) {
@@ -4305,12 +4438,13 @@ class MainActivity : AppCompatActivity() {
             toast(getString(R.string.no_lyric))
             return
         }
-        val cfg = translationConfig()
-        if (cfg == null) {
+        if (!hasTranslationConfig()) {
             toast(getString(R.string.trans_no_key))
             showTransSettingsDialog()
             return
         }
+        val cfg = translationConfig()
+        val engine = translationEngine()
         if (translating) return
         translating = true
         val requestGeneration = armTranslationTimeout()
@@ -4334,9 +4468,9 @@ class MainActivity : AppCompatActivity() {
 
         Thread {
             val result = try {
-                LyricTranslator.translate(toTranslate, cfg)
+                engine.translate(toTranslate, cfg)
             } catch (e: Exception) {
-                LyricTranslator.TransResult(emptyMap(), "请求异常：${e.message}")
+                EngineTranslationResult(emptyMap(), "请求异常：${e.message}")
             }
             runOnUiThread {
                 if (translationGeneration != requestGeneration) return@runOnUiThread
@@ -4345,7 +4479,7 @@ class MainActivity : AppCompatActivity() {
                 btnTranslate.text = getString(R.string.translate)
                 // 译文永远写进发起请求那首歌的缓存（reqKey），与当前播放哪首无关
                 cache.putAll(result.translations)
-                LyricTranslationCache.save(applicationContext, translationCache)
+                saveTranslationCaches()
                 // 只有请求发起时的歌仍是当前歌，才刷新界面状态，避免旧歌数据串进新歌（1.30）
                 if (lastSong?.uri?.toString() == reqKey) {
                     transFailedLines = toTranslate.filter { it.first !in result.translations }
@@ -4393,7 +4527,7 @@ class MainActivity : AppCompatActivity() {
                     return@setPositiveButton
                 }
                 translationCache.remove(uriKey)
-                LyricTranslationCache.save(applicationContext, translationCache)
+                saveTranslationCaches()
                 transFailedLines = emptyList()
                 lyricAdapter.setTranslations(emptyMap())
                 playbackService?.reloadLyricTranslations()
@@ -4638,7 +4772,7 @@ class MainActivity : AppCompatActivity() {
         if (!prefs.getBoolean(KEY_AUTO_TRANS, false)) return
         if (song == null || lines.isEmpty()) return
         if (translating) return
-        if (translationConfig() == null) return
+        if (!hasTranslationConfig()) return
         val uriKey = song.uri.toString()
         if (translationCache.containsKey(uriKey)) return
         if (LyricTranslator.isChinesePrimarily(lines)) return
@@ -4899,7 +5033,8 @@ class MainActivity : AppCompatActivity() {
                     // 另外：非当前播放歌的识别不做逐窗翻译——逐窗翻译只为「边听边出」预览，
                     // 非当前歌没有预览需求，等识别完成后一次翻完更省（走 translateGeneratedLyrics）。
                     val cfg = translationConfig()
-                    if (cfg != null && asrLiveUri != null) {
+                    val engine = translationEngine()
+                    if (hasTranslationConfig() && asrLiveUri != null) {
                         try {
                             val cache = translationCache.getOrPut(uriKey) { HashMap() }
                             // 增量：只取「行号 ≥ 上次已提交游标」的新增行
@@ -4912,13 +5047,13 @@ class MainActivity : AppCompatActivity() {
                                 asrTranslatedLineCount = linesSoFar.size
                                 if (todo.isNotEmpty()) {
                                     val result = try {
-                                        LyricTranslator.translate(todo, cfg)
+                                        engine.translate(todo, cfg)
                                     } catch (e: Exception) {
-                                        LyricTranslator.TransResult(emptyMap(), "请求异常：${e.message}")
+                                        EngineTranslationResult(emptyMap(), "请求异常：${e.message}")
                                     }
                                     if (result.translations.isNotEmpty()) {
                                         cache.putAll(result.translations)
-                                        LyricTranslationCache.save(applicationContext, translationCache)
+                                        saveTranslationCaches()
                                     }
                                     // 记账：成功清空失败计数；失败累计（超限后 shouldSkipLine 拦掉）
                                     recordTranslateAttempt(uriKey, todo, result)
@@ -4965,7 +5100,7 @@ class MainActivity : AppCompatActivity() {
                     PlaybackLog.log("asr transcribe ok=$ok msg=$msg saved=$savedWhere lines=${lines?.size}")
                     if (ok) {
                         val cfg = translationConfig()
-                        if (cfg != null && lines != null && translationCache[uriKey].isNullOrEmpty()) {
+                        if (lines != null && translationCache[uriKey].isNullOrEmpty()) {
                             // 兜底：逐窗翻译全部失败过，至少补一次完整翻译
                             translateGeneratedLyrics(uriKey, lines)
                         }
@@ -5005,12 +5140,13 @@ class MainActivity : AppCompatActivity() {
             toast(getString(R.string.trans_busy))
             return
         }
-        val cfg = translationConfig()
-        if (cfg == null) {
+        if (!hasTranslationConfig()) {
             toast(getString(R.string.trans_no_key))
             showTransSettingsDialog()
             return
         }
+        val cfg = translationConfig()
+        val engine = translationEngine()
         translating = true
         val requestGeneration = armTranslationTimeout()
         toast(getString(R.string.asr_translating))
@@ -5023,15 +5159,15 @@ class MainActivity : AppCompatActivity() {
         }
         Thread {
             val result = try {
-                LyricTranslator.translate(toTranslate, cfg)
+                engine.translate(toTranslate, cfg)
             } catch (e: Exception) {
-                LyricTranslator.TransResult(emptyMap(), "请求异常：${e.message}")
+                EngineTranslationResult(emptyMap(), "请求异常：${e.message}")
             }
             runOnUiThread {
                 if (translationGeneration != requestGeneration) return@runOnUiThread
                 finishTranslationState()
                 cache.putAll(result.translations)
-                LyricTranslationCache.save(applicationContext, translationCache)
+                saveTranslationCaches()
                 if (lastSong?.uri?.toString() == uriKey) {
                     lyricAdapter.setTranslations(translationCache[uriKey] ?: emptyMap())
                     playbackService?.reloadLyricTranslations()
@@ -5460,6 +5596,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_LYRIC_SIZE = "lyric_size"
         private const val KEY_UI_SIZE = "ui_size"
         private const val KEY_LYRIC_FONT = "lyric_font"
+        private const val KEY_TRANS_PROVIDER = "trans_provider"
         private const val KEY_TRANS_BASE = "trans_base"
         private const val KEY_TRANS_KEY = "trans_key"
         private const val KEY_TRANS_MODEL = "trans_model"

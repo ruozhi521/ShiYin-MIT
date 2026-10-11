@@ -7,6 +7,14 @@
     android:paddingEnd="20dp"
     android:paddingTop="8dp">
 
+    <Spinner
+        android:id="@+id/spTransProvider"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_mini"
+        android:entries="@array/trans_provider_entries"
+        android:padding="10dp" />
+
     <EditText
         android:id="@+id/etTransBase"
         android:layout_width="match_parent"

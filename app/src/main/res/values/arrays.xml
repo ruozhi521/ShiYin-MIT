@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="trans_provider_entries">
+        <item>AI（OpenAI 兼容）</item>
+        <item>百度翻译</item>
+        <item>有道翻译</item>
+    </string-array>
+</resources>

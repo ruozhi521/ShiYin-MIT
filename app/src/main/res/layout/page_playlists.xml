@@ -8,8 +8,12 @@
     android:id="@+id/pagePlaylists"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/bg"
     android:orientation="vertical"
-    android:padding="12dp"
+    android:paddingStart="20dp"
+    android:paddingEnd="20dp"
+    android:paddingTop="24dp"
+    android:paddingBottom="8dp"
     android:visibility="gone">
 
     <LinearLayout
@@ -27,7 +31,7 @@
             android:singleLine="true"
             android:text="@string/playlists_title"
             android:textColor="@color/text_primary"
-            android:textSize="18sp"
+            android:textSize="28sp"
             android:textStyle="bold" />
 
         <Button
@@ -54,7 +58,7 @@
         android:id="@+id/recyclerPlaylistsPage"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="20dp"
         android:layout_weight="1"
         android:clipToPadding="false"
         android:paddingBottom="12dp" />

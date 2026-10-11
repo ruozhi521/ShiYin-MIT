@@ -1103,9 +1103,10 @@ class MediaPlaybackService : Service() {
     private fun parseLyric(song: Song) {
         lyricLines = emptyList()
         lyricName = null
-        // 载入该歌的本地译文缓存（桌面歌词双行显示用）
+        // 载入当前翻译引擎的本地译文缓存（桌面歌词双行显示用）
         lyricTrans = try {
-            LyricTranslationCache.load(this)[song.uri.toString()] ?: emptyMap()
+            LyricTranslationCache.loadForProvider(this, currentTranslationProvider())[song.uri.toString()]
+                ?: emptyMap()
         } catch (e: Exception) {
             emptyMap()
         }
@@ -1186,11 +1187,17 @@ class MediaPlaybackService : Service() {
         }
     }
 
+    private fun currentTranslationProvider(): String =
+        getSharedPreferences("player", Context.MODE_PRIVATE)
+            .getString("trans_provider", TranslationProvider.OPENAI.id)
+            ?: TranslationProvider.OPENAI.id
+
     /** 翻译完成后由 Activity 调用：重新载入当前歌的译文缓存，刷新桌面歌词。 */
     fun reloadLyricTranslations() {
         val song = currentSong() ?: return
         lyricTrans = try {
-            LyricTranslationCache.load(this)[song.uri.toString()] ?: emptyMap()
+            LyricTranslationCache.loadForProvider(this, currentTranslationProvider())[song.uri.toString()]
+                ?: emptyMap()
         } catch (e: Exception) {
             emptyMap()
         }
