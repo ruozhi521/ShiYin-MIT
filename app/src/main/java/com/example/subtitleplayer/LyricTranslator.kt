@@ -68,7 +68,11 @@ object LyricTranslator {
         return cjk.toFloat() / total >= 0.3f
     }
 
-    private const val BATCH_SIZE = 15
+    // 45 行一批可显著减少长音频的请求次数，同时仍留出足够空间给逐行译文。
+    private const val BATCH_SIZE = 45
+    private const val MAX_OUTPUT_TOKENS_PER_LINE = 64
+    private const val MIN_MAX_TOKENS = 1024
+    private const val MAX_MAX_TOKENS = 4096
     private const val CONNECT_TIMEOUT = 10000
     private const val READ_TIMEOUT = 60000
 
@@ -141,9 +145,14 @@ object LyricTranslator {
     ): TransResult {
         try {
             val userContent = batch.joinToString("\n") { (idx, text) -> "$idx|$text" }
+            val maxTokens = (batch.size * MAX_OUTPUT_TOKENS_PER_LINE)
+                .coerceIn(MIN_MAX_TOKENS, MAX_MAX_TOKENS)
             val body = JSONObject()
                 .put("model", config.model)
                 .put("temperature", 0.3)
+                .put("max_tokens", maxTokens)
+                // DeepSeek 等模型默认可能启用思维链；翻译任务不需要额外推理输出。
+                .put("thinking", JSONObject().put("type", "disabled"))
                 .put(
                     "messages",
                     JSONArray()
@@ -173,6 +182,7 @@ object LyricTranslator {
                     val respText = conn.inputStream.use {
                         it.readBytes().toString(Charsets.UTF_8)
                     }
+                    logUsage(respText, batch.size)
                     val expected = batch.map { it.first }.toSet()
                     val parsed = parseAny(respText, expected)
                     if (parsed.isEmpty()) {
@@ -283,6 +293,24 @@ object LyricTranslator {
             }
         }
         return result
+    }
+
+    /** 记录服务端返回的 token 用量，便于确认思维链和缓存是否造成额外成本。 */
+    private fun logUsage(respText: String, batchSize: Int) {
+        try {
+            val usage = JSONObject(respText).optJSONObject("usage") ?: return
+            val completion = usage.optInt("completion_tokens", -1)
+            val promptCacheHit = usage.optInt("prompt_cache_hit_tokens", -1)
+            val promptCacheMiss = usage.optInt("prompt_cache_miss_tokens", -1)
+            val prompt = usage.optInt("prompt_tokens", -1)
+            val total = usage.optInt("total_tokens", -1)
+            PlaybackLog.log(
+                "translate usage: batch=$batchSize completion=$completion " +
+                    "prompt=$prompt cache_hit=$promptCacheHit cache_miss=$promptCacheMiss total=$total"
+            )
+        } catch (_: Exception) {
+            // usage 不是标准 JSON 时不影响译文解析。
+        }
     }
 
     /** 从模型输出中提取 JSON 数组（容忍 ```json 包裹或前后杂文本、或包在对象里）。 */

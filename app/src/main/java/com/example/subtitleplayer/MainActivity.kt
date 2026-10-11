@@ -225,7 +225,36 @@ class MainActivity : AppCompatActivity() {
     private lateinit var txtLyricsTitle: TextView
     private var lastSong: Song? = null
     private var translating = false
+    private var translationGeneration = 0L
+    private val translationHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var translationTimeout: Runnable? = null
     private var transFailedLines: List<Pair<Int, String>> = emptyList()
+
+    /** 防止网络请求异常退出或回调丢失后永久卡住「翻译中」。 */
+    private fun armTranslationTimeout(): Long {
+        translationTimeout?.let { translationHandler.removeCallbacks(it) }
+        val generation = ++translationGeneration
+        val timeout = Runnable {
+            if (translating && translationGeneration == generation) {
+                translating = false
+                if (::btnTranslate.isInitialized) {
+                    btnTranslate.isEnabled = true
+                    btnTranslate.text = getString(R.string.translate)
+                }
+                toast("翻译请求超时，已解除占用状态")
+            }
+        }
+        translationTimeout = timeout
+        translationHandler.postDelayed(timeout, 15 * 60 * 1000L)
+        return generation
+    }
+
+    private fun finishTranslationState() {
+        translationTimeout?.let { translationHandler.removeCallbacks(it) }
+        translationTimeout = null
+        translationGeneration++
+        translating = false
+    }
     /** 本次会话是否已执行过断点续播（后台静默重扫不再重复拉起）。 */
     private var resumedLastSong = false
     private val translationCache by lazy {
@@ -4268,6 +4297,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (translating) return
         translating = true
+        val requestGeneration = armTranslationTimeout()
         btnTranslate.isEnabled = false
         btnTranslate.text = getString(R.string.translating)
 
@@ -4279,7 +4309,7 @@ class MainActivity : AppCompatActivity() {
             lines.withIndex().filter { it.index !in cache }.map { it.index to it.value.text }
         }
         if (toTranslate.isEmpty()) {
-            translating = false
+            finishTranslationState()
             btnTranslate.isEnabled = true
             btnTranslate.text = getString(R.string.translate)
             toast(getString(R.string.trans_ok))
@@ -4293,7 +4323,8 @@ class MainActivity : AppCompatActivity() {
                 LyricTranslator.TransResult(emptyMap(), "请求异常：${e.message}")
             }
             runOnUiThread {
-                translating = false
+                if (translationGeneration != requestGeneration) return@runOnUiThread
+                finishTranslationState()
                 btnTranslate.isEnabled = true
                 btnTranslate.text = getString(R.string.translate)
                 // 译文永远写进发起请求那首歌的缓存（reqKey），与当前播放哪首无关
@@ -4819,8 +4850,16 @@ class MainActivity : AppCompatActivity() {
         asrStatusRowVisible(true)
         updateAsrStatus(0, 0, 0)
         val trees = savedTreeUris()
+        val asrWakeLock = (getSystemService(Context.POWER_SERVICE) as android.os.PowerManager)
+            .newWakeLock(
+                android.os.PowerManager.PARTIAL_WAKE_LOCK,
+                "ShiYin:AsrTranscribe"
+            )
+            .apply { setReferenceCounted(false) }
         Thread {
-            SpeechRecManager.transcribe(
+            try {
+                asrWakeLock.acquire()
+                SpeechRecManager.transcribe(
                 this,
                 uri,
                 trees,
@@ -4931,6 +4970,12 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+            } finally {
+                try {
+                    if (asrWakeLock.isHeld) asrWakeLock.release()
+                } catch (_: Exception) {
+                }
+            }
         }.start()
     }
 
@@ -4951,11 +4996,12 @@ class MainActivity : AppCompatActivity() {
             return
         }
         translating = true
+        val requestGeneration = armTranslationTimeout()
         toast(getString(R.string.asr_translating))
         val cache = translationCache.getOrPut(uriKey) { HashMap() }
         val toTranslate = lines.mapIndexed { i, l -> i to l.text }.filter { it.first !in cache }
         if (toTranslate.isEmpty()) {
-            translating = false
+            finishTranslationState()
             toast(getString(R.string.trans_ok))
             return
         }
@@ -4966,7 +5012,8 @@ class MainActivity : AppCompatActivity() {
                 LyricTranslator.TransResult(emptyMap(), "请求异常：${e.message}")
             }
             runOnUiThread {
-                translating = false
+                if (translationGeneration != requestGeneration) return@runOnUiThread
+                finishTranslationState()
                 cache.putAll(result.translations)
                 LyricTranslationCache.save(applicationContext, translationCache)
                 if (lastSong?.uri?.toString() == uriKey) {
