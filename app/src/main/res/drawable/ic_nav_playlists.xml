@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 2.16：底部导航专用图标——「歌单」（带播放标记的列表）。
+     此前导航栏借用 ic_queue，与播放页「队列」按钮同一个图标，语义重复。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="?attr/colorControlNormal"
+        android:pathData="M3,10h11v2L3,12v-2zM3,6h11v2L3,8L3,6zM3,16h7v-2L3,14v2zM16,12v8l6,-4 -6,-4z" />
+</vector>

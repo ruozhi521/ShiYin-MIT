@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 分段选择器轨道：衬在白色卡片上，用主题的 bg 色形成对比 -->
+<!-- 分段选择器轨道：2.16 起用 segment_track 专色，与选中块（surface 白）形成对比。
+     此前轨道也是 surface，与选中块同色 → 完全看不出当前选中哪一段。 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
     <corners android:radius="14dp" />
-    <solid android:color="@color/bg" />
+    <solid android:color="@color/segment_track" />
 </shape>

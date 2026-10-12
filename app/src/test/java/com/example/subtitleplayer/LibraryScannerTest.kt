@@ -2,8 +2,10 @@ package com.example.subtitleplayer
 
 import android.net.Uri
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -227,5 +229,137 @@ class LibraryScannerTest {
         register(lyrics, "根A/Music", "歌名.mp3.vtt")
         register(lyrics, "根B/Music", "歌名.mp3.vtt")
         assertNull(LibraryScanner.findLyric(song("歌名.mp3", "Music"), lyrics))
+    }
+
+    // ---- 增量扫描：撞名检测（2.13）----
+
+    @Test
+    fun `新根相对路径与已有歌单名相同 必须全量`() {
+        // 已有 Music，新根也有 Music → 消歧会把已有 Music 改名 根A/Music，增量无法等价
+        assertTrue(
+            LibraryScanner.needsFullRescan(
+                existingNames = setOf("Music", "Rock"),
+                newRels = setOf("Music")
+            )
+        )
+    }
+
+    @Test
+    fun `新根相对路径与已有完全不相干 可增量`() {
+        assertFalse(
+            LibraryScanner.needsFullRescan(
+                existingNames = setOf("Music", "Rock"),
+                newRels = setOf("Podcast", "有声书")
+            )
+        )
+    }
+
+    @Test
+    fun `已有歌单带根前缀时 新根同名也要全量`() {
+        // 已有 根A/Music（消歧过），新根有 Music → 撞名
+        assertTrue(
+            LibraryScanner.needsFullRescan(
+                existingNames = setOf("根A/Music"),
+                newRels = setOf("Music")
+            )
+        )
+    }
+
+    @Test
+    fun `名字只是后缀相同但不是一个目录 可增量`() {
+        // 已有 "我的Music"（注意没有斜杠），新根 "Music" —— 不是同一个目录，不该误判
+        assertFalse(
+            LibraryScanner.needsFullRescan(
+                existingNames = setOf("我的Music"),
+                newRels = setOf("Music")
+            )
+        )
+    }
+
+    @Test
+    fun `已有库为空时不需要全量`() {
+        assertFalse(LibraryScanner.needsFullRescan(emptySet(), setOf("Music")))
+    }
+
+    // ---- 增量合并结果必须与全量一致（2.13）----
+
+    @Test
+    fun `增量合并 不撞名时结果与全量合并一致`() {
+        // 已有库 = 根A 扫出的 Songs/Rock；新增根B 扫出 Podcast/News
+        val oldLib = MusicLibrary(
+            playlists = listOf(
+                Playlist("Songs", listOf(song("a.mp3", "Songs"), song("b.mp3", "Songs"))),
+                Playlist("Rock", listOf(song("c.mp3", "Rock")))
+            ),
+            allSongs = listOf(
+                song("a.mp3", "Songs"), song("b.mp3", "Songs"), song("c.mp3", "Rock")
+            ).sortedBy { it.title },
+            lyrics = mapOf("Songs/a" to ref("a.vtt", "Songs"))
+        )
+        val fresh = RootScan(
+            label = "根B",
+            songs = listOf(song("d.mp3", "Podcast"), song("e.mp3", "News")),
+            lyrics = mapOf("Podcast/d" to ref("d.vtt", "Podcast"))
+        )
+
+        val incremental = LibraryScanner.rebuildFromExisting(oldLib, fresh)
+        // 对照：把「已有库」和「新根」都当作根走全量合并
+        val fullMerge = LibraryScanner.mergeRootScans(
+            listOf(
+                RootScan("根A", oldLib.allSongs, oldLib.lyrics),
+                fresh
+            )
+        )
+
+        assertEquals(
+            "增量与全量的歌曲集合必须一致",
+            fullMerge.allSongs.map { it.uri.toString() }.sorted(),
+            incremental.allSongs.map { it.uri.toString() }.sorted()
+        )
+        assertEquals(
+            "增量与全量的歌单名必须一致",
+            fullMerge.playlists.map { it.name }.sorted(),
+            incremental.playlists.map { it.name }.sorted()
+        )
+        assertEquals(
+            "增量与全量的歌词 key 必须一致",
+            fullMerge.lyrics.keys.sorted(),
+            incremental.lyrics.keys.sorted()
+        )
+        assertEquals(
+            "每首歌的 folder 归属必须一致",
+            fullMerge.allSongs.associate { it.uri.toString() to it.folder },
+            incremental.allSongs.associate { it.uri.toString() to it.folder }
+        )
+    }
+
+    @Test
+    fun `增量合并 重复 uri 只保留一条`() {
+        val dup = song("same.mp3", "Songs")
+        val oldLib = MusicLibrary(
+            playlists = listOf(Playlist("Songs", listOf(dup))),
+            allSongs = listOf(dup),
+            lyrics = emptyMap()
+        )
+        val fresh = RootScan("根B", listOf(dup, song("new.mp3", "Songs")), emptyMap())
+        val merged = LibraryScanner.rebuildFromExisting(oldLib, fresh)
+        assertEquals(2, merged.allSongs.size)
+    }
+
+    @Test
+    fun `增量合并 歌词新旧都在`() {
+        val oldLib = MusicLibrary(
+            playlists = listOf(Playlist("Songs", listOf(song("a.mp3", "Songs")))),
+            allSongs = listOf(song("a.mp3", "Songs")),
+            lyrics = mapOf("Songs/a" to ref("a.vtt", "Songs"))
+        )
+        val fresh = RootScan(
+            "根B",
+            listOf(song("b.mp3", "Podcast")),
+            mapOf("Podcast/b" to ref("b.vtt", "Podcast"))
+        )
+        val merged = LibraryScanner.rebuildFromExisting(oldLib, fresh)
+        assertNotNull(merged.lyrics["Songs/a"])
+        assertNotNull(merged.lyrics["Podcast/b"])
     }
 }

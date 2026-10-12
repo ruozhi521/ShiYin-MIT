@@ -27,13 +27,13 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="top|start"
-            android:layout_margin="6dp"
-            android:background="@drawable/bg_segment_active"
+            android:layout_margin="8dp"
+            android:background="@drawable/bg_badge_on_photo"
             android:paddingStart="8dp"
             android:paddingEnd="8dp"
             android:paddingTop="2dp"
             android:paddingBottom="2dp"
-            android:textColor="@color/text_hint"
+            android:textColor="@color/white"
             android:textSize="11sp" />
     </FrameLayout>
 

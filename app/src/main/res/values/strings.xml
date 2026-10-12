@@ -243,12 +243,18 @@
     <string name="cover">封面</string>
     <string name="song_drag_handle">拖动排序</string>
     <string name="no_lyric">未找到歌词</string>
+    <!-- 2.16：歌词页空状态引导（无歌词时不再整屏空白） -->
+    <string name="lyrics_empty_title">这首歌还没有歌词</string>
+    <string name="lyrics_empty_hint">可以点上方「生成歌词」用 AI 识别日语歌词\n或把同名的 .lrc 歌词文件放到音频所在文件夹</string>
     <string name="songs_count">%1$d 首</string>
     <string name="loaded_summary">已加载 %1$d 首歌曲 · %2$d 个歌单</string>
     <string name="tab_discover">发现</string>
     <string name="tab_library">音乐库</string>
     <string name="discover_title">发现</string>
     <string name="discover_random">随机推荐</string>
+    <!-- 2.16：发现页主次层次（主推荐大卡片 + 下方两列次推荐） -->
+    <string name="discover_primary_badge">今日推荐</string>
+    <string name="discover_more">更多随机推荐</string>
     <string name="refresh">换一批</string>
     <string name="loading_artists">正在读取歌手信息…</string>
     <string name="segment_playlists">歌单</string>

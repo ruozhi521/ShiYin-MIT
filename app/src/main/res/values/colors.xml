@@ -13,6 +13,9 @@
     <color name="ic_launcher_background">#4A6CF7</color>
     <!-- 设置卡片内的细分隔线 -->
     <color name="divider">#0F000000</color>
+    <!-- 2.16：分段选择器轨道色（比 bg 略深，选中块才是 surface 白 → 层次分明）。
+         此前轨道用 surface、选中块也用 surface，两者同色看不出选中态。 -->
+    <color name="segment_track">#ECEEF3</color>
     <!-- 封面背景（始终叠 70% 黑遮罩）下的文字色：与深色主题同源，不受日夜切换影响 -->
     <color name="cover_text_on_photo">#F2F3F7</color>
     <color name="cover_text_hint_on_photo">#C7CBD8</color>

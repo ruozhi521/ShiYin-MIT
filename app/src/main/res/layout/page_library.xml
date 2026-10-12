@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  2.16：音乐库页头部尺寸改为可覆盖的资源值。
+  原因：横屏（1080px 高）时 miniPlayer(200px) + bottomNav(273px) 已占 473px，
+  pageLibrary 只剩 544px；「28sp 标题 + 20dp×3 间距 + 上下 20dp padding」几乎把它耗光，
+  weight=1 的网格区只剩约 24px ≈ 0 → 横屏音乐库完全看不到歌单
+  （dump 里连 recyclerPlaylists 节点都没有）。
+  这里给出竖屏原值（竖屏外观一字不变），横屏在 values-land 里给压缩值。
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/pageLibrary"
     android:layout_width="match_parent"
@@ -47,7 +55,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="20dp"
-        android:background="@drawable/bg_mini"
+        android:background="@drawable/bg_segment_track"
         android:orientation="horizontal"
         android:padding="3dp">
 

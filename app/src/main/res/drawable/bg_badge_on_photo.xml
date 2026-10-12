@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 2.16：压在封面图上的信息徽标底色（歌曲数 / 序号 / 今日推荐）。
+     此前复用 bg_segment_active（白底）+ text_hint 灰字，压在浅色封面或深色封面上
+     都会糊掉；改为半透明黑底 + 白字，任何封面下都清晰。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="10dp" />
+    <solid android:color="#66000000" />
+</shape>

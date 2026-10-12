@@ -133,6 +133,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var txtNowLyric: TextView
     private lateinit var seekBar: SeekBar
     private lateinit var txtTime: TextView
+    /** 2.16：进度区改为「左当前位置 · 右总时长」两端独立时间。 */
+    private lateinit var txtTimeTotal: TextView
     private lateinit var btnPlayPlayer: ImageButton
     private var currentCoverKey: String? = null
     /**
@@ -154,6 +156,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var playerHeader: View
     private lateinit var playerControlsMain: View
     private lateinit var playerControlsExtra: View
+    /** 2.16：快退/倍速/快进行（沉浸态此前漏隐藏，粉丝截图里能看到它和封面一起留着）。 */
+    private lateinit var playerControlsSeek: View
     private lateinit var txtImmersiveLyric: android.widget.TextView
     private lateinit var bottomNav: android.view.ViewGroup
 
@@ -223,6 +227,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var recyclerLyricFull: RecyclerView
     private lateinit var btnTranslate: Button
     private lateinit var txtLyricsTitle: TextView
+    /** 2.16：歌词页无歌词空状态（此前整屏空白）。 */
+    private lateinit var lyricsEmpty: View
     private var lastSong: Song? = null
     private var translating = false
     private var translationGeneration = 0L
@@ -381,6 +387,8 @@ class MainActivity : AppCompatActivity() {
             lyricLines = lines
             currentLyricHighlight = -1
             lyricAdapter.submit(lines)
+            // 2.16：切歌后刷新空状态（有歌词则隐藏引导）
+            updateLyricsEmpty()
             updateNowLyric(-1)
             lastSong = song
             transFailedLines = emptyList()
@@ -627,6 +635,7 @@ class MainActivity : AppCompatActivity() {
         playerHeader = findViewById(R.id.playerHeader)
         playerControlsMain = findViewById(R.id.playerControlsMain)
         playerControlsExtra = findViewById(R.id.playerControlsExtra)
+        playerControlsSeek = findViewById(R.id.playerControlsSeek)
         txtImmersiveLyric = findViewById(R.id.txtImmersiveLyric)
         bottomNav = findViewById(R.id.bottomNav)
         viewFavorites = findViewById(R.id.pageFavorites)
@@ -803,15 +812,19 @@ class MainActivity : AppCompatActivity() {
         txtNowLyric = findViewById(R.id.txtNowLyric)
         seekBar = findViewById(R.id.seekBar)
         txtTime = findViewById(R.id.txtTime)
+        txtTimeTotal = findViewById(R.id.txtTimeTotal)
         btnPlayPlayer = findViewById(R.id.btnPlayPlayer)
         recyclerLyricFull = findViewById(R.id.recyclerLyricFull)
         btnTranslate = findViewById(R.id.btnTranslate)
         txtLyricsTitle = findViewById(R.id.txtLyricsTitle)
+        lyricsEmpty = findViewById(R.id.lyricsEmpty)
 
         // ---- 发现页 ----
+        // 2.16：主推荐（第一首）直接读 discoverSongs[0]；下方两列网格装 drop(1)。
         discoverAdapter = DiscoverAdapter { pos ->
-            if (discoverSongs.isNotEmpty() && pos in discoverSongs.indices) {
-                playSong(discoverSongs, pos)
+            val idx = pos + 1
+            if (discoverSongs.isNotEmpty() && idx in discoverSongs.indices) {
+                playSong(discoverSongs, idx)
             }
         }
         recyclerDiscover.layoutManager = GridLayoutManager(this, 2)
@@ -1143,11 +1156,13 @@ class MainActivity : AppCompatActivity() {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
                 val icon = when (m) {
-                    MODULE_DISCOVER -> R.drawable.ic_refresh
-                    MODULE_LIBRARY -> R.drawable.ic_folder_tinted
-                    MODULE_ARTISTS -> R.drawable.ic_music_tinted
-                    MODULE_VIDEO -> R.drawable.ic_video
-                    else -> R.drawable.ic_queue
+                    // 2.16：统一为专用导航图标（原先借用 ic_refresh / ic_queue 等，
+                    // 尺寸与语义都不一致：ic_refresh 还是 20dp 且 fillColor 是硬编码白）
+                    MODULE_DISCOVER -> R.drawable.ic_nav_discover
+                    MODULE_LIBRARY -> R.drawable.ic_nav_library
+                    MODULE_ARTISTS -> R.drawable.ic_nav_artists
+                    MODULE_VIDEO -> R.drawable.ic_nav_videos
+                    else -> R.drawable.ic_nav_playlists
                 }
                 setCompoundDrawablesWithIntrinsicBounds(0, icon, 0, 0)
                 compoundDrawablePadding = dp(4f)
@@ -1534,6 +1549,7 @@ class MainActivity : AppCompatActivity() {
         txtPlayerTitle.setTextColor(primary)
         txtPlayerFolder.setTextColor(hint)
         txtTime.setTextColor(primary)
+        txtTimeTotal.setTextColor(primary)
         txtImmersiveLyric.setTextColor(primary)
         val iconTint = android.content.res.ColorStateList.valueOf(primary)
         for (id in listOf(R.id.btnPrev, R.id.btnNext, R.id.btnTimer, R.id.btnPlayMode,
@@ -1588,6 +1604,8 @@ class MainActivity : AppCompatActivity() {
             // 清掉手动滑动冷却，否则刚滑过就切页会停在原处
             lastLyricUserScroll = 0
             scrollToLyric(currentLyricHighlight)
+            // 2.16：进入歌词页时刷新空状态
+            updateLyricsEmpty()
         }
         if (p == Page.PLAYER) {
             exitImmersion()
@@ -2231,7 +2249,43 @@ class MainActivity : AppCompatActivity() {
     private fun loadDiscover() {
         val lib = library ?: return
         discoverSongs = lib.allSongs.shuffled().take(8)
-        discoverAdapter.submit(discoverSongs)
+        // 2.16：第一首做主推荐（整行大卡片），其余进下方两列网格
+        val primary = discoverSongs.firstOrNull()
+        findViewById<View>(R.id.discoverPrimary).visibility =
+            if (primary != null) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.txtDiscoverMore).visibility =
+            if (discoverSongs.size > 1) View.VISIBLE else View.GONE
+        if (primary != null) {
+            findViewById<TextView>(R.id.txtPrimaryTitle).text = primary.title
+            findViewById<TextView>(R.id.txtPrimaryArtist).text =
+                primary.artist.ifBlank { primary.folder }
+            val cover = findViewById<ImageView>(R.id.imgPrimaryCover)
+            cover.setImageResource(R.drawable.ic_music_tinted)
+            CoverLoader.load(
+                this, primary.uri, 400,
+                folder = primary.folder, songSize = primary.size
+            ) { bmp ->
+                if (bmp != null) cover.setImageBitmap(bmp)
+            }
+            findViewById<View>(R.id.discoverPrimary).setOnClickListener {
+                if (discoverSongs.isNotEmpty()) playSong(discoverSongs, 0)
+            }
+        }
+        discoverAdapter.submit(discoverSongs.drop(1))
+        // 2.16：主推荐也要跟随字号设置，否则用户把字号调大后主推荐反而比次推荐还小
+        updateDiscoverPrimaryTextSize()
+    }
+
+    /**
+     * 2.16：主推荐卡片字号跟随「界面字号」设置。
+     *
+     * 保持层级：标题比次推荐大 4sp、歌手比次推荐小 2sp。
+     * 默认字号 15 → 标题 19sp / 歌手 13sp，与设计稿一致。
+     */
+    private fun updateDiscoverPrimaryTextSize() {
+        val ui = prefs.getInt(KEY_UI_SIZE, 15)
+        findViewById<TextView>(R.id.txtPrimaryTitle)?.setTextSize(ui + 4f)
+        findViewById<TextView>(R.id.txtPrimaryArtist)?.setTextSize(ui - 2f)
     }
 
     // ---------- 音乐库分段 ----------
@@ -2589,7 +2643,7 @@ class MainActivity : AppCompatActivity() {
     private fun enterImmersion() {
         if (playerImmersed || page != Page.PLAYER) return
         playerImmersed = true
-        for (v in listOf(playerHeader, seekBar, txtTime, playerControlsMain, playerControlsExtra)) {
+        for (v in listOf(playerHeader, seekBar, txtTime, txtTimeTotal, playerControlsMain, playerControlsExtra, playerControlsSeek)) {
             v.animate().alpha(0f).setDuration(250).withEndAction {
                 if (playerImmersed) v.visibility = View.INVISIBLE
             }
@@ -2618,7 +2672,7 @@ class MainActivity : AppCompatActivity() {
     private fun exitImmersion() {
         if (!playerImmersed) return
         playerImmersed = false
-        for (v in listOf(playerHeader, seekBar, txtTime, playerControlsMain, playerControlsExtra)) {
+        for (v in listOf(playerHeader, seekBar, txtTime, txtTimeTotal, playerControlsMain, playerControlsExtra, playerControlsSeek)) {
             v.visibility = View.VISIBLE
             v.animate().alpha(1f).setDuration(200).start()
         }
@@ -4991,7 +5045,22 @@ class MainActivity : AppCompatActivity() {
             // 「现在不能再点」，而不是点了弹提示；两者都指向同一个目的：
             // 不让识别被重复触发（重复触发正是 lrc(1)/(2)/(3) 残留的来源）。
             findViewById<Button>(R.id.btnGenLyric)?.isEnabled = !visible
+            // 2.16：识别中即使还没有行，也不要显示「这首歌还没有歌词」的空状态
+            updateLyricsEmpty()
         }
+    }
+
+    /**
+     * 2.16：歌词页空状态显隐。
+     *
+     * 此前没有歌词时歌词页是**整屏空白**，用户不知道该做什么（粉丝反馈过）。
+     * 判定与 ASR 状态联动：识别进行中（asrRunning）即便暂无行也不显示空状态，
+     * 否则会和「正在识别」的状态行同时出现、互相矛盾。
+     */
+    private fun updateLyricsEmpty() {
+        if (!::lyricsEmpty.isInitialized) return
+        val empty = lyricLines.isEmpty() && !asrRunning
+        lyricsEmpty.visibility = if (empty) View.VISIBLE else View.GONE
     }
 
     private fun updateAsrStatus(sec: Int, total: Int, lineCount: Int) {
@@ -5121,6 +5190,9 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     asrRunning = false
                     asrStatusRowVisible(false)
+                    // 2.16：识别结束（无论成败）都刷新一次空状态——
+                    // 若这次没识别出任何行，此时才该显示「这首歌还没有歌词」。
+                    updateLyricsEmpty()
                     PlaybackLog.log("asr transcribe ok=$ok msg=$msg saved=$savedWhere lines=${lines?.size}")
                     if (ok) {
                         val cfg = translationConfig()
@@ -5540,6 +5612,8 @@ class MainActivity : AppCompatActivity() {
         discoverAdapter.applyUiSize(uiSize)
         // 2.14：新建的「歌单」页也用同一个字号设置（网格样式与库页一致）
         if (::playlistsPageAdapter.isInitialized) playlistsPageAdapter.applyUiSize(uiSize)
+        // 2.16：主推荐卡片同样跟随字号
+        updateDiscoverPrimaryTextSize()
     }
 
     private fun applyDarkMode(dark: Boolean) {
@@ -5561,12 +5635,15 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    /**
+     * 2.16：进度区改为「左当前位置 · 右总时长」两端独立显示。
+     *
+     * 此前是一行居右的 `00:00 / 00:00`，目标稿要求两端分列。
+     * 拖动中只更新左侧（预览当前位置），总时长保持不动。
+     */
     private fun updateTime(pos: Int) {
-        txtTime.text = String.format(
-            Locale.getDefault(), "%s / %s",
-            formatTime(pos),
-            if (durationMs > 0) formatTime(durationMs) else "--:--"
-        )
+        txtTime.text = formatTime(pos)
+        txtTimeTotal.text = if (durationMs > 0) formatTime(durationMs) else "--:--"
     }
 
     // ---------- 权限 ----------

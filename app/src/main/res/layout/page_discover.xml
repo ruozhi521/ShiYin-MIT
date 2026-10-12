@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/pageDiscover" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@color/bg" android:orientation="vertical" android:padding="20dp">
+<!-- 2.16：发现页改为「主推荐 + 次推荐」主次层次。
+     此前是清一色等大双列网格，看不出主次；现在第一首做成整行大卡片，
+     其余仍走下方两列网格（数据源不变，仍是同一批随机推荐）。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/pageDiscover" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@color/bg" android:orientation="vertical" android:paddingStart="20dp" android:paddingEnd="20dp" android:paddingTop="20dp">
     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
         <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
             <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/discover_title" android:textSize="30sp" android:textStyle="bold" android:textColor="@color/text_primary" />
@@ -7,5 +10,30 @@
         </LinearLayout>
         <Button android:id="@+id/btnRefreshDiscover" style="@style/BtnStyle" android:layout_width="wrap_content" android:layout_height="48dp" android:text="@string/refresh" />
     </LinearLayout>
-    <androidx.recyclerview.widget.RecyclerView android:id="@+id/recyclerDiscover" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:layout_marginTop="24dp" android:clipToPadding="false" android:paddingBottom="12dp" />
+
+    <LinearLayout
+        android:id="@+id/discoverPrimary"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:orientation="vertical">
+
+        <include
+            layout="@layout/item_discover_primary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/txtDiscoverMore"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:layout_marginBottom="10dp"
+        android:text="@string/discover_more"
+        android:textColor="@color/text_primary"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <androidx.recyclerview.widget.RecyclerView android:id="@+id/recyclerDiscover" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:clipToPadding="false" android:paddingBottom="12dp" />
 </LinearLayout>

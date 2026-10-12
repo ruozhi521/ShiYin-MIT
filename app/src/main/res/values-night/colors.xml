@@ -13,4 +13,14 @@
     <color name="ic_launcher_background">#4A6CF7</color>
     <!-- 设置卡片内的细分隔线 -->
     <color name="divider">#1FFFFFFF</color>
+    <!-- 2.16：分段选择器轨道色（深色下比 surface 略亮，衬出白色选中块） -->
+    <color name="segment_track">#262833</color>
+    <!-- 2.16：调音面板深色版（此前只在浅色里定义，深色下 fallback 成白色面板 +
+         深蓝字，整个对话框刺眼）。配色思路：面板用 surface、选中块用 accent、
+         还原按钮用低饱和蓝底 + 提亮蓝字。 -->
+    <color name="eq_blue">#5B8DEF</color>
+    <color name="eq_tab_gray">#2A2C36</color>
+    <color name="eq_panel_bg">#1C1D24</color>
+    <color name="eq_restore_bg">#1E2A3D</color>
+    <color name="eq_restore_text">#7FB0F5</color>
 </resources>
