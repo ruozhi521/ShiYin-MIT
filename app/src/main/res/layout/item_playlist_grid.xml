@@ -1,8 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  3.0：卡片间距调整（弱志反馈「app 内截图太紧凑了，适当分开一些」）。
+  - **列间距**由 GridSpacingDecoration 负责（此前 item 里只有垂直 margin，两列左右贴死、
+    实测间距 0px）。放在 decoration 而非这里，是因为两列等宽要靠均摊公式算，写在 item 里做不到。
+  - **行间距**仍由本文件的下方 margin 管，此处从 14dp 提到 24dp：
+    目标稿「文字底 → 下一卡顶」= 27 单位 ≈ 37dp，而改前是 paddingBottom 14 + marginBottom 14
+    = 28dp，偏紧。两者相加 38dp，与目标稿对齐。
+    刻意**不用** decoration 的 verticalPx 管行距——两处都管会双重累加，
+    行距只有一个来源更不容易出错。
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginBottom="14dp"
+    android:layout_marginBottom="24dp"
     android:orientation="vertical"
     android:paddingBottom="14dp"
     android:foreground="?attr/selectableItemBackground">
@@ -34,6 +44,24 @@
             android:paddingBottom="2dp"
             android:textColor="@color/white"
             android:textSize="11sp" />
+
+        <!--
+          拖拽把手（3.0）：只有音乐库页「默认顺序」下才显示。
+          与歌曲列表同一套约定——按住这里 = 拖动排序，长按卡片 = 打开菜单（设置封面等），
+          两个手势各走各的，不抢（2.14 在歌曲列表上踩过「长按既排序又弹菜单」的坑）。
+          放封面左上角：右下角已被歌曲数徽标占用。
+        -->
+        <ImageView
+            android:id="@+id/imgGridDragHandle"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:layout_gravity="top|start"
+            android:layout_margin="6dp"
+            android:background="@drawable/bg_badge_on_photo"
+            android:contentDescription="@string/song_drag_handle"
+            android:padding="4dp"
+            android:src="@drawable/ic_drag_handle"
+            android:visibility="gone" />
     </FrameLayout>
 
     <TextView

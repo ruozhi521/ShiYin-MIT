@@ -13,30 +13,43 @@
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:padding="20dp">
-    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/tab_library" android:textSize="28sp" android:textStyle="bold" android:textColor="@color/text_primary" android:layout_marginBottom="20dp" />
+    <!-- 3.0：字号由 28sp 提到 30sp，与发现页一致（目标稿两页标题同属 .title，本应同字号） -->
+    <TextView android:id="@+id/txtLibraryTitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/tab_library" android:textSize="30sp" android:textStyle="bold" android:textColor="@color/text_primary" />
+
+    <!--
+      3.0：补一行副标题，使本页头部结构与发现页**逐行对齐**。
+      此前本页是「标题（带 20dp marginBottom）→ 搜索栏」，发现页是
+      「标题 → 副标题 → 搜索栏」——两页都没错，但切页时搜索栏会**上下跳 50px**，
+      弱志反馈「希望发现和音乐库界面的搜索栏在同一位置」。
+
+      目标稿两个面板的头部是统一的三行（标题 y=150 / 副标题 y=176 / 搜索框 y=225），
+      所以这里补齐中间那行，并让两页的间距、字号完全一致：
+        标题 28sp → 副标题 marginTop 6dp、13sp → 搜索行 marginTop 16dp
+    -->
+    <TextView android:id="@+id/txtLibrarySubtitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:textColor="@color/text_hint" android:textSize="13sp" />
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
         <EditText
             android:id="@+id/searchEntry"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="48dp"
             android:layout_weight="1"
             android:background="@drawable/bg_mini"
             android:clickable="true"
             android:cursorVisible="false"
             android:focusable="false"
+            android:gravity="center_vertical"
             android:hint="@string/search_hint"
             android:inputType="text"
             android:maxLines="1"
             android:paddingStart="12dp"
             android:paddingEnd="12dp"
-            android:paddingTop="9dp"
-            android:paddingBottom="9dp"
             android:textColor="@color/text_primary"
             android:textColorHint="@color/text_hint"
             android:textSize="14sp" />

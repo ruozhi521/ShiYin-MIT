@@ -157,6 +157,20 @@
     <string name="retry_translate">重试翻译</string>
     <string name="translating">翻译中…</string>
     <string name="trans_no_key">请先在设置 → 翻译设置里配置 API Key</string>
+    <string name="trans_local_hint">本地离线翻译无需填写</string>
+    <string name="mt_download_model">下载翻译模型</string>
+    <string name="mt_delete_model">删除模型</string>
+    <string name="mt_status_missing">模型未下载（0/%1$d 个文件）</string>
+    <string name="mt_status_partial">模型不完整（%1$d/%2$d 个文件），请重新下载</string>
+    <string name="mt_status_ready">模型已就绪，可离线翻译</string>
+    <string name="mt_preparing">正在准备下载…</string>
+    <string name="mt_downloading_file">正在下载第 %1$d/%2$d 个文件（%3$d%%）</string>
+    <string name="mt_model_ready">翻译模型下载完成，可以离线翻译了</string>
+    <string name="mt_model_failed">模型下载失败：%1$s\n可重试；网络不通时也可手动把 3 个文件拷入应用私有目录</string>
+    <string name="mt_delete_confirm">删除已下载的翻译模型？\n（约 216 MB，删除后需重新下载才能离线翻译）</string>
+    <string name="mt_deleted">已删除本地翻译模型</string>
+    <string name="mt_delete_failed">删除失败，请重试</string>
+    <string name="mt_no_space">设备存储空间可能不足（需约 216 MB）</string>
     <string name="trans_partial_fail">部分歌词未能翻译（%1$d 行），可重试</string>
     <string name="trans_all_fail">翻译失败，请检查 API 配置或网络</string>
     <string name="trans_ok">翻译完成</string>
@@ -219,13 +233,14 @@
     <string name="asr_translate_now">立即翻译歌词</string>
     <string name="asr_need_trans_cfg">还没配置翻译 API，可在「翻译设置」里配置后使用</string>
     <string name="asr_translating">正在翻译识别出的歌词…</string>
+    <string name="asr_trans_progress">正在翻译… %1$d/%2$d</string>
     <string name="asr_translated_done">翻译完成，播放这首歌即可看到双语歌词</string>
     <string name="asr_translated_partial">翻译完成，%1$d 行失败；播放这首歌时点「翻译」可重试</string>
     <string name="title_from_filename">歌名显示使用文件名</string>
     <string name="title_from_filename_hint">忽略标签标题，重新扫描后生效</string>
     <string name="tab_video">视频</string>
     <string name="videos_empty">这个导航页还没有视频文件\n把含视频的文件夹添加进音乐库即可</string>
-    <string name="about_version">版本 2.16</string>
+    <string name="about_version">版本 3.0</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>
@@ -248,6 +263,9 @@
     <string name="lyrics_empty_hint">可以点上方「生成歌词」用 AI 识别日语歌词\n或把同名的 .lrc 歌词文件放到音频所在文件夹</string>
     <string name="songs_count">%1$d 首</string>
     <string name="loaded_summary">已加载 %1$d 首歌曲 · %2$d 个歌单</string>
+    <!-- 3.0：音乐库页副标题（与发现页副标题同位置，均为标题下一行）。顺序对齐目标稿「N 个文件夹 · M 首歌曲」 -->
+    <string name="library_summary">%1$d 个文件夹 · %2$d 首歌曲</string>
+    <string name="library_summary_empty">还没有扫描到音乐</string>
     <string name="tab_discover">发现</string>
     <string name="tab_library">音乐库</string>
     <string name="discover_title">发现</string>

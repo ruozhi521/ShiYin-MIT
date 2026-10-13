@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  发现页「更多随机推荐」长条卡的卡片底（3.0）。
+  概念图里这一区块是**横条**（宽 269、高 60、圆角 14），不是方格——
+  此前沿用方格卡，与预览图不符。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="14dp" />
+    <solid android:color="@color/surface" />
+</shape>

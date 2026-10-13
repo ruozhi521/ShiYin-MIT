@@ -27,4 +27,37 @@
     <color name="eq_panel_bg">#FFFFFF</color>
     <color name="eq_restore_bg">#E3F2FD</color>
     <color name="eq_restore_text">#1565C0</color>
+
+    <!--
+      无封面歌单的渐变底（3.0）。
+      设计约束（弱志定的方向）：**低饱和 + 低亮度差**，素雅不刺眼——不是鲜艳的糖果色。
+      概念图里是「蓝灰三色渐变 / 粉双色渐变 / 淡紫纯色 / 薄荷纯色」四种；
+      这里按同一基调扩成 **8 组**，供「按歌单名稳定 hash 选色」用（同一歌单颜色永远一致）。
+      每组 3 个色阶（起 / 中 / 止）：三色比双色过渡更细腻，低端屏不易出现色带（banding）。
+      深色模式同名覆盖（见 values-night/colors.xml），亮度整体压暗。
+    -->
+    <color name="pl_grad1_a">#DFE8F4</color>
+    <color name="pl_grad1_b">#B9C9DF</color>
+    <color name="pl_grad1_c">#8EA6C2</color>
+    <color name="pl_grad2_a">#F2D9D1</color>
+    <color name="pl_grad2_b">#DDBAB4</color>
+    <color name="pl_grad2_c">#C98D8D</color>
+    <color name="pl_grad3_a">#E4E3F1</color>
+    <color name="pl_grad3_b">#CFCDE4</color>
+    <color name="pl_grad3_c">#B3B0D2</color>
+    <color name="pl_grad4_a">#DCE9E3</color>
+    <color name="pl_grad4_b">#C4DAD0</color>
+    <color name="pl_grad4_c">#A6C6B7</color>
+    <color name="pl_grad5_a">#F0E9DA</color>
+    <color name="pl_grad5_b">#E0D2B8</color>
+    <color name="pl_grad5_c">#CBB894</color>
+    <color name="pl_grad6_a">#D9E8EE</color>
+    <color name="pl_grad6_b">#BFD6E0</color>
+    <color name="pl_grad6_c">#9CBFCE</color>
+    <color name="pl_grad7_a">#F4E0D9</color>
+    <color name="pl_grad7_b">#E6C4B8</color>
+    <color name="pl_grad7_c">#D2A491</color>
+    <color name="pl_grad8_a">#E6EADB</color>
+    <color name="pl_grad8_b">#D2D8C0</color>
+    <color name="pl_grad8_c">#B7C09E</color>
 </resources>

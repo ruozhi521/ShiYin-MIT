@@ -22,9 +22,14 @@ import android.provider.DocumentsContract
 import android.provider.Settings
 import android.os.IBinder
 import android.text.Editable
+import android.text.SpannableStringBuilder
 import android.text.TextWatcher
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
+import android.text.style.StyleSpan
 import android.view.View
 import android.view.animation.LinearInterpolator
+import android.view.animation.OvershootInterpolator
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.ImageButton
@@ -92,6 +97,8 @@ class MainActivity : AppCompatActivity() {
 
     // ---- 音乐库页 ----
     private lateinit var searchEntry: android.widget.EditText
+    /** 3.0：音乐库页副标题（与发现页副标题同位置，保持两页头部逐行对齐）。 */
+    private lateinit var txtLibrarySubtitle: TextView
     private lateinit var segPlaylists: TextView
     private lateinit var segArtists: TextView
     private lateinit var recyclerPlaylists: RecyclerView
@@ -505,6 +512,9 @@ class MainActivity : AppCompatActivity() {
     // ---- 歌词识别（1.33.1 实验）----
     @Volatile
     private var asrCancelled = false
+    /** 本地翻译模型下载的取消标志（3.0）。取消后已下好的文件保留，下次接着下。 */
+    @Volatile
+    private var mtDownloadCancelled = false
     @Volatile
     private var asrRunning = false
     /** 正在实时显示识别歌词的歌曲 uri（边听边出）；null 表示无。 */
@@ -778,6 +788,7 @@ class MainActivity : AppCompatActivity() {
         segArtists = findViewById(R.id.segArtists)
         recyclerPlaylists = findViewById(R.id.recyclerPlaylists)
         recyclerArtists = findViewById(R.id.recyclerArtists)
+        txtLibrarySubtitle = findViewById(R.id.txtLibrarySubtitle)
 
         txtPlaylistTitle = findViewById(R.id.txtPlaylistTitle)
         recyclerSongs = findViewById(R.id.recyclerSongs)
@@ -827,7 +838,9 @@ class MainActivity : AppCompatActivity() {
                 playSong(discoverSongs, idx)
             }
         }
-        recyclerDiscover.layoutManager = GridLayoutManager(this, 2)
+        // 3.0：改为单列线性列表——概念图里「更多随机推荐」是横条卡（圆形封面 + 双行文字），
+        // 不是方格；此前用 GridLayoutManager(this, 2) 与预览图不符。
+        recyclerDiscover.layoutManager = LinearLayoutManager(this)
         recyclerDiscover.adapter = discoverAdapter
         findViewById<Button>(R.id.btnRefreshDiscover).setOnClickListener { loadDiscover() }
 
@@ -840,6 +853,8 @@ class MainActivity : AppCompatActivity() {
             { pos -> playlistList().getOrNull(pos)?.let { openPlaylist(it) } },
             { pos -> playlistList().getOrNull(pos)?.let { showPlaylistCoverMenu(it.name) } }
         )
+        // 3.0：按住卡片左上角的≡把手才开始拖拽（长按留给「设置封面」菜单，两个手势不抢）
+        gridAdapter.onStartDrag = { holder -> playlistGridTouchHelper.startDrag(holder) }
         treeAdapter = FolderTreeAdapter(
             { node -> openTreeFolder(node) },
             { pl -> openPlaylist(pl) },
@@ -849,6 +864,10 @@ class MainActivity : AppCompatActivity() {
         txtTreePath.setOnClickListener { backTree() }
         recyclerPlaylists.layoutManager = GridLayoutManager(this, 2)
         recyclerPlaylists.adapter = gridAdapter
+        // 3.0：两列卡片此前左右贴死（实机实测列间距 0px），加水平间距（弱志反馈"太紧凑"）
+        recyclerPlaylists.addItemDecoration(
+            GridSpacingDecoration(2, dp(GridSpacingDecoration.DEFAULT_SPACING_DP.toFloat()))
+        )
         applyLibLayout()
 
         // ---- 音乐库页：歌手 ----
@@ -859,6 +878,9 @@ class MainActivity : AppCompatActivity() {
         segPlaylists.setOnClickListener { showSegment(true) }
         segArtists.setOnClickListener { showSegment(false) }
         searchEntry.setOnClickListener { showSearchPage() }
+        // 3.0：发现页的搜索入口与音乐库页走同一个搜索页（同一套结果页，不重复实现）
+        findViewById<android.widget.EditText>(R.id.searchEntryDiscover)
+            .setOnClickListener { showSearchPage() }
 
         // ---- 歌单/歌曲列表 ----
         songAdapter = SongAdapter(
@@ -942,6 +964,10 @@ class MainActivity : AppCompatActivity() {
         )
         recyclerPlaylistsPage.layoutManager = GridLayoutManager(this, 2)
         recyclerPlaylistsPage.adapter = playlistsPageAdapter
+        // 3.0：与音乐库页网格同一套列间距，两页观感一致
+        recyclerPlaylistsPage.addItemDecoration(
+            GridSpacingDecoration(2, dp(GridSpacingDecoration.DEFAULT_SPACING_DP.toFloat()))
+        )
         findViewById<Button>(R.id.btnNewPlaylist).setOnClickListener { showCreatePlaylistDialog() }
 
         // ---- 底部导航 ----
@@ -1184,6 +1210,22 @@ class MainActivity : AppCompatActivity() {
             val saved = prefs.getString(KEY_NAV_TABS, null)
             if (saved != null && !saved.contains(MODULE_VIDEO)) {
                 prefs.edit().putString(KEY_NAV_TABS, "$saved,$MODULE_VIDEO").apply()
+            }
+        }
+        // 3.0 迁移：把老用户已保存导航里的「歌手」摘掉（仅一次）。
+        // 歌手的入口已挪到音乐库页上方的分段控件；底部再留一个是重复。
+        // ⚠️ 必须主动改写保存值，而不是只靠下面的 filter —— 不然后续任何一次
+        // 导航设置弹窗按 order 写回时，artists 会"复活"到配置里（虽然不显示，但语义混乱）。
+        if (!prefs.getBoolean(KEY_NAV_MIGRATED_30, false)) {
+            prefs.edit().putBoolean(KEY_NAV_MIGRATED_30, true).apply()
+            val saved = prefs.getString(KEY_NAV_TABS, null)
+            if (saved != null && saved.contains(MODULE_ARTISTS)) {
+                val cleaned = saved.split(",").filter { it != MODULE_ARTISTS }
+                prefs.edit().putString(KEY_NAV_TABS, cleaned.joinToString(",")).apply()
+            }
+            // 默认启动页若正是被摘掉的「歌手」，改回第一个可用项，避免启动落到空页
+            if (prefs.getString(KEY_NAV_DEFAULT, null) == MODULE_ARTISTS) {
+                prefs.edit().putString(KEY_NAV_DEFAULT, MODULE_DISCOVER).apply()
             }
         }
         return (prefs.getString(KEY_NAV_TABS, DEFAULT_NAV)?.split(",") ?: emptyList())
@@ -1669,6 +1711,21 @@ class MainActivity : AppCompatActivity() {
      * 视频页只加进了其中一份 —— 于是「从视频列表点进视频」这条路径（先 onSongChanged
      * 再 showPage）漏判，视频页下方冒出迷你条（回归 bug）。判定只有一处就不会再走样。
      */
+    /**
+     * 轻回弹插值器（3.0）。
+     *
+     * 弱志要求「加入一定回弹效果，增加流畅感」。用 [OvershootInterpolator] 让属性值
+     * 先略微冲过目标再回落——这种「落定的弹性」是 iOS/现代安卓观感的来源。
+     *
+     * `tension = 1.2f`（默认 2.0）：**刻意压低**。默认值在位移类动画上会明显「撞过头」，
+     * 用在卡片/迷你条这类大面积元素上会显得廉价；1.2 只是"轻微一顿"，够用且克制。
+     *
+     * ⚠️ 只用于**位移 / 缩放**类（translationY、scaleX/Y）。
+     * 不要用在 alpha 淡出淡入上：透明度会被 clamp 到 0~1，回弹算出的越界值没有表现，
+     * 加了等于没加，白白多一层插值计算。
+     */
+    private val softBounce by lazy { OvershootInterpolator(1.2f) }
+
     private fun updateMiniPlayerVisibility() {
         if (!MiniPlayerRules.shouldShow(hasSong, page)) {
             if (miniPlayer.visibility != View.GONE) miniPlayer.visibility = View.GONE
@@ -1680,6 +1737,7 @@ class MainActivity : AppCompatActivity() {
                 .alpha(1f)
                 .translationY(0f)
                 .setDuration(250)
+                .setInterpolator(softBounce)
                 .start()
         }
     }
@@ -2148,6 +2206,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun onLibraryReady() {
         applyLibLayout()
+        updateLibrarySubtitle()
         loadDiscover()
         artistLoaded = false
         artistGroups = emptyList()
@@ -2192,10 +2251,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 音乐库页歌单排序（2.13）。
-     * - 「全部歌曲」永远排第一位，不参与排序；
+     * 音乐库页歌单排序（2.13；3.0 接入用户拖拽顺序）。
+     * - 「全部歌曲」永远排第一位，不参与排序、也不可拖动（它不是歌单）；
      * - 随机顺序用**会话级固定种子**，否则每次重绘顺序都变（用户会以为列表在跳）；
-     * - 按名称用 Collator(Locale.CHINA)，中文按拼音排而不是 Unicode 码位。
+     * - 按名称用 Collator(Locale.CHINA)，中文按拼音排而不是 Unicode 码位；
+     * - 默认顺序下应用用户拖拽过的顺序（[PlaylistOrderStore]），没拖过则原样。
      * 排序只影响展示，不改任何持久化数据。
      */
     private fun applyPlaylistSort(lists: List<Playlist>): List<Playlist> {
@@ -2207,9 +2267,31 @@ class MainActivity : AppCompatActivity() {
             SORT_NAME -> PlaylistSorter.byName(rest)
             SORT_RECENT -> PlaylistSorter.byRecent(rest, RecentPlaylist.load(this))
             SORT_RANDOM -> PlaylistSorter.shuffledStable(rest, randomSeed)
-            else -> rest
+            // 3.0：默认顺序 = 用户拖拽过的顺序（没拖过时 apply 原样返回，与 3.0 之前一致）
+            else -> PlaylistOrderStore.apply(this, rest)
         }
         return listOf(head) + sorted
+    }
+
+    /**
+     * 音乐库页歌单是否可拖动排序（3.0）。
+     *
+     * 只有「默认顺序」下拖动才有意义：按名称 / 按最近播放 / 随机都是**算出来的**顺序，
+     * 拖完一次会被立刻重排覆盖，用户会以为「拖了没用」。所以其它模式下不开放拖动。
+     */
+    private fun playlistDragEnabled(): Boolean =
+        (prefs.getString(KEY_PLAYLIST_SORT, SORT_DEFAULT) ?: SORT_DEFAULT) == SORT_DEFAULT
+
+    /**
+     * 拖动结束后保存歌单新顺序（3.0）。
+     *
+     * 传进来的是**含首项**的完整列表（首项恒为「全部歌曲」），保存时要摘掉它——
+     * 它不是歌单、不参与排序（见 [playlistList]），混进顺序表会在下次 [applyPlaylistSort]
+     * 时把「全部歌曲」又摆到别处。
+     */
+    private fun savePlaylistOrder(newOrder: List<Playlist>) {
+        if (newOrder.size <= 1) return
+        PlaylistOrderStore.save(this, newOrder.drop(1).map { it.name })
     }
 
     /** 歌单排序弹窗（点库页「歌单」右侧的下拉箭头触发）。 */
@@ -2246,9 +2328,52 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- 发现页 ----------
 
+    /**
+     * 发现页副标题：随机挑一句激励文案（3.0）。
+     *
+     * 弱志：「发现下的小字部分，可以来几句随机的激励的话，多些人味」。
+     * 此前是固定的「随机推荐」——功能上没毛病，但没有温度。
+     *
+     * 用 `nextInt` 而不是 `shuffled().first()`：这里只要一条、也无所谓"稳定"，
+     * 且**连续两次随机到同一条时应尽量避开**——刚换一批却看到同一句话，会显得没生效。
+     * 文案数组见 `res/values/arrays.xml` 的 `discover_subtitles`。
+     */
+    /**
+     * 音乐库页副标题：显示「N 个文件夹 · M 首歌曲」（3.0）。
+     *
+     * 为什么加它：发现页头部是「标题 → 副标题 → 搜索栏」三行，而音乐库页只有两行，
+     * 切页时搜索栏会上下跳 50px（弱志反馈）。目标稿两个面板的头部本就统一，
+     * 故补齐中间那行——顺带把「已加载 N 首」这个信息从 toast 挪到常驻位置，
+     * 用户不用等 toast 就知道库里有多少东西。
+     */
+    private fun updateLibrarySubtitle() {
+        if (!::txtLibrarySubtitle.isInitialized) return
+        val lib = library
+        txtLibrarySubtitle.text = if (lib == null || lib.allSongs.isEmpty()) {
+            getString(R.string.library_summary_empty)
+        } else {
+            getString(R.string.library_summary, lib.playlists.size, lib.allSongs.size)
+        }
+    }
+
+    private fun updateDiscoverSubtitle() {
+        val arr = resources.getStringArray(R.array.discover_subtitles)
+        if (arr.isEmpty()) return
+        val tv = findViewById<TextView>(R.id.txtDiscoverSubtitle) ?: return
+        val current = tv.text?.toString()
+        var pick = arr[kotlin.random.Random.nextInt(arr.size)]
+        // 只有一条时不必避让；多条时若撞上当前这条就再取一条（数组长度至少 2 才有意义）
+        if (arr.size > 1 && pick == current) {
+            pick = arr[(arr.indexOf(pick) + 1 + kotlin.random.Random.nextInt(arr.size - 1)) % arr.size]
+        }
+        tv.text = pick
+    }
+
     private fun loadDiscover() {
         val lib = library ?: return
         discoverSongs = lib.allSongs.shuffled().take(8)
+        // 3.0：副标题换成随机的一句话（每次进页/换一批都会换）
+        updateDiscoverSubtitle()
         // 2.16：第一首做主推荐（整行大卡片），其余进下方两列网格
         val primary = discoverSongs.firstOrNull()
         findViewById<View>(R.id.discoverPrimary).visibility =
@@ -2260,6 +2385,11 @@ class MainActivity : AppCompatActivity() {
             findViewById<TextView>(R.id.txtPrimaryArtist).text =
                 primary.artist.ifBlank { primary.folder }
             val cover = findViewById<ImageView>(R.id.imgPrimaryCover)
+            // 3.0：无封面时给稳定的彩色渐变底（与下方「更多随机推荐」、音乐库歌单同一套色板）。
+            // 主推荐卡是 20dp 圆角矩形（bg_cover 的形状），故用圆角版而非圆形版。
+            cover.setBackground(
+                PlaylistGradient.drawable(this, primary.uri.toString(), 20f)
+            )
             cover.setImageResource(R.drawable.ic_music_tinted)
             CoverLoader.load(
                 this, primary.uri, 400,
@@ -2648,7 +2778,7 @@ class MainActivity : AppCompatActivity() {
                 if (playerImmersed) v.visibility = View.INVISIBLE
             }
         }
-        imgCd.animate().scaleX(1.22f).scaleY(1.22f).setDuration(320).start()
+        imgCd.animate().scaleX(1.22f).scaleY(1.22f).setDuration(320).setInterpolator(softBounce).start()
         // 隐藏系统状态栏/导航栏，消除上下白边
         try {
             androidx.core.view.WindowCompat.getInsetsController(window, viewPlayer)?.apply {
@@ -2676,7 +2806,7 @@ class MainActivity : AppCompatActivity() {
             v.visibility = View.VISIBLE
             v.animate().alpha(1f).setDuration(200).start()
         }
-        imgCd.animate().scaleX(1f).scaleY(1f).setDuration(250).start()
+        imgCd.animate().scaleX(1f).scaleY(1f).setDuration(250).setInterpolator(softBounce).start()
         try {
             androidx.core.view.WindowCompat.getInsetsController(window, viewPlayer)
                 ?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
@@ -2688,20 +2818,55 @@ class MainActivity : AppCompatActivity() {
         bottomNav.animate().alpha(1f).setDuration(200).start()
     }
 
-    /** 沉浸歌词：显示当前行 ± 前后一行（共三行）。 */
+    /**
+     * 沉浸歌词：显示当前行 ± 前后一行（共三行）。
+     *
+     * 3.0：**当前行做突出显示**。此前三行只是 `joinToString("\n")` 拼在一个 TextView 里，
+     * 全行同色同样式，看不出正在唱哪一句（弱志反馈「当前播放歌词没有进行突出显示，观感不好」）。
+     * 改用 [SpannableStringBuilder] 逐行上样式：当前行 = 主题色 + 加粗 + 字号放大，
+     * 上下两行 = 次级灰（[R.color.text_normal]）不抢焦点。
+     */
     private fun updateImmersiveLyric() {
         if (lyricLines.isEmpty()) {
             txtImmersiveLyric.text = ""
             return
         }
         val idx = currentLyricHighlight.coerceIn(0, lyricLines.size - 1)
-        val parts = mutableListOf<String>()
+        val sb = SpannableStringBuilder()
+        val accent = ThemeManager.accent(this)
+        val idleColor = getColor(R.color.text_normal)
+        var first = true
         for (i in idx - 1..idx + 1) {
-            if (i in lyricLines.indices) {
-                parts.add(lyricLines[i].text)
+            if (i !in lyricLines.indices) continue
+            if (!first) sb.append("\n")
+            first = false
+            val text = lyricLines[i].text
+            val start = sb.length
+            sb.append(text)
+            val end = sb.length
+            if (end <= start) continue
+            if (i == idx) {
+                // 当前行：主题色 + 加粗 + 放大 —— 三者叠加，任何主题色下都拉得开层次
+                sb.setSpan(
+                    ForegroundColorSpan(accent), start, end,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                sb.setSpan(
+                    StyleSpan(Typeface.BOLD), start, end,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                sb.setSpan(
+                    RelativeSizeSpan(1.12f), start, end,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+            } else {
+                sb.setSpan(
+                    ForegroundColorSpan(idleColor), start, end,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
             }
         }
-        txtImmersiveLyric.text = parts.joinToString("\n")
+        txtImmersiveLyric.text = sb
     }
 
     /** 视频页全屏：隐藏系统状态栏/导航栏，画面区域最大化（1.31 收窄视频四周留白）。 */
@@ -3273,13 +3438,48 @@ class MainActivity : AppCompatActivity() {
         val view = layoutInflater.inflate(R.layout.trans_dialog, null)
         val providerSpinner = view.findViewById<android.widget.Spinner>(R.id.spTransProvider)
         val providerIndex = when (translationProvider()) {
+            TranslationProvider.OPENAI -> 0
             TranslationProvider.BAIDU -> 1
             TranslationProvider.YOUDAO -> 2
-            TranslationProvider.OPENAI -> 0
+            TranslationProvider.LOCAL -> 3
         }
         val etBase = view.findViewById<android.widget.EditText>(R.id.etTransBase)
         val etKey = view.findViewById<android.widget.EditText>(R.id.etTransKey)
         val etModel = view.findViewById<android.widget.EditText>(R.id.etTransModel)
+        // 本地离线模型区块（3.0）：仅当 provider 选到「本地离线」时显示
+        val localMtRow = view.findViewById<View>(R.id.localMtRow)
+        val txtMtStatus = view.findViewById<android.widget.TextView>(R.id.txtMtStatus)
+        val btnMtDownload = view.findViewById<android.widget.Button>(R.id.btnMtDownload)
+        val btnMtDelete = view.findViewById<android.widget.Button>(R.id.btnMtDelete)
+
+        // 刷新本地模型状态（下载中/下载完成后都会调用；由调用方保证在主线程）
+        fun refreshMtStatus() {
+            val ready = MtModelManager.readyCount(this)
+            val total = MtModelManager.totalCount()
+            txtMtStatus.text = when {
+                ready >= total -> getString(R.string.mt_status_ready)
+                ready == 0 -> getString(R.string.mt_status_missing, total)
+                else -> getString(R.string.mt_status_partial, ready, total)
+            }
+            // 已齐就不给「下载」按钮（避免误点重下 216 MB）；没有模型时才允许删
+            btnMtDownload.isEnabled = ready < total
+            btnMtDelete.isEnabled = ready > 0
+        }
+
+        btnMtDownload.setOnClickListener { startMtModelDownload(::refreshMtStatus) }
+        btnMtDelete.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setMessage(R.string.mt_delete_confirm)
+                .setPositiveButton(R.string.delete) { _, _ ->
+                    val ok = MtModelManager.deleteModel(this)
+                    refreshMtStatus()
+                    toast(getString(if (ok) R.string.mt_deleted else R.string.mt_delete_failed))
+                }
+                .setNegativeButton(R.string.cancel, null)
+                .show()
+        }
+        refreshMtStatus()
+
         var loadedProvider = translationProvider()
         val drafts = mutableMapOf<TranslationProvider, Triple<String, String, String>>()
         fun stashProviderFields(provider: TranslationProvider) {
@@ -3300,6 +3500,7 @@ class MainActivity : AppCompatActivity() {
                     TranslationProvider.OPENAI -> R.string.trans_base_hint
                     TranslationProvider.BAIDU -> R.string.trans_baidu_app_id
                     TranslationProvider.YOUDAO -> R.string.trans_youdao_app_id
+                    TranslationProvider.LOCAL -> R.string.trans_local_hint
                 }
             )
             etKey.hint = getString(
@@ -3307,9 +3508,12 @@ class MainActivity : AppCompatActivity() {
                     TranslationProvider.OPENAI -> R.string.trans_key_hint
                     TranslationProvider.BAIDU -> R.string.trans_baidu_secret
                     TranslationProvider.YOUDAO -> R.string.trans_youdao_secret
+                    TranslationProvider.LOCAL -> R.string.trans_local_hint
                 }
             )
             etModel.visibility = if (provider == TranslationProvider.OPENAI) View.VISIBLE else View.GONE
+            // 本地模型区块只对「本地离线」有意义，其余 provider 下隐藏（避免误导）
+            localMtRow.visibility = if (provider == TranslationProvider.LOCAL) View.VISIBLE else View.GONE
         }
         providerSpinner.setSelection(providerIndex)
         loadProviderFields(translationProvider())
@@ -3319,6 +3523,7 @@ class MainActivity : AppCompatActivity() {
                 val provider = when (position) {
                     1 -> TranslationProvider.BAIDU
                     2 -> TranslationProvider.YOUDAO
+                    3 -> TranslationProvider.LOCAL
                     else -> TranslationProvider.OPENAI
                 }
                 if (provider != loadedProvider) {
@@ -3335,6 +3540,7 @@ class MainActivity : AppCompatActivity() {
                 val provider = when (providerSpinner.selectedItemPosition) {
                     1 -> TranslationProvider.BAIDU
                     2 -> TranslationProvider.YOUDAO
+                    3 -> TranslationProvider.LOCAL
                     else -> TranslationProvider.OPENAI
                 }
                 val base = etBase.text.toString().trim()
@@ -3357,6 +3563,49 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
+    }
+
+    /**
+     * 下载本地翻译模型（后台线程 + 进度弹窗）。
+     *
+     * 与 ASR 模型下载同一套交互：进度弹窗 + 「取消」按钮，
+     * 取消后已下好的文件保留（下次接着下，不重下 216 MB）。
+     *
+     * @param onFinished 下载结束（成功或失败）后回调，用于刷新设置页状态文案。
+     *   设置页关闭后该回调仍可能被触发，故调用方需自行保证控件已初始化。
+     */
+    private fun startMtModelDownload(onFinished: () -> Unit) {
+        mtDownloadCancelled = false
+        val dlg = AlertDialog.Builder(this)
+            .setTitle(R.string.mt_download_model)
+            .setMessage(getString(R.string.mt_preparing))
+            .setNegativeButton(R.string.cancel) { _, _ -> mtDownloadCancelled = true }
+            .setCancelable(false)
+            .show()
+        MtModelManager.downloadModel(
+            this,
+            onProgress = { idx, pct ->
+                runOnUiThread {
+                    if (!dlg.isShowing) return@runOnUiThread
+                    dlg.setMessage(
+                        getString(R.string.mt_downloading_file, idx + 1, MtModelManager.totalCount(), pct)
+                    )
+                }
+            },
+            onDone = { ok, err ->
+                runOnUiThread {
+                    if (dlg.isShowing) dlg.dismiss()
+                    PlaybackLog.log("mt model download ok=$ok err=$err")
+                    if (ok) {
+                        toast(getString(R.string.mt_model_ready))
+                    } else {
+                        toast(getString(R.string.mt_model_failed, err ?: ""))
+                    }
+                    onFinished()
+                }
+            },
+            isCancelled = { mtDownloadCancelled }
+        )
     }
 
     // ---------- 均衡器（调音） ----------
@@ -4435,10 +4684,17 @@ class MainActivity : AppCompatActivity() {
         when (prefs.getString(KEY_TRANS_PROVIDER, TranslationProvider.OPENAI.id)) {
             TranslationProvider.BAIDU.id -> TranslationProvider.BAIDU
             TranslationProvider.YOUDAO.id -> TranslationProvider.YOUDAO
+            TranslationProvider.LOCAL.id -> TranslationProvider.LOCAL
             else -> TranslationProvider.OPENAI
         }
 
-    private fun translationConfig(): TranslationConfig {
+    /**
+     * 组装当前 provider 的配置。
+     *
+     * @param cancel 本地离线引擎用的取消钩子。云端引擎每次请求很短、用不到；
+     *   本地引擎逐行推理可能跑很久，调用方传入「本次请求是否已作废」的判断。
+     */
+    private fun translationConfig(cancel: () -> Boolean = { false }): TranslationConfig {
         val provider = translationProvider()
         val base = prefs.getString("${provider.id}_base", null)
             ?: if (provider == TranslationProvider.OPENAI) prefs.getString(KEY_TRANS_BASE, null).orEmpty() else ""
@@ -4463,14 +4719,29 @@ class MainActivity : AppCompatActivity() {
                 apiKey = key,
                 model = model
             )
+            TranslationProvider.LOCAL -> TranslationConfig(
+                provider = provider,
+                mtModelDir = MtModelManager.modelDir(this).absolutePath,
+                mtBeams = prefs.getInt(KEY_MT_BEAMS, 1).coerceIn(1, 8),
+                mtCancel = cancel
+            )
         }
     }
 
     private fun translationEngine(): TranslationEngine =
         TranslationEngines.forProvider(translationProvider())
 
+    /**
+     * 当前 provider 是否已具备「可以发起翻译」的条件。
+     *
+     * 本地离线引擎的前提不是 API Key，而是**模型已下载**
+     * —— 判断错了会让用户看到「请先配置 API Key」这种驴唇不对马嘴的提示。
+     */
     private fun hasTranslationConfig(): Boolean {
         val provider = translationProvider()
+        if (provider == TranslationProvider.LOCAL) {
+            return MtModelManager.isModelReady(this)
+        }
         val base = prefs.getString("${provider.id}_base", null)
             ?: if (provider == TranslationProvider.OPENAI) prefs.getString(KEY_TRANS_BASE, null).orEmpty() else ""
         val key = prefs.getString("${provider.id}_key", null)
@@ -4521,11 +4792,12 @@ class MainActivity : AppCompatActivity() {
             showTransSettingsDialog()
             return
         }
-        val cfg = translationConfig()
         val engine = translationEngine()
         if (translating) return
         translating = true
         val requestGeneration = armTranslationTimeout()
+        // 本地离线引擎逐行推理可能跑很久：取消钩子按「本次请求是否已被新请求取代」判断
+        val cfg = translationConfig { translationGeneration != requestGeneration }
         btnTranslate.isEnabled = false
         btnTranslate.text = getString(R.string.translating)
 
@@ -4546,7 +4818,16 @@ class MainActivity : AppCompatActivity() {
 
         Thread {
             val result = try {
-                engine.translate(toTranslate, cfg)
+                engine.translate(toTranslate, cfg) { done, total ->
+                    // 本地引擎逐行推进，实时回显进度；云端引擎通常只在结束时回调一次
+                    if (total > 1) {
+                        runOnUiThread {
+                            if (translationGeneration == requestGeneration && translating) {
+                                btnTranslate.text = getString(R.string.translating) + " $done/$total"
+                            }
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 EngineTranslationResult(emptyMap(), "请求异常：${e.message}")
             }
@@ -5125,9 +5406,17 @@ class MainActivity : AppCompatActivity() {
                     //
                     // 另外：非当前播放歌的识别不做逐窗翻译——逐窗翻译只为「边听边出」预览，
                     // 非当前歌没有预览需求，等识别完成后一次翻完更省（走 translateGeneratedLyrics）。
-                    val cfg = translationConfig()
-                    val engine = translationEngine()
-                    if (hasTranslationConfig() && asrLiveUri != null) {
+                    //
+                    // 3.0 补充：**本地离线引擎同样跳过逐窗翻译**。它逐行推理，真机上每句
+                    // 可能要 0.5~2 秒（无 KV cache，每步重算），30 秒窗口积累的行要花十几秒，
+                    // 而这里是在 **ASR 识别线程内同步调用** —— 会把识别本身一起拖慢。
+                    // 改为识别完成后一次性翻译（完成回调里走 translateGeneratedLyrics），
+                    // 译文最终一致，只是没有「边识别边出译文」的中间态。
+                    if (translationProvider() != TranslationProvider.LOCAL &&
+                        hasTranslationConfig() && asrLiveUri != null
+                    ) {
+                        val cfg = translationConfig()
+                        val engine = translationEngine()
                         try {
                             val cache = translationCache.getOrPut(uriKey) { HashMap() }
                             // 增量：只取「行号 ≥ 上次已提交游标」的新增行
@@ -5241,11 +5530,16 @@ class MainActivity : AppCompatActivity() {
             showTransSettingsDialog()
             return
         }
-        val cfg = translationConfig()
         val engine = translationEngine()
         translating = true
         val requestGeneration = armTranslationTimeout()
+        // 本地离线引擎逐行推理可能跑很久：取消钩子按「本次请求是否已被新请求取代」判断
+        val cfg = translationConfig { translationGeneration != requestGeneration }
         toast(getString(R.string.asr_translating))
+        // 识别结束时状态行已被 asrStatusRowVisible(false) 隐藏，这里重新显示以承载翻译进度。
+        // 本地离线引擎逐行推理可能跑很久（真机每句 0.5~2 秒），没有进度反馈会被当成卡死。
+        asrStatusRowVisible(true)
+        txtAsrStatus.text = getString(R.string.asr_translating)
         val cache = translationCache.getOrPut(uriKey) { HashMap() }
         val toTranslate = lines.mapIndexed { i, l -> i to l.text }.filter { it.first !in cache }
         if (toTranslate.isEmpty()) {
@@ -5255,7 +5549,16 @@ class MainActivity : AppCompatActivity() {
         }
         Thread {
             val result = try {
-                engine.translate(toTranslate, cfg)
+                engine.translate(toTranslate, cfg) { done, total ->
+                    // 本地引擎逐行推进时提示进度；云端引擎通常只在结束时回调一次
+                    if (total > 1) {
+                        runOnUiThread {
+                            if (translationGeneration == requestGeneration && translating) {
+                                txtAsrStatus.text = getString(R.string.asr_trans_progress, done, total)
+                            }
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 EngineTranslationResult(emptyMap(), "请求异常：${e.message}")
             }
@@ -5557,6 +5860,64 @@ class MainActivity : AppCompatActivity() {
         txtTreePath.visibility = if (isTreeMode()) View.VISIBLE else View.GONE
     }
 
+    /**
+     * 音乐库页歌单网格的拖拽排序（3.0）。
+     *
+     * 与歌曲列表 [playlistTouchHelper] 同一套约定：`isLongPressDragEnabled = false`
+     * （长按归「设置封面」菜单），靠卡片左上角的≡把手触发 `startDrag`；
+     * `onMove` 交给 adapter 换位；`clearView`（松手）时才保存新顺序。
+     *
+     * 网格要**四个方向**都可移动，只给 UP/DOWN 在 2 列布局里跨不了行。
+     */
+    private val playlistGridTouchHelper by lazy {
+        ItemTouchHelper(object : ItemTouchHelper.Callback() {
+            override fun isLongPressDragEnabled() = false
+            override fun isItemViewSwipeEnabled() = false
+            override fun getMovementFlags(
+                recyclerView: androidx.recyclerview.widget.RecyclerView,
+                viewHolder: androidx.recyclerview.widget.RecyclerView.ViewHolder
+            ): Int = makeMovementFlags(
+                if (playlistDragEnabled()) {
+                    ItemTouchHelper.UP or ItemTouchHelper.DOWN or
+                        ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT
+                } else {
+                    0
+                },
+                0
+            )
+
+            override fun onMove(
+                recyclerView: androidx.recyclerview.widget.RecyclerView,
+                viewHolder: androidx.recyclerview.widget.RecyclerView.ViewHolder,
+                target: androidx.recyclerview.widget.RecyclerView.ViewHolder
+            ): Boolean {
+                val from = viewHolder.bindingAdapterPosition
+                val to = target.bindingAdapterPosition
+                if (from < 0 || to < 0) return false
+                // 固定项（首项「全部歌曲」）既不能被拖走，也不能被别的项挤掉位次
+                if (gridAdapter.canDragItem?.invoke(from) == false) return false
+                if (gridAdapter.canDragItem?.invoke(to) == false) return false
+                // 只用 adapter 返回的新列表即可：网格的顺序源就是它自己的 items
+                gridAdapter.move(from, to)
+                return true
+            }
+
+            override fun onSwiped(
+                viewHolder: androidx.recyclerview.widget.RecyclerView.ViewHolder,
+                direction: Int
+            ) {
+            }
+
+            override fun clearView(
+                recyclerView: androidx.recyclerview.widget.RecyclerView,
+                viewHolder: androidx.recyclerview.widget.RecyclerView.ViewHolder
+            ) {
+                super.clearView(recyclerView, viewHolder)
+                savePlaylistOrder(gridAdapter.currentItems())
+            }
+        })
+    }
+
     /** 音乐库歌单展示布局：网格大图标（默认）/ 树形目录，切换时重挂 adapter 并刷新数据。 */
     private fun applyLibLayout() {
         val mode = prefs.getString(KEY_LIB_LAYOUT, "grid")
@@ -5575,10 +5936,22 @@ class MainActivity : AppCompatActivity() {
             if (recyclerPlaylists.adapter !== gridAdapter) {
                 recyclerPlaylists.adapter = gridAdapter
             }
+            // 3.0：网格模式挂上拖拽（树形模式不挂——树是层级结构，拖拽语义完全不同）
+            if (!gridDragAttached) {
+                playlistGridTouchHelper.attachToRecyclerView(recyclerPlaylists)
+                gridDragAttached = true
+            }
+            // 只有「默认顺序」下才给把手：其它排序是算出来的，拖了会被立刻重排覆盖
+            gridAdapter.setDragHandleVisible(playlistDragEnabled())
+            // 首项「全部歌曲」是虚拟固定项，不参与排序
+            gridAdapter.canDragItem = { pos -> pos != 0 }
             gridAdapter.submit(list)
         }
         txtTreePath.visibility = if (mode == "tree") View.VISIBLE else View.GONE
     }
+
+    /** 网格拖拽是否已挂载（3.0）。ItemTouchHelper 反复 attach 会叠加监听，只能挂一次。 */
+    private var gridDragAttached = false
 
     /** 封面/主题变更后刷新两种布局的列表（当前可见的立即生效）。 */
     private fun refreshLibGrid() {
@@ -5679,15 +6052,21 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_IMMERSION_ENABLED = "immersion_enabled"
         private const val MODULE_DISCOVER = "discover"
         private const val MODULE_LIBRARY = "library"
+        /**
+         * 3.0：底部导航**不再包含**「歌手」（音乐库页上方的分段控件已有同一入口，重复了）。
+         * 常量本身保留——[showSegment] 与 [selectModule] 的内部分支仍在用。
+         */
         private const val MODULE_ARTISTS = "artists"
         private const val MODULE_FAVORITES = "favorites"
         private const val MODULE_VIDEO = "video"
         private const val KEY_NAV_TABS = "nav_tabs"
         private const val KEY_NAV_DEFAULT = "nav_default"
         private const val KEY_NAV_MIGRATED_20 = "nav_migrated_2_0"
+        /** 3.0 迁移：把老用户导航配置里的「歌手」摘掉（仅一次）。 */
+        private const val KEY_NAV_MIGRATED_30 = "nav_migrated_3_0"
         private val ALL_MODULES =
-            listOf(MODULE_DISCOVER, MODULE_LIBRARY, MODULE_ARTISTS, MODULE_FAVORITES, MODULE_VIDEO)
-        private const val DEFAULT_NAV = "discover,library,artists,favorites,video"
+            listOf(MODULE_DISCOVER, MODULE_LIBRARY, MODULE_FAVORITES, MODULE_VIDEO)
+        private const val DEFAULT_NAV = "discover,library,favorites,video"
         private const val KEY_DARK = "dark_mode"
         /** 2.12.1：歌词页/播放页用当前封面作背景（设置-主题 开关）。 */
         private const val KEY_COVER_BG = "cover_background"
@@ -5701,6 +6080,8 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_TRANS_BASE = "trans_base"
         private const val KEY_TRANS_KEY = "trans_key"
         private const val KEY_TRANS_MODEL = "trans_model"
+        /** 本地离线翻译的 beam 宽度（3.0）：1=贪心最快，>1 质量更好但耗时约 ×N。 */
+        private const val KEY_MT_BEAMS = "mt_beams"
         private const val KEY_AUTO_TRANS = "auto_translate"
         /**
          * 单行翻译失败的最大重试次数（2.13 熔断）。

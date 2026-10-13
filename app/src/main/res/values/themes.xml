@@ -33,4 +33,22 @@
         <item name="android:paddingEnd">10dp</item>
     </style>
 
+    <!--
+      迷你播放条的紧凑按钮（3.0）。
+      为什么必须单独一个：BtnStyle 的 minHeight = 48dp + padding 上下各 9dp，
+      会把迷你条内的播放按钮撑到 48dp 起，整个小条实测高 200px ≈ 76dp，
+      在实机上「上下占比过大」（弱志反馈）。
+      这里压到 36dp（图标 20dp + 上下各 8dp 留白）——仍远高于手势识别的下限，
+      但视觉上收紧了。**不动 BtnStyle 本身**：页面里的大按钮还需要 48dp 的点击区。
+    -->
+    <style name="MiniBtnStyle" parent="BtnStyle">
+        <item name="android:minHeight">36dp</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:paddingTop">4dp</item>
+        <item name="android:paddingBottom">4dp</item>
+        <item name="android:paddingStart">8dp</item>
+        <item name="android:paddingEnd">8dp</item>
+        <item name="android:textSize">12sp</item>
+    </style>
+
 </resources>

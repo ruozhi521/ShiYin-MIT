@@ -1,61 +1,61 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  发现页「更多随机推荐」长条卡（3.0）。
+  此前是方格卡（竖排、180dp 方形封面），与概念图不符——
+  目标稿 `target-ui.svg` 里这一区块是**横条**：宽 269 / 高 60 / 圆角 14，
+  圆形封面（r=20）+ 右侧标题（粗体）+ 副标题（小灰字），**没有序号徽标**。
+  故 3.0 去掉 `txtCardIndex`，改为纯圆形封面 + 两行文字。
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginStart="6dp"
-    android:layout_marginEnd="6dp"
-    android:orientation="vertical"
-    android:paddingBottom="20dp"
-    android:foreground="?attr/selectableItemBackground">
+    android:layout_marginBottom="8dp"
+    android:background="@drawable/bg_discover_row"
+    android:foreground="?attr/selectableItemBackground"
+    android:gravity="center_vertical"
+    android:minHeight="64dp"
+    android:orientation="horizontal"
+    android:paddingStart="12dp"
+    android:paddingEnd="12dp"
+    android:paddingTop="10dp"
+    android:paddingBottom="10dp">
 
-    <FrameLayout
-        android:layout_width="match_parent"
-        android:layout_height="180dp">
+    <ImageView
+        android:id="@+id/imgCardCover"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:background="@drawable/bg_circle"
+        android:clipToOutline="true"
+        android:contentDescription="@string/cover"
+        android:scaleType="centerCrop"
+        android:src="@drawable/ic_music_tinted" />
 
-        <ImageView
-            android:id="@+id/imgCardCover"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:background="@drawable/bg_cover"
-            android:clipToOutline="true"
-            android:contentDescription="@string/cover"
-            android:scaleType="centerCrop"
-            android:src="@drawable/ic_music_tinted" />
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="14dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
 
         <TextView
-            android:id="@+id/txtCardIndex"
-            android:layout_width="wrap_content"
+            android:id="@+id/txtCardTitle"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_gravity="top|start"
-            android:layout_margin="8dp"
-            android:background="@drawable/bg_badge_on_photo"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            android:paddingTop="2dp"
-            android:paddingBottom="2dp"
-            android:textColor="@color/white"
-            android:textSize="11sp" />
-    </FrameLayout>
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:textColor="@color/text_primary"
+            android:textSize="16sp"
+            android:textStyle="bold" />
 
-    <TextView
-        android:id="@+id/txtCardTitle"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
-        android:ellipsize="end"
-        android:singleLine="true"
-        android:textColor="@color/text_primary"
-        android:textSize="16sp"
-        android:textStyle="bold" />
-
-    <TextView
-        android:id="@+id/txtCardArtist"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
-        android:ellipsize="end"
-        android:singleLine="true"
-        android:textColor="@color/text_hint"
-        android:textSize="12sp" />
+        <TextView
+            android:id="@+id/txtCardArtist"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:textColor="@color/text_hint"
+            android:textSize="12sp" />
+    </LinearLayout>
 
 </LinearLayout>

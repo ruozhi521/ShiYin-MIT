@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
@@ -63,5 +64,52 @@
         android:text="@string/trans_privacy"
         android:textColor="@color/text_hint"
         android:textSize="12sp" />
+
+    <!--
+      本地离线翻译（3.1）：模型在设备上跑，需要一份约 216 MB 的本地模型。
+      与线上 provider 的区别就在这里，故单独给出「状态 + 下载/删除」入口。
+      仅当 provider 选到「本地离线」时显示（由代码控制 visibility）。
+    -->
+    <LinearLayout
+        android:id="@+id/localMtRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/txtMtStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="@color/text_hint"
+            android:textSize="13sp"
+            tools:text="模型未下载（0/3 个文件）" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnMtDownload"
+                style="@style/BtnStyle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="5dp"
+                android:layout_weight="1"
+                android:text="@string/mt_download_model" />
+
+            <Button
+                android:id="@+id/btnMtDelete"
+                style="@style/BtnStyle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="5dp"
+                android:layout_weight="1"
+                android:text="@string/mt_delete_model" />
+        </LinearLayout>
+    </LinearLayout>
 
 </LinearLayout>

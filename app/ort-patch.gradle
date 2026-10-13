@@ -1,0 +1,153 @@
+// ============================================================================
+//  离线翻译（3.1）：修正 libonnxruntime4j_jni.so 的「符号版本需求」
+// ----------------------------------------------------------------------------
+//  背景
+//    onnxruntime-android 与 sherpa-onnx 各自都打包 lib/<abi>/libonnxruntime.so
+//    （同名、内容不同；这个名字写死在 ELF 的 SONAME 里，不能改名，否则
+//     dlopen 直接找不到）。packagingOptions.pickFirst 只能留下一份。
+//
+//    但两边 JNI 对「符号版本」的要求不一致（符号名都是 OrtGetApiBase，版本名不同）：
+//        MS onnxruntime-android 1.27.0 的 JNI 需要  VERS_1.27.0
+//        sherpa-onnx v1.13.5 的 JNI 需要          VERS_1.27.1
+//    Android 链接器按「符号名@版本名」精确匹配，所以留下一份之后必然有一边
+//    解析失败。真机表现为：
+//        UnsatisfiedLinkError: cannot locate symbol "OrtGetApiBase"
+//                       referenced by libonnxruntime4j_jni.so
+//
+//  做法
+//    留下的是 sherpa 那份（ORT 1.27.1，版本更高），把 MS 的 JNI 里
+//    「需求 VERS_1.27.0」改成 VERS_1.27.1：
+//      · 旧消费者（按 1.27.0 编译）配新运行时（1.27.1）→ 向前兼容，风险更低
+//      · 反过来改 sherpa 会让它拿到更低的 1.27.0，可能缺它用到的函数
+//
+//    实现是**全文件字节替换**（无需解析 ELF 节表）：
+//      · 版本名字符串等长（都是 11 字节），原地替换不动任何偏移
+//      · .gnu.version_r 里的 vna_hash 按 System V ELF hash 同步改写，
+//        否则链接器按哈希查表会失配
+//    安全性依据：已实测该 .so 中「VERS_1.27.0 字节序列」与「对应 hash 字节序列」
+//    各自**全局唯一**（每个 abi 的 12 份中间产物均为 串=1 / hash=1），
+//    故整体替换不会误伤其它数据。
+//
+//  验证状态
+//    elf_hash 实现已用文件里现成的 vna_hash 值自校验一致；
+//    构建产物（APK）内的版本需求已核对为目标值；
+//    真机需分别跑通 ASR（sherpa）与本地翻译（ORT）才算最终确认。
+// ============================================================================
+
+def ORT_JNI_NAME = 'libonnxruntime4j_jni.so'
+def ORT_VER_OLD = 'VERS_1.27.0'
+def ORT_VER_NEW = 'VERS_1.27.1'
+
+// ---- 小工具 -----------------------------------------------------------------
+
+/** System V ELF hash —— .gnu.version_r 里 vna_hash 用的就是它。 */
+static long elfHash(byte[] name) {
+    long h = 0
+    for (int i = 0; i < name.length; i++) {
+        h = ((h << 4) + (name[i] & 0xFFL)) & 0xFFFFFFFFL
+        long g = h & 0xF0000000L
+        if (g != 0L) {
+            h ^= (g >>> 24)
+            h &= (0xFFFFFFFFL ^ g)
+        }
+    }
+    return h & 0xFFFFFFFFL
+}
+
+/** 把一个 32 位值按小端写成 4 字节（该 .so 为小端）。 */
+static byte[] leU32(long v) {
+    return [(byte) (v & 0xFF), (byte) ((v >>> 8) & 0xFF),
+            (byte) ((v >>> 16) & 0xFF), (byte) ((v >>> 24) & 0xFF)] as byte[]
+}
+
+/** 在 hay 里从 from 起找 needle，找到返回下标，否则 -1。 */
+static int indexOfBytes(byte[] hay, byte[] needle, int from) {
+    int limit = hay.length - needle.length
+    for (int i = Math.max(0, from); i <= limit; i++) {
+        boolean same = true
+        for (int j = 0; j < needle.length; j++) {
+            if (hay[i + j] != needle[j]) {
+                same = false
+                break
+            }
+        }
+        if (same) return i
+    }
+    return -1
+}
+
+/**
+ * 把 f 中 libonnxruntime.so 的版本需求从 oldVer 改成 newVer（含 vna_hash）。
+ * @return true 表示本次确实改动了文件；false 表示无需改动（已是目标状态）。
+ */
+static boolean patchOrtJni(File f, String oldVer, String newVer) {
+    byte[] d = f.bytes
+    if (d.length < 64 || d[0] != 0x7F || d[1] != (byte) 'E' ||
+            d[2] != (byte) 'L' || d[3] != (byte) 'F') {
+        return false
+    }
+    byte[] oldS = oldVer.getBytes('US-ASCII')
+    byte[] newS = newVer.getBytes('US-ASCII')
+    byte[] oldH = leU32(elfHash(oldS))
+    byte[] newH = leU32(elfHash(newS))
+
+    int hits = 0
+
+    // 1) 版本名字符串（等长替换）
+    int i = indexOfBytes(d, oldS, 0)
+    while (i >= 0) {
+        System.arraycopy(newS, 0, d, i, newS.length)
+        hits++
+        i = indexOfBytes(d, oldS, i + newS.length)
+    }
+
+    // 2) 对应的 vna_hash
+    int j = indexOfBytes(d, oldH, 0)
+    while (j >= 0) {
+        System.arraycopy(newH, 0, d, j, newH.length)
+        hits++
+        j = indexOfBytes(d, oldH, j + newH.length)
+    }
+
+    if (hits == 0) return false
+    f.bytes = d
+    return true
+}
+
+// ---- 任务：在 native 库就位后、打包前执行 -----------------------------------
+
+def patchOrtJniTask = tasks.register('patchOrtJniVersion') {
+    group = 'build'
+    description = '把 libonnxruntime4j_jni.so 的符号版本需求对齐到 sherpa 提供的 VERS_1.27.1'
+
+    doLast {
+        def libs = fileTree(layout.buildDirectory.dir('intermediates')) {
+            include "**/lib/**/${ORT_JNI_NAME}"
+        }.files
+        int changed = 0
+        libs.each { f ->
+            if (patchOrtJni(f, ORT_VER_OLD, ORT_VER_NEW)) {
+                changed++
+                logger.lifecycle("  [ort-patch] 已改 ${f.name}  (${f.parentFile.name})")
+            }
+        }
+        logger.lifecycle("  [ort-patch] ${ORT_VER_OLD} -> ${ORT_VER_NEW}：" +
+                "共 ${libs.size()} 个文件，本次改动 ${changed} 个" +
+                (changed == 0 ? "（均已是对齐状态）" : ""))
+    }
+}
+
+// 让 patch 排在 native 库合并之后、APK 打包之前。
+// strip 任务会另存一份副本，fileTree 会一并处理中间产物里的所有副本。
+afterEvaluate {
+    ['Debug', 'Release'].each { v ->
+        def merge = tasks.findByName("merge${v}NativeLibs")
+        if (merge != null) {
+            patchOrtJniTask.configure { dependsOn merge }
+        }
+        def pkg = tasks.findByName("package${v}")
+        if (pkg != null) {
+            pkg.dependsOn patchOrtJniTask
+        }
+    }
+}

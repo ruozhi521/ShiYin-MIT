@@ -94,11 +94,11 @@
         android:orientation="vertical"
         android:layout_marginStart="16dp"
         android:layout_marginEnd="16dp"
-        android:layout_marginBottom="8dp"
+        android:layout_marginBottom="6dp"
         android:paddingStart="12dp"
         android:paddingEnd="12dp"
-        android:paddingTop="4dp"
-        android:paddingBottom="4dp"
+        android:paddingTop="2dp"
+        android:paddingBottom="1dp"
         android:visibility="gone">
 
         <SeekBar
@@ -106,8 +106,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:max="0"
-            android:maxHeight="5dp"
-            android:minHeight="5dp"
+            android:maxHeight="3dp"
+            android:minHeight="3dp"
             android:paddingStart="6dp"
             android:paddingEnd="6dp"
             android:paddingTop="0dp"
@@ -120,8 +120,7 @@
             android:gravity="center_vertical"
             android:orientation="horizontal"
             android:paddingStart="6dp"
-            android:paddingEnd="2dp"
-            android:paddingTop="2dp">
+            android:paddingEnd="2dp">
 
             <TextView
                 android:id="@+id/txtMiniTitle"
@@ -133,14 +132,15 @@
                 android:textColor="@color/text_primary"
                 android:textSize="14sp" />
 
+            <!-- 3.0：改用 MiniBtnStyle（BtnStyle 的 48dp minHeight 会把整条撑到 ~76dp） -->
             <Button
                 android:id="@+id/btnMiniPlay"
-                style="@style/BtnStyle"
+                style="@style/MiniBtnStyle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:drawablePadding="6dp"
+                android:drawablePadding="4dp"
                 android:drawableStart="@drawable/ic_play"
-                android:minWidth="72dp"
+                android:minWidth="64dp"
                 android:text="@string/play" />
         </LinearLayout>
     </LinearLayout>

@@ -6,10 +6,37 @@
     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
         <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
             <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/discover_title" android:textSize="30sp" android:textStyle="bold" android:textColor="@color/text_primary" />
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="@string/discover_random" android:textColor="@color/text_hint" android:textSize="13sp" />
+            <TextView android:id="@+id/txtDiscoverSubtitle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="@string/discover_random" android:textColor="@color/text_hint" android:textSize="13sp" />
         </LinearLayout>
         <Button android:id="@+id/btnRefreshDiscover" style="@style/BtnStyle" android:layout_width="wrap_content" android:layout_height="48dp" android:text="@string/refresh" />
     </LinearLayout>
+
+    <!--
+      3.0：补搜索入口。此前发现页没有搜索框，而音乐库页有——两页顶部结构不一致，
+      从发现页切到音乐库时会「突然多出一块」，弱志反馈「感觉有些突兀」。
+      样式与行为都对齐音乐库页的 searchEntry：同样 bg_mini 圆角底、同样不可编辑
+      （focusable=false，点击直接跳搜索页），点进的是同一个搜索页。
+      文案沿用 @string/search_hint（「搜索歌单或歌曲」）——与实际搜索范围一致，
+      不写「搜索歌手/歌词」这种做不到的承诺。
+    -->
+    <EditText
+        android:id="@+id/searchEntryDiscover"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:layout_marginTop="16dp"
+        android:background="@drawable/bg_mini"
+        android:clickable="true"
+        android:cursorVisible="false"
+        android:focusable="false"
+        android:gravity="center_vertical"
+        android:hint="@string/search_hint"
+        android:inputType="text"
+        android:maxLines="1"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:textColor="@color/text_primary"
+        android:textColorHint="@color/text_hint"
+        android:textSize="14sp" />
 
     <LinearLayout
         android:id="@+id/discoverPrimary"

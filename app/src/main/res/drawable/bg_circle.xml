@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  圆形遮罩底（3.0）：发现页「更多随机推荐」长条卡的封面用。
+  配合 ImageView 的 clipToOutline 把方形封面裁成圆形（概念图里就是圆形）。
+  用 oval 而不是超大 radius 的 rectangle——oval 的 outline 是真正的圆，
+  在低 dpi 屏上边缘更稳（radius 版依赖渲染器插值，个别机型会有棱角）。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="@color/surface" />
+</shape>

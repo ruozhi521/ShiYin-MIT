@@ -29,9 +29,25 @@ android {
         applicationId "com.example.subtitleplayer"
         minSdk 26
         targetSdk 34
-        versionCode 31
-        versionName "2.16"
+        versionCode 32
+        versionName "3.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // ⚠️ 3.1 离线翻译用：onnxruntime-android 与 sherpa-onnx 都打包
+    //    lib/<abi>/libonnxruntime.so（同名、内容不同），不处理会构建失败：
+    //      > 2 files found with path 'lib/arm64-v8a/libonnxruntime.so'
+    //    这个名字是 ELF DT_SONAME 里硬编码的，**不能改名**（改了 dlopen 找不到 → 启动即崩），
+    //    也不能靠改 Maven 坐标绕开（冲突发生在打包之后，不在依赖解析阶段）。
+    //    只能让 APK 里保留一份。实测两侧 JNI 都只用 ORT 的 C API（唯一入口 OrtGetApiBase，
+    //    无 C++ mangled 符号），且 ORT 官方承诺 C API ABI 跨版本稳定；
+    //    sherpa 内置 ORT 为 1.27.1，onnxruntime-android 取同代的 1.27.0，
+    //    故任一份都能同时满足两侧的符号需求（仍须真机实测确认）。
+    packagingOptions {
+        pickFirst 'lib/arm64-v8a/libonnxruntime.so'
+        pickFirst 'lib/armeabi-v7a/libonnxruntime.so'
+        pickFirst 'lib/x86/libonnxruntime.so'
+        pickFirst 'lib/x86_64/libonnxruntime.so'
     }
 
     buildTypes {
@@ -68,6 +84,11 @@ kotlin {
     }
 }
 
+// 离线翻译（3.1）：把 libonnxruntime4j_jni.so 的符号版本需求对齐到 sherpa 提供的
+// VERS_1.27.1（否则真机 UnsatisfiedLinkError: cannot locate symbol "OrtGetApiBase"）。
+// 详细背景见该文件头部注释。
+apply from: 'ort-patch.gradle'
+
 dependencies {
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
@@ -81,6 +102,11 @@ dependencies {
 
     // 歌词识别（1.33.1 实验）：sherpa-onnx JNI（Apache-2.0），JitPack 预编译 AAR
     implementation 'com.github.k2-fsa.sherpa-onnx:sherpa-onnx:v1.13.5'
+
+    // 离线翻译（3.1）：ONNX Runtime Java API（MIT）。
+    // 版本取 1.27.0 —— 与 sherpa 内置的 ORT 1.27.1 同代，配合上面的 pickFirst 更稳。
+    // 只用于跑 MarianMT（encoder/decoder 两个 onnx），不参与 ASR。
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.27.0'
 
     // 单元测试（GitHub Actions 云端跑：gradle testDebugUnitTest）
     testImplementation 'junit:junit:4.13.2'

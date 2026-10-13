@@ -23,4 +23,37 @@
     <color name="eq_panel_bg">#1C1D24</color>
     <color name="eq_restore_bg">#1E2A3D</color>
     <color name="eq_restore_text">#7FB0F5</color>
+
+    <!--
+      无封面歌单的渐变底·深色模式（3.0）。
+      同名覆盖 values/colors.xml 里的八组——drawable 只需一套（引用 @color/pl_gradN_x），
+      日夜切换时颜色自动跟着换。
+      配色思路：整体**压暗 + 降饱和**。浅色那套是「浅底深色阶」（#DFE8F4→#8EA6C2），
+      直接拿到深色模式会刺眼；这里反转成「深底稍亮」（#2A3644→#3E5368），
+      保持同样的色相倾向（蓝灰/粉/紫/薄荷…），但亮度整体落在深色区间。
+    -->
+    <color name="pl_grad1_a">#2A3644</color>
+    <color name="pl_grad1_b">#35455A</color>
+    <color name="pl_grad1_c">#3E5368</color>
+    <color name="pl_grad2_a">#3E2F2E</color>
+    <color name="pl_grad2_b">#513B39</color>
+    <color name="pl_grad2_c">#634746</color>
+    <color name="pl_grad3_a">#33304A</color>
+    <color name="pl_grad3_b">#413D5C</color>
+    <color name="pl_grad3_c">#4E4A6E</color>
+    <color name="pl_grad4_a">#2C3D35</color>
+    <color name="pl_grad4_b">#384E43</color>
+    <color name="pl_grad4_c">#435E51</color>
+    <color name="pl_grad5_a">#3D3729</color>
+    <color name="pl_grad5_b">#4E4634</color>
+    <color name="pl_grad5_c">#5F5640</color>
+    <color name="pl_grad6_a">#283B44</color>
+    <color name="pl_grad6_b">#334B56</color>
+    <color name="pl_grad6_c">#3D5A67</color>
+    <color name="pl_grad7_a">#3F322C</color>
+    <color name="pl_grad7_b">#523F37</color>
+    <color name="pl_grad7_c">#654D43</color>
+    <color name="pl_grad8_a">#343A2C</color>
+    <color name="pl_grad8_b">#434A38</color>
+    <color name="pl_grad8_c">#525B45</color>
 </resources>
