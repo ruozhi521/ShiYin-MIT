@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  下拉框背景（3.0 补齐）。
+
+  为什么需要它：原来 Spinner 直接用 @drawable/bg_mini（纯色圆角矩形），
+  **把系统默认的下拉箭头盖掉了** —— 用户看不出这是可选项，
+  弱志反馈「切换翻译方式不够明显，要加箭头之类提示」。
+
+  做法：layer-list —— 底层保留原圆角面（与其它输入框一致），
+  上层在右侧叠一个三角箭头（gravity=end 随语言方向自适应；
+  右侧留 14dp 与原 padding 呼应）。
+
+  ⚠️ 用到它的地方记得给足 paddingEnd（≥32dp），否则文字会压到箭头上。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="18dp" />
+            <solid android:color="@color/surface" />
+        </shape>
+    </item>
+
+    <item
+        android:width="12dp"
+        android:height="8dp"
+        android:drawable="@drawable/ic_spinner_arrow"
+        android:gravity="end|center_vertical"
+        android:right="14dp" />
+
+</layer-list>

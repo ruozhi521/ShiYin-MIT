@@ -8,13 +8,23 @@
     android:paddingEnd="20dp"
     android:paddingTop="8dp">
 
+    <!--
+      翻译方式下拉（3.0 补齐「不够明显」）：
+      背景必须是 bg_spinner —— 它保留了圆角面**并在右侧画出下拉箭头**。
+      原来用 bg_mini 会把系统默认箭头盖掉，用户看不出这是可选项。
+      paddingEnd 必须 ≥32dp，否则文字会压到箭头上（箭头宽 12dp + 右距 14dp）。
+    -->
     <Spinner
         android:id="@+id/spTransProvider"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@drawable/bg_mini"
+        android:background="@drawable/bg_spinner"
         android:entries="@array/trans_provider_entries"
-        android:padding="10dp" />
+        android:paddingStart="10dp"
+        android:paddingEnd="36dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp" />
+
 
     <EditText
         android:id="@+id/etTransBase"
@@ -110,6 +120,28 @@
                 android:layout_weight="1"
                 android:text="@string/mt_delete_model" />
         </LinearLayout>
+
+        <!--
+          解码质量开关（3.0）。放在 localMtRow 内是刻意的：
+          mtBeams 只在 TranslationEngine 的 LOCAL 分支被读取，云端 provider 下无效，
+          跟着 localMtRow 显隐就不会对云端用户造成「调了没反应」的误解。
+          默认关（贪心）—— 手机端无 KV cache，beam 会成倍拉长耗时。
+        -->
+        <android.widget.Switch
+            android:id="@+id/swMtBeams"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="@string/mt_beams_title"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/mt_beams_hint"
+            android:textColor="@color/text_hint"
+            android:textSize="12sp" />
     </LinearLayout>
 
 </LinearLayout>

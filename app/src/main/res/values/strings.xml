@@ -171,6 +171,8 @@
     <string name="mt_deleted">已删除本地翻译模型</string>
     <string name="mt_delete_failed">删除失败，请重试</string>
     <string name="mt_no_space">设备存储空间可能不足（需约 216 MB）</string>
+    <string name="mt_beams_title">高质量解码（较慢）</string>
+    <string name="mt_beams_hint">关闭＝快速（贪心解码），出译文最快；开启＝beam 搜索，译文更稳但每句耗时约几倍。默认关闭。</string>
     <string name="trans_partial_fail">部分歌词未能翻译（%1$d 行），可重试</string>
     <string name="trans_all_fail">翻译失败，请检查 API 配置或网络</string>
     <string name="trans_ok">翻译完成</string>
@@ -229,6 +231,20 @@
     <string name="asr_cancel_short">取消</string>
     <string name="asr_status_running">识别中 · %1$d/%2$d 秒 · 已出 %3$d 行\n生成完会自动保存，无需等待，可边听边看</string>
     <string name="asr_model_url">模型来源（可分享）：https://hf-mirror.com/DeL-TaiseiOzaki/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01</string>
+    <string name="asr_model_url_raw" translatable="false">https://hf-mirror.com/DeL-TaiseiOzaki/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01</string>
+    <!--
+      下载卡住时的手动方案（3.0）。
+      弱志反馈：「下载界面要加『卡在 3/4 可去模型网站手动下载 tokens.txt 手动导入』引导」。
+      根因：tokens.txt 是镜像站上的非 LFS 小文件，实测偶发拉不动 → 进度永远停在第 4/4 个文件的 0%。
+      之前「手动导入」只存在于「模型未就绪」对话框，下载中卡住的用户看不到出路，故补上。
+    -->
+    <string name="asr_stuck_btn">卡住了？手动下载</string>
+    <string name="asr_stuck_title">下载卡住时的手动方案</string>
+    <string name="asr_stuck_msg">有时镜像站对 tokens.txt（4 个文件里的最后一个、体积很小）响应很慢，进度会一直停在 0%。这时手动补上它即可：\n\n1. 点「打开模型网站」\n2. 在页面的文件列表里找到并下载 tokens.txt\n3. 回到「歌词识别」→「手动导入模型文件」，选中刚下载的 tokens.txt\n\n四个文件缺哪个就补哪个，不必全部重下（导入按文件名匹配）。</string>
+    <string name="asr_stuck_open">打开模型网站</string>
+    <string name="asr_stuck_copy">复制链接</string>
+    <string name="asr_stuck_copied">模型网站链接已复制</string>
+    <string name="asr_stuck_no_browser">没找到可用的浏览器，可改用「复制链接」再手动打开</string>
     <string name="asr_gen_done_title">歌词已生成</string>
     <string name="asr_translate_now">立即翻译歌词</string>
     <string name="asr_need_trans_cfg">还没配置翻译 API，可在「翻译设置」里配置后使用</string>

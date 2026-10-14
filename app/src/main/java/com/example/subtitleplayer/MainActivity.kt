@@ -3451,6 +3451,10 @@ class MainActivity : AppCompatActivity() {
         val txtMtStatus = view.findViewById<android.widget.TextView>(R.id.txtMtStatus)
         val btnMtDownload = view.findViewById<android.widget.Button>(R.id.btnMtDownload)
         val btnMtDelete = view.findViewById<android.widget.Button>(R.id.btnMtDelete)
+        // 解码质量开关（3.0）：关=贪心(1)、开=beam(4)
+        val swMtBeams = view.findViewById<android.widget.Switch>(R.id.swMtBeams)
+        // 训练侧评估口径用的就是 beam=4，故「高质量」取 4，与评估一致（见复读根因报告）
+        swMtBeams.isChecked = prefs.getInt(KEY_MT_BEAMS, 1) > 1
 
         // 刷新本地模型状态（下载中/下载完成后都会调用；由调用方保证在主线程）
         fun refreshMtStatus() {
@@ -3546,11 +3550,15 @@ class MainActivity : AppCompatActivity() {
                 val base = etBase.text.toString().trim()
                 val key = etKey.text.toString().trim()
                 val model = etModel.text.toString().trim()
+                // 解码质量（3.0）：开=beam 4（与训练侧评估口径一致）、关=贪心 1。
+                // 无论当前 provider 是不是「本地离线」都保存——用户可能先设好再切过去。
+                val beams = if (swMtBeams.isChecked) MT_BEAMS_QUALITY else MT_BEAMS_FAST
                 prefs.edit()
                     .putString(KEY_TRANS_PROVIDER, provider.id)
                     .putString("${provider.id}_base", base)
                     .putString("${provider.id}_key", key)
                     .putString("${provider.id}_model", model)
+                    .putInt(KEY_MT_BEAMS, beams)
                     .apply()
                 if (provider == TranslationProvider.OPENAI) {
                     prefs.edit()
@@ -5187,6 +5195,10 @@ class MainActivity : AppCompatActivity() {
             .setTitle(R.string.asr_title)
             .setMessage(getString(R.string.asr_downloading))
             .setNegativeButton(R.string.cancel) { _, _ -> asrCancelled = true }
+            // 卡住时的出路（3.0）：4 个文件里 tokens.txt 最小、又是镜像站上的非 LFS 文件，
+            // 实测偶发拉不动 → 进度永远停在第 4 个文件的 0%，用户会以为 App 坏了。
+            // 之前「手动导入」只在「模型未就绪」对话框里，正卡在下载中的用户看不到，故补在这里。
+            .setNeutralButton(R.string.asr_stuck_btn) { _, _ -> showAsrStuckHelp() }
             .show()
         SpeechRecManager.downloadModel(
             this,
@@ -5210,6 +5222,35 @@ class MainActivity : AppCompatActivity() {
             },
             isCancelled = { asrCancelled }
         )
+    }
+
+    /**
+     * 下载卡住时的手动方案（3.0）。
+     *
+     * 场景：tokens.txt 是镜像站上的非 LFS 小文件，实测偶发拉不动，
+     * 进度会一直停在第 4 个文件的 0% —— 用户报的「卡在 3/4」就是它。
+     * 这里给两条出路：直接打开模型网站、或复制链接自行打开（无浏览器/无网时兜底）。
+     * 补文件仍走既有的「手动导入模型文件」，按文件名匹配，缺哪个补哪个。
+     */
+    private fun showAsrStuckHelp() {
+        val url = getString(R.string.asr_model_url_raw)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.asr_stuck_title)
+            .setMessage(R.string.asr_stuck_msg)
+            .setPositiveButton(R.string.asr_stuck_open) { _, _ ->
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                } catch (e: Exception) {
+                    toast(getString(R.string.asr_stuck_no_browser))
+                }
+            }
+            .setNeutralButton(R.string.asr_stuck_copy) { _, _ ->
+                val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("asr_model_url", url))
+                toast(getString(R.string.asr_stuck_copied))
+            }
+            .setNegativeButton(R.string.close, null)
+            .show()
     }
 
     /** 检测音频同目录的台本文件（.txt/.srt），返回文本（供热词提升识别率）。 */
@@ -6082,6 +6123,10 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_TRANS_MODEL = "trans_model"
         /** 本地离线翻译的 beam 宽度（3.0）：1=贪心最快，>1 质量更好但耗时约 ×N。 */
         private const val KEY_MT_BEAMS = "mt_beams"
+        /** 解码质量：快速（贪心）。用户可见承诺是「快速」，故这是默认值。 */
+        private const val MT_BEAMS_FAST = 1
+        /** 解码质量：高质量（beam）。取 4 是为了与训练侧评估口径一致（评估脚本用 num_beams=4）。 */
+        private const val MT_BEAMS_QUALITY = 4
         private const val KEY_AUTO_TRANS = "auto_translate"
         /**
          * 单行翻译失败的最大重试次数（2.13 熔断）。
