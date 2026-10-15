@@ -68,14 +68,63 @@ object SpeechRecManager {
 
     private const val TOKENS_FILE = "tokens.txt"
 
-    /** 某角色已就绪的文件名（不存在返回 null）。 */
+    /**
+     * 某角色已就绪的文件名（不存在、或**长度对不上账本**时返回 null）。
+     *
+     * 3.0.1：判定从「存在且 > 1KB」收紧为按账本核对（见 [AsrModelRules]）。
+     * 粉丝反馈「点『生成歌词』的确定之后就闪退」—— 下载中途断流留下的半截 onnx
+     * 被当成「已就绪」喂给 sherpa，正是这类闪退的来源之一。
+     */
     private fun resolvedFile(context: Context, role: String): File? {
         val mf = modelFiles.firstOrNull { it.role == role } ?: return null
+        val sizes = loadSizes(context)
         for (name in mf.candidates) {
             val f = File(modelDir(context), name)
-            if (f.exists() && f.length() > 1024) return f
+            if (!f.exists()) continue
+            val len = f.length()
+            if (!AsrModelRules.isUsable(name, len, sizes[name])) {
+                // 只给「看着像模型但长度不对」的情况记日志，免得天天刷 0 字节的噪音
+                if (len > 1024) {
+                    PlaybackLog.log(
+                        "asr model rejected $name: ${len}B (expected ${sizes[name] ?: "unknown"})"
+                    )
+                }
+                continue
+            }
+            return f
         }
         return null
+    }
+
+    /** 读「完整大小」账本；不存在或损坏时返回空表（退化成下限判定，不比原来差）。 */
+    private fun loadSizes(context: Context): Map<String, Long> = try {
+        val f = File(modelDir(context), AsrModelRules.SIZES_FILE)
+        if (f.exists()) AsrModelRules.parseSizes(f.readText()) else emptyMap()
+    } catch (e: Exception) {
+        emptyMap()
+    }
+
+    /**
+     * 记下刚下完的文件大小。**只有拿到服务器声明的长度（[total] > 0）才记** ——
+     * 记一个来路不明的值比不记更糟（会把坏文件自证成好的）。
+     * 写入与前几轮的 store 同套纪律：先写 `.tmp` 再 rename。
+     */
+    private fun recordSize(context: Context, name: String, total: Long) {
+        if (total <= 0) return
+        try {
+            val all = loadSizes(context).toMutableMap()
+            all[name] = total
+            val dir = modelDir(context).apply { mkdirs() }
+            val tmp = File(dir, AsrModelRules.SIZES_FILE + ".tmp")
+            tmp.writeText(AsrModelRules.serializeSizes(all))
+            val target = File(dir, AsrModelRules.SIZES_FILE)
+            if (!tmp.renameTo(target)) {
+                tmp.copyTo(target, overwrite = true)
+                tmp.delete()
+            }
+        } catch (e: Exception) {
+            PlaybackLog.log("asr recordSize failed: ${e.message}")
+        }
     }
 
     fun isModelReady(context: Context): Boolean =
@@ -172,6 +221,8 @@ object SpeechRecManager {
                                     tmp.copyTo(target, overwrite = true)
                                     tmp.delete()
                                 }
+                                // 3.0.1：把服务器声明的长度记进账本，之后按它核对完整性
+                                recordSize(context, name, total)
                                 downloaded = target
                                 onProgress(idx, 100)
                                 PlaybackLog.log("asr model OK ${mf.role} <- $base$name (${acc}B)")
@@ -271,15 +322,22 @@ object SpeechRecManager {
                 context.contentResolver.openInputStream(u)?.use { input ->
                     tmp.outputStream().use { input.copyTo(it) }
                 } ?: continue
-                if (tmp.length() > 1024) {
+                val len = tmp.length()
+                // 3.0.1：手动导入也按账本核对 —— 用户在浏览器里下到一半的文件，
+                // 在这里就被拒掉，而不是等识别时把半个 onnx 喂给 sherpa 再崩。
+                // 账本里没有记录（纯手动导入、从没下载过）时退化为下限判定。
+                if (AsrModelRules.isUsable(name, len, loadSizes(context)[name])) {
                     val target = File(dir, name)
                     if (!tmp.renameTo(target)) {
                         tmp.copyTo(target, overwrite = true)
                         tmp.delete()
                     }
                     imported++
-                    PlaybackLog.log("asr import OK $name (${tmp.length()}B)")
+                    PlaybackLog.log("asr import OK $name (${len}B)")
                 } else {
+                    PlaybackLog.log(
+                        "asr import REJECT $name (${len}B, expected ${loadSizes(context)[name] ?: "unknown"})"
+                    )
                     tmp.delete()
                 }
             } catch (e: Exception) {
@@ -398,6 +456,11 @@ object SpeechRecManager {
                 return@Thread
             }
             try {
+                // 3.0.1 耗时日志：粉丝反馈「识别/翻译慢」时手上一个数字都没有，
+                // 分不清慢与卡死。t0 从这里起算；windowCount 用于「每 5 窗记一条」——
+                // 30 分钟音频约 60 窗，全记会把 PlaybackLog 的 300 条环形容量刷爆。
+                val t0 = System.currentTimeMillis()
+                var windowCount = 0
                 PlaybackLog.log("asr start uri=$audioUri script=${scriptText?.length ?: 0}chars")
                 // lrc 目标在识别开始前建好：每窗写入，边识别边落盘（取消也保留已识别部分）。
                 // SAF 写失败时自动切换应用内兜底，绝不静默丢歌词
@@ -418,6 +481,13 @@ object SpeechRecManager {
                     queue, modelDir(context),
                     scriptText?.let { writeHotwords(context, it) },
                     { linesSoFar ->
+                        windowCount++
+                        if (windowCount % 5 == 0) {
+                            PlaybackLog.log(
+                                "asr window #$windowCount: ${linesSoFar.size} lines " +
+                                    "@${System.currentTimeMillis() - t0}ms"
+                            )
+                        }
                         // 实时：每窗完成即写盘 + 上抛（UI 预览 / 逐窗翻译联动）
                         if (!writeLrc(context, target, buildLrc(linesSoFar))) {
                             // 写失败（如 SAF 中途失效）：切应用内兜底
@@ -431,14 +501,25 @@ object SpeechRecManager {
                 ) { errMsg ->
                     onDone(false, errMsg, null, null)
                 }
-                if (lines == null) return@Thread
+                if (lines == null) {
+                    PlaybackLog.log("asr aborted after ${System.currentTimeMillis() - t0}ms")
+                    return@Thread
+                }
                 // 收尾：最终内容确认写入（失败切兜底重写）
                 if (!writeLrc(context, target, buildLrc(lines))) {
                     target = internalLrcTarget(context, audioUri)
                     writeLrc(context, target, buildLrc(lines))
                 }
                 val where = describeTarget(context, audioUri, target)
-                PlaybackLog.log("asr done: ${lines.size} lines -> $where")
+                val ms = System.currentTimeMillis() - t0
+                val audioSec = lines.lastOrNull()?.endSec ?: 0.0
+                val speedX = if (ms > 0) audioSec * 1000.0 / ms else 0.0
+                PlaybackLog.log(
+                    "asr done: ${lines.size} lines -> $where in ${ms}ms " +
+                        "(audio ${audioSec.toInt()}s, " +
+                        "${String.format(java.util.Locale.US, "%.1f", speedX)}x realtime, " +
+                        "$windowCount windows)"
+                )
                 onDone(true, null, where, lines)
             } catch (e: Exception) {
                 PlaybackLog.log("asr THREW: ${e.javaClass.simpleName}: ${e.message}")

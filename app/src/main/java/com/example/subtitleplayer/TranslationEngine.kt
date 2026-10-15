@@ -66,10 +66,34 @@ object TranslationEngines {
         )
 
     fun forProvider(provider: TranslationProvider): TranslationEngine =
-        all.firstOrNull { it.id == provider.id } ?: OpenAiCompatibleEngine
+        TimingEngine(all.firstOrNull { it.id == provider.id } ?: OpenAiCompatibleEngine)
 
     /** 所有可选服务商（设置页列表用），顺序即展示顺序。 */
     fun allProviders(): List<TranslationEngine> = all
+}
+
+/**
+ * 给所有服务商统一套一层「耗时日志」（3.0.1）。
+ *
+ * 为什么放在这里而不是各引擎内部：粉丝反馈「翻译慢」时手上**一个数字都没有**，
+ * 分不清是慢还是卡死；而四个 provider 的协议实现各不相同，逐个插计时容易漏。
+ * 这里用接口委托包一层，四个 provider 自动全覆盖。
+ * 本地离线还会在 [LocalMtEngine] 里另记「每 50 行进度 + 平均/最慢一句」，那一层更细。
+ */
+private class TimingEngine(private val inner: TranslationEngine) : TranslationEngine by inner {
+    override fun translate(
+        lines: List<Pair<Int, String>>,
+        config: TranslationConfig,
+        onProgress: (done: Int, total: Int) -> Unit
+    ): EngineTranslationResult {
+        val t0 = System.currentTimeMillis()
+        val r = inner.translate(lines, config, onProgress)
+        PlaybackLog.log(
+            "${inner.id} translate: ${r.translations.size}/${lines.size} lines " +
+                "in ${System.currentTimeMillis() - t0}ms (beams=${config.mtBeams}) err=${r.error}"
+        )
+        return r
+    }
 }
 
 /** 现有 LyricTranslator 的适配器，保持 DeepSeek/通义/GLM/Kimi 兼容。 */
@@ -256,16 +280,24 @@ object LocalMtEngine : TranslationEngine {
         val beams = config.mtBeams.coerceAtLeast(1)
         val total = lines.size
         var done = 0
+        // 3.0.1 耗时日志：粉丝反馈「本地翻译慢」，但当时一个数字都没有 ——
+        // 分不清「慢」和「卡死」。PlaybackLog 只有 300 条环形容量，
+        // 故只记「每 50 行一条进度 + 结束一条总结」，别把播放日志挤掉。
+        val t0 = System.currentTimeMillis()
+        var slowestMs = 0L
 
         for ((index, text) in lines) {
             if (config.mtCancel()) {
                 // 已翻好的部分照常返回：调用方会把它们写进缓存，不必白跑
-                PlaybackLog.log("mt local cancelled at $done/$total")
+                PlaybackLog.log(
+                    "mt local cancelled at $done/$total after ${System.currentTimeMillis() - t0}ms"
+                )
                 if (out.isEmpty()) firstError = "已取消"
                 break
             }
             val raw = text.trim()
             var zh = ""
+            val lineT0 = System.currentTimeMillis()
             if (raw.isNotEmpty()) {
                 zh = try {
                     MarianMtEngine.translate(raw, beams)
@@ -274,12 +306,22 @@ object LocalMtEngine : TranslationEngine {
                     ""
                 }
             }
+            val lineMs = System.currentTimeMillis() - lineT0
+            if (lineMs > slowestMs) slowestMs = lineMs
             if (zh.isNotEmpty()) out[index] = zh
             done++
             onProgress(done, total)
+            if (done % 50 == 0) {
+                PlaybackLog.log("mt local progress $done/$total ${System.currentTimeMillis() - t0}ms")
+            }
         }
 
-        PlaybackLog.log("mt local done: ${out.size}/$total err=$firstError")
+        val totalMs = System.currentTimeMillis() - t0
+        val avgMs = if (done > 0) totalMs / done else 0
+        PlaybackLog.log(
+            "mt local done: ${out.size}/$total err=$firstError beams=$beams " +
+                "in ${totalMs}ms (avg ${avgMs}ms/line, slowest ${slowestMs}ms)"
+        )
         return EngineTranslationResult(out, firstError)
     }
 }

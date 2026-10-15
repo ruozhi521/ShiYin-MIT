@@ -180,6 +180,10 @@
     <string name="trans_deleted">已删除本歌翻译</string>
     <string name="trans_none">这首歌还没有保存过翻译</string>
     <string name="trans_busy">正在翻译中，请稍后再试</string>
+    <!-- 3.0 修复：翻译中途取消（此前取消按钮只管识别，对翻译无效） -->
+    <string name="trans_cancelling">正在取消翻译…</string>
+    <string name="trans_cancelled_saved">已取消翻译，已翻好的 %1$d 行已保存</string>
+    <string name="trans_cancelled">已取消翻译</string>
     <string name="delete">删除</string>
     <string name="trans_privacy">API Key 仅保存在本机，不会上传或写入代码。翻译为逐行输出，个别行可能因模型策略缺失，会自动跳过其余行。</string>
     <string name="trans_saved">已保存翻译配置</string>
@@ -256,7 +260,7 @@
     <string name="title_from_filename_hint">忽略标签标题，重新扫描后生效</string>
     <string name="tab_video">视频</string>
     <string name="videos_empty">这个导航页还没有视频文件\n把含视频的文件夹添加进音乐库即可</string>
-    <string name="about_version">版本 3.0</string>
+    <string name="about_version">版本 3.0.1</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>

@@ -144,6 +144,12 @@ class SongAdapter(
         holder.lyricMark.visibility =
             if (hasLyric(song)) View.VISIBLE else View.GONE
         holder.lyricMark.setTextColor(ThemeManager.accent(holder.itemView.context))
+        // 3.0.1：无封面歌曲不再是一块死白 —— 与发现页 / 歌单卡片用同一套低饱和渐变，
+        // 按歌曲 uri 稳定选色（列表滚动、Holder 复用都不会跳色）。
+        // 有封面时下面的 setImageBitmap 会把渐变盖住，天然让位。
+        holder.cover.setBackground(
+            PlaylistGradient.drawable(holder.itemView.context, song.uri.toString(), 20f)
+        )
         holder.cover.setImageResource(R.drawable.ic_music_tinted)
         CoverLoader.load(holder.itemView.context, song.uri, 64, folder = song.folder, songSize = song.size) { bmp ->
             if (bmp != null && holder.bindingAdapterPosition == position) {
@@ -260,6 +266,11 @@ class LyricAdapter(
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
         val line = items[position]
+        // Holder 是复用的：上一行如果正在做「当前行淡入」，动画可能被切歌/滚动/刷新打断，
+        // 而 alpha 只在「当前行」分支里被写过 —— 不复位就会留下一行「颜色比别人淡」的残影
+        // （粉丝反馈：偶尔有一行的原文和译文都比上下行浅）。绑定开头统一复位，最稳。
+        holder.itemView.animate().cancel()
+        holder.itemView.alpha = 1f
         holder.text.text = line.text
         val isCurrent = position == current
         holder.text.setTextSize(if (isCurrent) lyricSizeSp + 4f else lyricSizeSp)

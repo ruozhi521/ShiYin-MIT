@@ -238,15 +238,26 @@ class MainActivity : AppCompatActivity() {
     private lateinit var lyricsEmpty: View
     private var lastSong: Song? = null
     private var translating = false
+    /**
+     * 用户在翻译中途点了「取消」（3.0 修复：此前取消按钮只管识别，对翻译完全无效）。
+     *
+     * 与 [translationGeneration] 刻意分开：generation 变化表示「这次结果已经作废、不要了」，
+     * 而主动取消要**保留已经翻好的行**——本地离线一次可能几十分钟，全丢掉太浪费。
+     */
+    private var transCancelled = false
     private var translationGeneration = 0L
     private val translationHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var translationTimeout: Runnable? = null
     private var transFailedLines: List<Pair<Int, String>> = emptyList()
 
+    /** 看门狗时长：翻译**完全没有进度**这么久才判定卡死（有进度会顺延，见 [kickTranslationTimeout]）。 */
+    private val translationTimeoutMs = 15 * 60 * 1000L
+
     /** 防止网络请求异常退出或回调丢失后永久卡住「翻译中」。 */
     private fun armTranslationTimeout(): Long {
         translationTimeout?.let { translationHandler.removeCallbacks(it) }
         val generation = ++translationGeneration
+        transCancelled = false // 新请求开始：清掉上一次的取消标志
         val timeout = Runnable {
             if (translating && translationGeneration == generation) {
                 translating = false
@@ -254,12 +265,26 @@ class MainActivity : AppCompatActivity() {
                     btnTranslate.isEnabled = true
                     btnTranslate.text = getString(R.string.translate)
                 }
+                // 状态行也要收起：它同时控制「生成歌词」按钮的可用性（见 asrStatusRowVisible）
+                if (!asrRunning) asrStatusRowVisible(false)
                 toast("翻译请求超时，已解除占用状态")
             }
         }
         translationTimeout = timeout
-        translationHandler.postDelayed(timeout, 15 * 60 * 1000L)
+        translationHandler.postDelayed(timeout, translationTimeoutMs)
         return generation
+    }
+
+    /**
+     * 收到一行翻译进度就把看门狗顺延。
+     *
+     * 为什么需要：本地离线是**逐行**推理，451 行 × 每行 1~2 秒就逼近 15 分钟的固定上限；
+     * 只按固定时长判超时，会把「一直在正常出进度」的任务误判成卡死。
+     */
+    private fun kickTranslationTimeout() {
+        val t = translationTimeout ?: return
+        translationHandler.removeCallbacks(t)
+        translationHandler.postDelayed(t, translationTimeoutMs)
     }
 
     private fun finishTranslationState() {
@@ -620,7 +645,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         if (pendingCrash != null) {
-            AlertDialog.Builder(this)
+            AccentDialogBuilder(this)
                 .setTitle("崩溃日志")
                 .setMessage(pendingCrash)
                 .setPositiveButton("复制") { _, _ ->
@@ -640,7 +665,16 @@ class MainActivity : AppCompatActivity() {
         viewLyrics = findViewById(R.id.pageLyrics)
         txtAsrStatus = findViewById(R.id.txtAsrStatus)
         btnAsrCancel = findViewById(R.id.btnAsrCancel)
-        btnAsrCancel.setOnClickListener { asrCancelled = true }
+        btnAsrCancel.setOnClickListener {
+            if (translating) {
+                // 翻译中：置标志即可 —— 引擎每翻完一行检查一次，停下时已翻好的行照常写进缓存。
+                // 此前这里只设 asrCancelled（识别专用标志），所以翻译中怎么点都没反应（粉丝反馈）。
+                transCancelled = true
+                txtAsrStatus.text = getString(R.string.trans_cancelling)
+                return@setOnClickListener
+            }
+            asrCancelled = true
+        }
         asrStatusRowVisible(false)
         playerHeader = findViewById(R.id.playerHeader)
         playerControlsMain = findViewById(R.id.playerControlsMain)
@@ -1333,7 +1367,7 @@ class MainActivity : AppCompatActivity() {
                 setPadding(0, dp(14f), 0, dp(10f))
                 setOnClickListener {
                     val opts = order.map { getString(navLabel(it)) }.toTypedArray()
-                    AlertDialog.Builder(this@MainActivity)
+                    AccentDialogBuilder(this@MainActivity)
                         .setTitle(R.string.nav_default_page)
                         .setItems(opts) { d, which ->
                             def = order[which]
@@ -1345,7 +1379,7 @@ class MainActivity : AppCompatActivity() {
             })
         }
         render()
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.nav_title)
             .setView(box)
             .setNegativeButton(R.string.cancel, null)
@@ -1379,11 +1413,28 @@ class MainActivity : AppCompatActivity() {
         searchAdapter.notifyDataSetChanged()
     }
 
-    /** 递归遍历：所有 Button/ImageButton 的背景统一 tint 为主题色（覆盖 BtnStyle/bg_play_circle）。 */
+    /** 递归遍历：Button 的文字、勾选框 / 开关的选中色统一 tint 为主题色。 */
     private fun tintAccentViews(view: View, list: android.content.res.ColorStateList) {
         if (view is Button) {
             view.backgroundTintList = null
             view.setTextColor(list)
+        } else if (view is android.widget.CompoundButton) {
+            // 3.0.1：对勾 / 开关的滑块与轨道默认取主题的 colorAccent —— 那是**静态资源**
+            // （@color/accent 恒为默认靛蓝），而用户自选的主题色是运行时值；不显式 tint，
+            // 换色后勾选框永远是蓝的（粉丝反馈：主题色设成绿色，设置里的对勾还是蓝色）。
+            view.buttonTintList = list
+            when (view) {
+                is android.widget.Switch -> {
+                    view.thumbTintList = list
+                    view.trackTintList = list
+                }
+                is androidx.appcompat.widget.SwitchCompat -> {
+                    view.thumbTintList = list
+                    view.trackTintList = list
+                }
+                else -> {
+                }
+            }
         } else if (view is ImageButton && view.id == R.id.btnPlayPlayer) {
             view.backgroundTintList = list
         }
@@ -1391,6 +1442,42 @@ class MainActivity : AppCompatActivity() {
             for (i in 0 until view.childCount) {
                 tintAccentViews(view.getChildAt(i), list)
             }
+        }
+    }
+
+    /** 弹窗的「确定 / 取消 / 中立」按钮文字跟随主题色（没有的按钮返回 null，忽略）。 */
+    private fun tintDialogButtons(d: AlertDialog) {
+        val list = android.content.res.ColorStateList.valueOf(ThemeManager.accent(this))
+        for (which in intArrayOf(
+            AlertDialog.BUTTON_POSITIVE,
+            AlertDialog.BUTTON_NEGATIVE,
+            AlertDialog.BUTTON_NEUTRAL
+        )) {
+            try {
+                d.getButton(which)?.setTextColor(list)
+            } catch (e: Exception) {
+                // 该弹窗没有这个按钮 → 忽略，绝不影响弹窗本身
+            }
+        }
+    }
+
+    /**
+     * 弹窗按钮跟随主题色的 Builder：工程里所有 `AccentDialogBuilder(this)` 都换成了它。
+     *
+     * 为什么要在 [show] 里补一刀：AlertDialog 的按钮在**独立窗口**里，
+     * `tintAccentViews(android.R.id.content)` 那趟递归遍历不到它们；而按钮颜色取自主题的
+     * `colorAccent` —— 静态资源（`@color/accent` 恒为默认靛蓝），用户自选的主题色是运行时值，
+     * 所以不补就永远是系统默认色（粉丝反馈：主题色换成绿色后，「取消 / 确定」还是蓝的）。
+     *
+     * 注：`AlertDialog.Builder` **没有** `setOnShowListener`（那是 `AlertDialog` 实例的方法），
+     * 所以只能覆写 show()，在返回给调用方之前把三个按钮刷一遍。
+     */
+    private inner class AccentDialogBuilder(context: android.content.Context) :
+        AlertDialog.Builder(context) {
+        override fun show(): AlertDialog {
+            val d = super.show()
+            tintDialogButtons(d)
+            return d
         }
     }
 
@@ -1440,7 +1527,7 @@ class MainActivity : AppCompatActivity() {
             }
             row.addView(v)
         }
-        val dialog = AlertDialog.Builder(this)
+        val dialog = AccentDialogBuilder(this)
             .setTitle(getString(titleRes))
             .setView(box)
             .setNegativeButton(R.string.cancel, null)
@@ -1537,7 +1624,7 @@ class MainActivity : AppCompatActivity() {
             }
             row.addView(v)
         }
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.accent_title)
             .setView(box)
             .setNegativeButton(R.string.cancel, null)
@@ -1617,7 +1704,7 @@ class MainActivity : AppCompatActivity() {
 
     /** 背景图设置弹窗。 */
     private fun showBgDialog() {
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.bg_title)
             .setItems(
                 arrayOf(getString(R.string.bg_set), getString(R.string.bg_clear))
@@ -2305,7 +2392,7 @@ class MainActivity : AppCompatActivity() {
         val values = arrayOf(SORT_DEFAULT, SORT_NAME, SORT_RECENT, SORT_RANDOM)
         val cur = prefs.getString(KEY_PLAYLIST_SORT, SORT_DEFAULT) ?: SORT_DEFAULT
         val idx = values.indexOf(cur).coerceAtLeast(0)
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.playlist_sort)
             .setSingleChoiceItems(labels, idx) { d, which ->
                 val chosen = values[which]
@@ -2907,7 +2994,7 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.sleep_cancel)
         )
         val minutes = intArrayOf(15, 30, 45, 60, 90, 120, 0)
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.sleep_title)
             .setItems(options) { _, which ->
                 val m = minutes[which]
@@ -3009,7 +3096,7 @@ class MainActivity : AppCompatActivity() {
 
         chkAutoTrans.setOnCheckedChangeListener { _, checked ->
             if (checked) {
-                AlertDialog.Builder(this)
+                AccentDialogBuilder(this)
                     .setTitle(R.string.auto_trans_confirm_title)
                     .setMessage(R.string.auto_trans_confirm_msg)
                     .setPositiveButton(R.string.enable) { _, _ ->
@@ -3025,7 +3112,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        settingsDialog = AlertDialog.Builder(this)
+        settingsDialog = AccentDialogBuilder(this)
             .setTitle(R.string.settings)
             .setView(view)
             .setPositiveButton(R.string.ok) { _, _ ->
@@ -3060,6 +3147,17 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(R.string.cancel, null)
             .create()
         settingsDialog?.show()
+        // 弹窗高度必须钉死（3.0 修复：粉丝红米 K70 反馈「工具」那一排按钮只露出半行、滚不动）。
+        // 根因：AlertDialog 的 window 是 wrap_content，内容比屏幕高时会被系统夹进屏幕内，
+        // 而里面这个 ScrollView 已按「完整内容高度」测量 → 滚动范围算出来是 0，
+        // 底部内容进了视口也在窗口外，永远看不到。固定窗口高度后 ScrollView 才真的能滚。
+        settingsDialog?.window?.let { w ->
+            val dm = resources.displayMetrics
+            w.setLayout(
+                (dm.widthPixels * 0.92f).toInt(),
+                (dm.heightPixels * 0.86f).toInt()
+            )
+        }
 
         view.findViewById<Button>(R.id.btnRescanNow).setOnClickListener {
             settingsDialog?.dismiss()
@@ -3306,7 +3404,7 @@ class MainActivity : AppCompatActivity() {
                 val values = intArrayOf(5, 10, 15, 30)
                 val cur = prefs.getInt(KEY_IMMERSION_SECONDS, 5)
                 val idx = values.indexOf(cur).coerceAtLeast(0)
-                AlertDialog.Builder(this@MainActivity)
+                AccentDialogBuilder(this@MainActivity)
                     .setTitle(R.string.immersion_seconds_title)
                     .setSingleChoiceItems(options, idx) { d, which ->
                         prefs.edit().putInt(KEY_IMMERSION_SECONDS, values[which]).apply()
@@ -3324,7 +3422,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dp(6f), 0, dp(2f))
         })
 
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.theme_entry)
             .setView(box)
             .setNegativeButton(R.string.cancel, null)
@@ -3353,7 +3451,7 @@ class MainActivity : AppCompatActivity() {
         queueAdapter!!.setCurrentIndex(playbackService?.currentIndex() ?: -1)
         rv.layoutManager = LinearLayoutManager(this)
         rv.adapter = queueAdapter
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.queue)
             .setView(rv)
             .setPositiveButton(R.string.close, null)
@@ -3472,7 +3570,7 @@ class MainActivity : AppCompatActivity() {
 
         btnMtDownload.setOnClickListener { startMtModelDownload(::refreshMtStatus) }
         btnMtDelete.setOnClickListener {
-            AlertDialog.Builder(this)
+            AccentDialogBuilder(this)
                 .setMessage(R.string.mt_delete_confirm)
                 .setPositiveButton(R.string.delete) { _, _ ->
                     val ok = MtModelManager.deleteModel(this)
@@ -3537,7 +3635,7 @@ class MainActivity : AppCompatActivity() {
                 loadProviderFields(provider)
             }
         }
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.trans_settings)
             .setView(view)
             .setPositiveButton(R.string.trans_save) { _, _ ->
@@ -3584,7 +3682,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun startMtModelDownload(onFinished: () -> Unit) {
         mtDownloadCancelled = false
-        val dlg = AlertDialog.Builder(this)
+        val dlg = AccentDialogBuilder(this)
             .setTitle(R.string.mt_download_model)
             .setMessage(getString(R.string.mt_preparing))
             .setNegativeButton(R.string.cancel) { _, _ -> mtDownloadCancelled = true }
@@ -3662,7 +3760,7 @@ class MainActivity : AppCompatActivity() {
             val names = AudioFxManager.PRESETS.keys.toTypedArray()
             val cur = AudioFxManager.currentPreset(this@MainActivity)
             val idx = names.indexOf(cur).coerceAtLeast(0)
-            AlertDialog.Builder(this)
+            AccentDialogBuilder(this)
                 .setTitle(R.string.eq_pick_preset)
                 .setSingleChoiceItems(names, idx) { d, which ->
                     AudioFxManager.applyPreset(this@MainActivity, names[which])
@@ -3685,7 +3783,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         refresh()
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(null)
             .setView(view)
             .setNegativeButton(R.string.cancel, null)
@@ -3708,7 +3806,7 @@ class MainActivity : AppCompatActivity() {
         val canDelete = isFolderPlaylist(name)
         if (canDelete) labels.add(getString(R.string.hide_folder))
         val idxDelete = if (canDelete) 3 else -1
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(name)
             .setItems(labels.toTypedArray()) { _, which ->
                 when (which) {
@@ -3748,7 +3846,7 @@ class MainActivity : AppCompatActivity() {
         val idxCoverSet = if (pl != null) 0 else -1
         val idxCoverClear = if (pl != null) 1 else -1
         val idxBatch = if (pl != null) 2 else -1
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(node.name)
             .setItems(labels.toTypedArray()) { _, which ->
                 // 先判删除：没有歌单的目录行 idxDelete 恰好是 0，
@@ -3782,7 +3880,7 @@ class MainActivity : AppCompatActivity() {
     private fun confirmHideFolder(folderPath: String) {
         if (folderPath.isEmpty()) return
         val label = folderPath.substringAfterLast('/')
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.hide_folder)
             .setMessage(getString(R.string.hide_folder_confirm, label))
             .setPositiveButton(R.string.ok) { _, _ ->
@@ -3841,7 +3939,7 @@ class MainActivity : AppCompatActivity() {
         btnAll.setOnClickListener { rows.forEach { it.isChecked = true } }
         btnNone.setOnClickListener { rows.forEach { it.isChecked = false } }
 
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(getString(R.string.batch_cover_title, playlistName))
             .setView(box)
             .setPositiveButton(R.string.batch_cover_apply) { d, _ ->
@@ -3885,7 +3983,7 @@ class MainActivity : AppCompatActivity() {
         val idxRemoveFromPlaylist = if (inCurrent) 4 else -1
         val idxHide = labels.size - 1 - if (canBatch) 1 else 0
         val idxBatch = if (canBatch) labels.size - 1 else -1
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(song.title)
             .setItems(labels.toTypedArray()) { _, which ->
                 when (which) {
@@ -3929,7 +4027,7 @@ class MainActivity : AppCompatActivity() {
      * 否则用户会以为真删了文件而不敢用。
      */
     private fun confirmHideSong(song: Song) {
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.hide_song)
             .setMessage(getString(R.string.hide_song_confirm, song.title))
             .setPositiveButton(R.string.ok) { _, _ ->
@@ -4006,7 +4104,7 @@ class MainActivity : AppCompatActivity() {
             toast(getString(R.string.batch_none_selected))
             return
         }
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.batch_delete)
             .setMessage(getString(R.string.batch_delete_confirm, songs.size))
             .setPositiveButton(R.string.ok) { _, _ ->
@@ -4160,7 +4258,7 @@ class MainActivity : AppCompatActivity() {
                 )
             )
         }
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.playlist_create)
             .setView(box)
             .setPositiveButton(R.string.ok) { _, _ ->
@@ -4188,7 +4286,7 @@ class MainActivity : AppCompatActivity() {
 
     /** 自建歌单长按菜单：重命名 / 删除 / 设置封面。 */
     private fun showCustomPlaylistMenu(name: String) {
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(name)
             .setItems(
                 arrayOf(
@@ -4237,7 +4335,7 @@ class MainActivity : AppCompatActivity() {
                 )
             )
         }
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.playlist_rename)
             .setView(box)
             .setPositiveButton(R.string.ok) { _, _ ->
@@ -4269,7 +4367,7 @@ class MainActivity : AppCompatActivity() {
      * 文案里也把这一点写给用户看，避免他们以为会删文件而不敢用。
      */
     private fun confirmDeletePlaylist(name: String) {
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.playlist_delete)
             .setMessage(getString(R.string.playlist_delete_confirm, name))
             .setPositiveButton(R.string.ok) { _, _ ->
@@ -4288,7 +4386,7 @@ class MainActivity : AppCompatActivity() {
         val names = CustomPlaylistStore.names(this)
         val labels = names.toMutableList()
         labels.add(getString(R.string.playlist_create))
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.playlist_add_to)
             .setItems(labels.toTypedArray()) { _, which ->
                 if (which == names.size) {
@@ -4804,8 +4902,8 @@ class MainActivity : AppCompatActivity() {
         if (translating) return
         translating = true
         val requestGeneration = armTranslationTimeout()
-        // 本地离线引擎逐行推理可能跑很久：取消钩子按「本次请求是否已被新请求取代」判断
-        val cfg = translationConfig { translationGeneration != requestGeneration }
+        // 取消钩子：用户主动点了「取消」（transCancelled），或本次请求已被新请求取代
+        val cfg = translationConfig { transCancelled || translationGeneration != requestGeneration }
         btnTranslate.isEnabled = false
         btnTranslate.text = getString(R.string.translating)
 
@@ -4824,14 +4922,20 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        // 状态行同时承载进度与「取消」按钮：本地离线逐行推理一次可能几十分钟，
+        // 只有按钮文字上的进度、又没有取消入口，用户只能杀进程（3.0 修复）
+        asrStatusRowVisible(true)
+        txtAsrStatus.text = getString(R.string.translating)
+
         Thread {
             val result = try {
                 engine.translate(toTranslate, cfg) { done, total ->
                     // 本地引擎逐行推进，实时回显进度；云端引擎通常只在结束时回调一次
                     if (total > 1) {
+                        kickTranslationTimeout() // 还在出进度 = 没卡死，看门狗顺延
                         runOnUiThread {
                             if (translationGeneration == requestGeneration && translating) {
-                                btnTranslate.text = getString(R.string.translating) + " $done/$total"
+                                txtAsrStatus.text = getString(R.string.asr_trans_progress, done, total)
                             }
                         }
                     }
@@ -4841,9 +4945,13 @@ class MainActivity : AppCompatActivity() {
             }
             runOnUiThread {
                 if (translationGeneration != requestGeneration) return@runOnUiThread
+                val cancelled = transCancelled
                 finishTranslationState()
                 btnTranslate.isEnabled = true
                 btnTranslate.text = getString(R.string.translate)
+                // 翻译结束必须收起状态行：它同时是「生成歌词」按钮的置灰开关（见 asrStatusRowVisible），
+                // 不收起来就会留下一行「正在翻译… 451/451」的残影、且「生成歌词」再也点不动（粉丝反馈）
+                if (!asrRunning) asrStatusRowVisible(false)
                 // 译文永远写进发起请求那首歌的缓存（reqKey），与当前播放哪首无关
                 cache.putAll(result.translations)
                 saveTranslationCaches()
@@ -4853,6 +4961,13 @@ class MainActivity : AppCompatActivity() {
                     lyricAdapter.setTranslations(translationCache[reqKey] ?: emptyMap())
                     playbackService?.reloadLyricTranslations()
                     when {
+                        cancelled -> toast(
+                            if (result.translations.isEmpty()) getString(R.string.trans_cancelled)
+                            else getString(
+                                R.string.trans_cancelled_saved,
+                                result.translations.size
+                            )
+                        )
                         result.translations.isEmpty() && result.error != null ->
                             showTransError("翻译失败：${result.error}")
                         result.translations.isEmpty() ->
@@ -4870,7 +4985,7 @@ class MainActivity : AppCompatActivity() {
 
     /** 用可滚动对话框显示翻译错误（完整内容，不受 toast 两行限制）。 */
     private fun showTransError(msg: String) {
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.translate)
             .setMessage(msg)
             .setPositiveButton(R.string.close, null)
@@ -4885,7 +5000,7 @@ class MainActivity : AppCompatActivity() {
             toast(getString(R.string.trans_none))
             return
         }
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.translate)
             .setMessage(R.string.trans_delete_confirm)
             .setPositiveButton(R.string.delete) { _, _ ->
@@ -4979,7 +5094,7 @@ class MainActivity : AppCompatActivity() {
             addView(txtHint)
         }
 
-        lyricOffsetDialog = AlertDialog.Builder(this)
+        lyricOffsetDialog = AccentDialogBuilder(this)
             .setTitle(R.string.offset_title)
             .setView(box)
             .setNegativeButton(R.string.close, null)
@@ -5155,7 +5270,7 @@ class MainActivity : AppCompatActivity() {
                 toast("无法打开浏览器")
             }
         }
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setView(view)
             .setPositiveButton(R.string.ok, null)
             .show()
@@ -5165,7 +5280,7 @@ class MainActivity : AppCompatActivity() {
     /** 歌词识别入口（1.33.1 实验）：模型未就绪先引导下载，就绪后选音频生成 lrc。 */
     private fun showAsrDialog() {
         val ready = SpeechRecManager.isModelReady(this)
-        val builder = AlertDialog.Builder(this)
+        val builder = AccentDialogBuilder(this)
             .setTitle(R.string.asr_title)
             .setMessage(getString(if (ready) R.string.asr_ready_msg else R.string.asr_need_model_msg))
             .setNegativeButton(R.string.close, null)
@@ -5191,7 +5306,7 @@ class MainActivity : AppCompatActivity() {
     /** 模型下载（后台线程 + 进度弹窗）。 */
     private fun showAsrDownloadDialog() {
         asrCancelled = false
-        val dlg = AlertDialog.Builder(this)
+        val dlg = AccentDialogBuilder(this)
             .setTitle(R.string.asr_title)
             .setMessage(getString(R.string.asr_downloading))
             .setNegativeButton(R.string.cancel) { _, _ -> asrCancelled = true }
@@ -5234,7 +5349,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun showAsrStuckHelp() {
         val url = getString(R.string.asr_model_url_raw)
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle(R.string.asr_stuck_title)
             .setMessage(R.string.asr_stuck_msg)
             .setPositiveButton(R.string.asr_stuck_open) { _, _ ->
@@ -5335,7 +5450,7 @@ class MainActivity : AppCompatActivity() {
             !SpeechRecManager.isModelReady(this) -> showAsrDialog()
             else -> {
                 val script = findScriptText(song.uri, savedTreeUris())
-                val builder = AlertDialog.Builder(this)
+                val builder = AccentDialogBuilder(this)
                     .setTitle(R.string.asr_gen_short)
                 if (script != null) {
                     builder.setMessage(R.string.asr_script_found)
@@ -5525,6 +5640,32 @@ class MainActivity : AppCompatActivity() {
                     updateLyricsEmpty()
                     PlaybackLog.log("asr transcribe ok=$ok msg=$msg saved=$savedWhere lines=${lines?.size}")
                     if (ok) {
+                        // 3.0.1：识别完成后必须把**最终结果**直接铺到界面上。
+                        // 此前完成后界面不做任何刷新，全靠 rescanFolderForAsr → service 重新
+                        // 解析 .lrc 再推回来（refreshLyricMap → onSongChanged）；那一环只要
+                        // 没命中（扫描时序 / 歌词 key 未对齐），就会用空列表把识别过程中的
+                        // 实时字幕清掉 —— 粉丝反馈「识别过程中有字幕，识别完就没了」。
+                        if (lines != null && uriKey == lastSong?.uri?.toString()) {
+                            val finals = lines.map {
+                                SubtitleLine(
+                                    (it.startSec * 1000).toInt(),
+                                    (it.endSec * 1000).toInt(),
+                                    it.text
+                                )
+                            }
+                            asrLiveLines = finals
+                            lyricLines = finals
+                            lyricAdapter.submit(finals)
+                            lyricAdapter.setTranslations(translationCache[uriKey] ?: emptyMap())
+                            val pos = playbackService?.currentPosition() ?: 0
+                            val idx = finals.indexOfLast { it.startMs <= pos }
+                            currentLyricHighlight = idx
+                            lyricAdapter.setCurrent(idx)
+                            scrollToLyric(idx)
+                            updateNowLyric(idx)
+                            updateLyricsEmpty()
+                            PlaybackLog.log("asr finish -> ui refreshed with ${finals.size} lines")
+                        }
                         val cfg = translationConfig()
                         if (lines != null && translationCache[uriKey].isNullOrEmpty()) {
                             // 兜底：逐窗翻译全部失败过，至少补一次完整翻译
@@ -5574,8 +5715,8 @@ class MainActivity : AppCompatActivity() {
         val engine = translationEngine()
         translating = true
         val requestGeneration = armTranslationTimeout()
-        // 本地离线引擎逐行推理可能跑很久：取消钩子按「本次请求是否已被新请求取代」判断
-        val cfg = translationConfig { translationGeneration != requestGeneration }
+        // 取消钩子：用户主动点了「取消」（transCancelled），或本次请求已被新请求取代
+        val cfg = translationConfig { transCancelled || translationGeneration != requestGeneration }
         toast(getString(R.string.asr_translating))
         // 识别结束时状态行已被 asrStatusRowVisible(false) 隐藏，这里重新显示以承载翻译进度。
         // 本地离线引擎逐行推理可能跑很久（真机每句 0.5~2 秒），没有进度反馈会被当成卡死。
@@ -5593,6 +5734,7 @@ class MainActivity : AppCompatActivity() {
                 engine.translate(toTranslate, cfg) { done, total ->
                     // 本地引擎逐行推进时提示进度；云端引擎通常只在结束时回调一次
                     if (total > 1) {
+                        kickTranslationTimeout() // 还在出进度 = 没卡死，看门狗顺延
                         runOnUiThread {
                             if (translationGeneration == requestGeneration && translating) {
                                 txtAsrStatus.text = getString(R.string.asr_trans_progress, done, total)
@@ -5605,7 +5747,12 @@ class MainActivity : AppCompatActivity() {
             }
             runOnUiThread {
                 if (translationGeneration != requestGeneration) return@runOnUiThread
+                val cancelled = transCancelled
                 finishTranslationState()
+                // 翻译结束必须收起状态行：它同时是「生成歌词」按钮的置灰开关（见 asrStatusRowVisible）。
+                // 此前这条路径没有收起 —— 粉丝看到的就是「全部行翻完后一直停在『正在翻译… 451/451』，
+                // 点取消没反应、也点不了生成歌词」，退出重进才恢复。
+                if (!asrRunning) asrStatusRowVisible(false)
                 cache.putAll(result.translations)
                 saveTranslationCaches()
                 if (lastSong?.uri?.toString() == uriKey) {
@@ -5614,9 +5761,13 @@ class MainActivity : AppCompatActivity() {
                 }
                 val failed = toTranslate.size - result.translations.size
                 PlaybackLog.log(
-                    "asr translate done: ${result.translations.size}/${toTranslate.size} err=${result.error}"
+                    "asr translate done: ${result.translations.size}/${toTranslate.size} err=${result.error} cancelled=$cancelled"
                 )
                 when {
+                    cancelled -> toast(
+                        if (result.translations.isEmpty()) getString(R.string.trans_cancelled)
+                        else getString(R.string.trans_cancelled_saved, result.translations.size)
+                    )
                     result.translations.isEmpty() && result.error != null ->
                         toast(getString(R.string.asr_failed, "翻译失败：${result.error}"))
                     result.translations.isEmpty() -> toast(getString(R.string.trans_all_fail))
@@ -5732,7 +5883,7 @@ class MainActivity : AppCompatActivity() {
         val uris = HiddenStore.hiddenSongs(this).toList()
         val folders = HiddenStore.hiddenFolders(this).toList()
         if (uris.isEmpty() && folders.isEmpty()) {
-            AlertDialog.Builder(this)
+            AccentDialogBuilder(this)
                 .setTitle(R.string.hidden_title)
                 .setMessage(R.string.hidden_empty)
                 .setPositiveButton(R.string.close, null)
@@ -5771,13 +5922,13 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        val builder = AlertDialog.Builder(this)
+        val builder = AccentDialogBuilder(this)
             .setTitle(R.string.hidden_title)
             .setItems(labels.toTypedArray()) { _, which -> actions.getOrNull(which)?.invoke() }
             .setNegativeButton(R.string.close, null)
         if (uris.isNotEmpty() || folders.isNotEmpty()) {
             builder.setPositiveButton(R.string.hidden_restore_all) { _, _ ->
-                AlertDialog.Builder(this)
+                AccentDialogBuilder(this)
                     .setTitle(R.string.hidden_restore_all)
                     .setMessage(R.string.hidden_restore_all_confirm)
                     .setPositiveButton(R.string.ok) { _, _ ->
@@ -5803,7 +5954,7 @@ class MainActivity : AppCompatActivity() {
         val d = resources.displayMetrics.density
         tv.setPadding((16 * d).toInt(), (12 * d).toInt(), (16 * d).toInt(), (12 * d).toInt())
         scroll.addView(tv)
-        AlertDialog.Builder(this)
+        AccentDialogBuilder(this)
             .setTitle("运行日志")
             .setView(scroll)
             .setPositiveButton("复制") { _, _ ->
@@ -5851,10 +6002,31 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- 树形目录：逐级进入（1.27）----------
 
+    /**
+     * 树形模式：每层记住「上次停在哪」，返回时回到原处（3.0.1）。
+     *
+     * key = 该层的 treeStack 深度（根层 = 0），value = 首个可见项位置 + 它的顶部偏移。
+     * 粉丝反馈：每次返回上级文件夹都会被拉回置顶，得重新往下滑找刚才那个文件夹。
+     * RecyclerView 在 submit（notifyDataSetChanged）后必然回到顶部，所以位置必须在
+     * **离开这一层之前**记下来，回来时再滚回去。
+     */
+    private val treeScrollMemo = mutableMapOf<Int, Pair<Int, Int>>()
+
     private fun isTreeMode(): Boolean = prefs.getString(KEY_LIB_LAYOUT, "grid") == "tree"
+
+    /** 记住当前树形列表的滚动位置（首个可见项 + 相对列表顶部的偏移）。 */
+    private fun rememberTreeScroll(depth: Int) {
+        val lm = recyclerPlaylists.layoutManager as? LinearLayoutManager ?: return
+        val pos = lm.findFirstVisibleItemPosition()
+        if (pos == RecyclerView.NO_POSITION) return
+        val v = lm.findViewByPosition(pos) ?: return
+        treeScrollMemo[depth] = pos to (v.top - recyclerPlaylists.paddingTop)
+    }
 
     /** 点击目录：进入下一级。 */
     private fun openTreeFolder(node: TreeNode) {
+        // 离开本层前先把位置记下来，返回时才回得去
+        rememberTreeScroll(treeStack.size)
         treeStack.add(node)
         refreshTree()
     }
@@ -5893,6 +6065,17 @@ class MainActivity : AppCompatActivity() {
             if (own != null) listOf(own) + cur.children else cur.children
         }
         treeAdapter.submit(nodes)
+        // 3.0.1：回到这一层时还原滚动位置（submit 后 RecyclerView 必然回到顶部）。
+        // 没有记录 = 第一次进入这一层 → 从头看。
+        val memo = treeScrollMemo[treeStack.size]
+        recyclerPlaylists.post {
+            val lm = recyclerPlaylists.layoutManager as? LinearLayoutManager ?: return@post
+            if (memo != null) {
+                lm.scrollToPositionWithOffset(memo.first, memo.second)
+            } else {
+                lm.scrollToPosition(0)
+            }
+        }
         txtTreePath.text = if (treeStack.isEmpty()) {
             getString(R.string.root_dir)
         } else {
@@ -5971,6 +6154,7 @@ class MainActivity : AppCompatActivity() {
             }
             treeRoots = LibraryTree.build(list)
             treeStack.clear()
+            treeScrollMemo.clear() // 3.0.1：层级已重置，位置记忆跟着清（免得下次进树回到旧位置）
             refreshTree()
         } else {
             recyclerPlaylists.layoutManager = GridLayoutManager(this, 2)

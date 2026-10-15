@@ -1272,7 +1272,23 @@ class MediaPlaybackService : Service() {
     fun refreshLyricMap(newMap: Map<String, LyricRef>) {
         this.lyricMap = newMap
         val song = currentSong() ?: return
+        // 3.0.1：扫描结果没命中这首歌时，**不要**把界面上的歌词推空。
+        // 粉丝反馈「识别过程中有字幕，识别完就没了」：识别完成会触发文件夹重扫 →
+        // 这里 → loadLyric → parseLyric 开头就把 lyricLines 清空重新解析；只要这一刻
+        // 新 map 里没有这首歌（扫描时序 / key 未对齐），onSongChanged 的空列表就会把
+        // 识别过程中的实时字幕清掉 —— 而识别结果其实已经写进音频同目录的 .lrc 了。
+        val before = lyricLines
+        val beforeName = lyricName
         loadLyric(song)
+        if (lyricLines.isEmpty() && before.isNotEmpty()) {
+            lyricLines = before
+            lyricName = beforeName
+            PlaybackLog.log(
+                "refreshLyricMap: no hit for '${song.title}', keep ${before.size} lines"
+            )
+            return
+        }
+        PlaybackLog.log("refreshLyricMap: '${song.title}' -> ${lyricLines.size} lines")
         listener?.onSongChanged(song, lyricLines, lyricName)
         lyriconBridge.syncSong(song, lyricLines, lyricTrans, durationMs)
     }
