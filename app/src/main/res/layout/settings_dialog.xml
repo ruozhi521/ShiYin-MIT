@@ -83,6 +83,18 @@
                     android:layout_weight="1"
                     android:text="@string/change_folder" />
             </LinearLayout>
+
+            <!-- 3.0.1：一键扫描文件库（方案 D）——先列出手机里所有含音频的文件夹，再逐个引导授权 -->
+            <LinearLayout style="@style/SettingsBtnRow"
+                android:layout_marginTop="4dp">
+
+                <Button
+                    android:id="@+id/btnScanAll"
+                    style="@style/BtnStyle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/scan_all" />
+            </LinearLayout>
         </LinearLayout>
 
         <!-- ════════ 歌词 ════════ -->

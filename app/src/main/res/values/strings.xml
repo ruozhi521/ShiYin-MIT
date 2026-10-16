@@ -4,6 +4,16 @@
     <string name="choose_folder">选择文件夹</string>
     <string name="rescan">重新扫描</string>
     <string name="change_folder">添加扫描文件夹</string>
+    <!-- 3.0.1：一键扫描文件库（方案 D：媒体库发现 + 逐个引导授权） -->
+    <string name="scan_all">一键扫描文件库</string>
+    <string name="scan_all_title">一键扫描文件库</string>
+    <string name="scan_all_msg">下面是系统媒体库里「所有含音频的文件夹」（已按曲目数排序，并合并了嵌套目录）。\n\n勾选后需要为每个文件夹授权一次 —— 这是 Android 的限制（11 起不允许一次授权整个存储），App 拿不到全盘权限。授权时会直接定位到对应文件夹，不用自己翻。</string>
+    <string name="scan_all_none">没找到含音频的文件夹。可能是系统媒体库还没收录（先随便播放一次，或重启手机后再试）。</string>
+    <string name="scan_all_need_perm">需要「音乐和音频」权限，才能列出手机里的音频文件夹</string>
+    <string name="scan_all_auth">请授权第 %1$d/%2$d 个：%3$s</string>
+    <string name="scan_all_done">已授权 %1$d 个文件夹，正在扫描…</string>
+    <string name="scan_all_added">已添加</string>
+    <string name="scan_all_undone">还剩 %1$d 个未授权（随时可以再点一次「一键扫描文件库」继续）</string>
     <string name="about">关于拾音</string>
     <string name="trans_settings">翻译设置</string>
     <string name="eq_entry">音效</string>
@@ -217,6 +227,11 @@
     <string name="asr_model_ready">识别模型下载完成</string>
     <string name="asr_model_failed">模型下载失败：%1$s\n可多点几次「下载」重试，或用「手动导入模型文件」</string>
     <string name="asr_import_model">手动导入模型文件</string>
+    <!-- 3.0.1：删除识别模型（模型疑似损坏时的自救入口） -->
+    <string name="asr_delete_model">删除识别模型</string>
+    <string name="asr_delete_model_confirm">删除已下载的识别模型？\n\n（约 165 MB，删除后需要重新下载才能生成歌词。\n如果生成歌词时总是闪退，可以先删掉重新下载一次试试。）</string>
+    <string name="asr_model_deleted">已删除识别模型</string>
+    <string name="asr_delete_failed">删除失败（可到系统设置 → 应用 → 拾音 → 存储里清除数据）</string>
     <string name="asr_import_done">已导入 %1$d 个模型文件</string>
     <string name="asr_import_none">所选文件与模型文件名不匹配（需要 encoder / decoder / joiner / tokens 四个文件，可多选一起导入）</string>
     <string name="asr_running">识别中… 已处理 %1$d / %2$d 秒\n（识别耗时较长，点「取消」可中止）</string>

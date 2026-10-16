@@ -513,16 +513,137 @@ class MainActivity : AppCompatActivity() {
 
     private val treePicker =
         registerForActivityResult(OpenTreePersistable()) { uri ->
-            uri ?: return@registerForActivityResult
+            if (uri == null) {
+                // 一键扫描的队列模式下用户取消了这一步：停下来，把剩下的告诉他（还能再点一次继续）
+                if (pendingScanQueue.isNotEmpty()) {
+                    val left = pendingScanQueue.size
+                    pendingScanQueue = emptyList()
+                    toast(getString(R.string.scan_all_undone, left))
+                }
+                return@registerForActivityResult
+            }
+            // 3.0.1：一键扫描的授权队列 —— 这一步属于队列时，授权完接着弹下一个
+            val inQueue = pendingScanQueue.isNotEmpty()
+            if (inQueue) pendingScanQueue = pendingScanQueue.drop(1)
             persistRead(uri)
             // 判断是不是新增的根（要在 addTreeUri 之前比）
             val isNewRoot = savedTreeUris().none { it.toString() == uri.toString() }
             addTreeUri(uri)
             // 2.1：这次选文件夹已同时申请写权限，扫描完成后把之前只能存应用内的识别歌词补写回音乐文件夹
             pendingLrcFlush = true
-            // 2.13：新增文件夹只扫新根再与已有库合并；重选已添加过的文件夹仍走全量
-            if (isNewRoot) scanLibraryIncremental(uri) else scanLibrary()
+            if (inQueue) {
+                // 队列期间不逐个重扫（会重复扫很多次），等全部授权完统一扫一次
+                scanQueueDone++
+                if (isNewRoot) scanQueueNew++
+                launchNextScanAuth()
+            } else {
+                // 2.13：新增文件夹只扫新根再与已有库合并；重选已添加过的文件夹仍走全量
+                if (isNewRoot) scanLibraryIncremental(uri) else scanLibrary()
+            }
         }
+
+    // ---------- 一键扫描文件库（3.0.1 · 方案 D）----------
+    // 背景：Android 11+ 禁止 SAF 一次授权整个存储（内部存储根 / Download 根 / Android/data 都不行），
+    // 所以「一键」只能做到「一键**发现**」——先把手机里所有含音频的文件夹列出来让用户勾，
+    // 再逐个引导授权（授权时用 EXTRA_INITIAL_URI 直接定位，用户不用自己翻目录）。
+
+    /** 待授权的候选文件夹队列（空 = 不在队列模式）。 */
+    private var pendingScanQueue: List<FoundFolder> = emptyList()
+    private var scanQueueTotal = 0
+    private var scanQueueDone = 0
+    private var scanQueueNew = 0
+
+    /** 读取媒体库所需权限：API 33+ 是 READ_MEDIA_AUDIO，其余是 READ_EXTERNAL_STORAGE。 */
+    private fun scanAllAudioPermission(): String =
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            android.Manifest.permission.READ_MEDIA_AUDIO
+        } else {
+            android.Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+
+    private val audioPermRequest =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+                showScanAllDialog()
+            } else {
+                toast(getString(R.string.scan_all_need_perm))
+            }
+        }
+
+    /** 入口：有权限就直接列文件夹，没有就先要权限。 */
+    private fun startScanAll() {
+        val perm = scanAllAudioPermission()
+        val ok = try {
+            checkSelfPermission(perm) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        } catch (e: Exception) {
+            false
+        }
+        if (ok) showScanAllDialog() else audioPermRequest.launch(perm)
+    }
+
+    /** 列出媒体库里含音频的文件夹（后台查库）→ 多选 → 逐个授权。 */
+    private fun showScanAllDialog() {
+        Thread {
+            val found = FolderDiscovery.discover(this)
+            runOnUiThread {
+                if (found.isEmpty()) {
+                    toast(getString(R.string.scan_all_none))
+                    return@runOnUiThread
+                }
+                // 已经授权过的标出来，并且默认不勾（避免重复弹授权）
+                val addedDocs = savedTreeUris().mapNotNull { t ->
+                    try {
+                        DocumentsContract.getTreeDocumentId(t)
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
+                val labels = found.map { f ->
+                    val mark =
+                        if (f.docId in addedDocs) "（${getString(R.string.scan_all_added)}）" else ""
+                    "${f.label}  ·  ${f.count} 首$mark"
+                }.toTypedArray()
+                val checked = BooleanArray(found.size) { i -> found[i].docId !in addedDocs }
+                AccentDialogBuilder(this)
+                    .setTitle(R.string.scan_all_title)
+                    .setMessage(R.string.scan_all_msg)
+                    .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                        checked[which] = isChecked
+                    }
+                    .setPositiveButton(R.string.ok) { _, _ ->
+                        val picks = found.filterIndexed { i, f ->
+                            checked[i] && f.docId !in addedDocs
+                        }
+                        if (picks.isEmpty()) return@setPositiveButton
+                        pendingScanQueue = picks
+                        scanQueueTotal = picks.size
+                        scanQueueDone = 0
+                        scanQueueNew = 0
+                        launchNextScanAuth()
+                    }
+                    .setNegativeButton(R.string.cancel, null)
+                    .show()
+            }
+        }.start()
+    }
+
+    /** 按队列逐个弹授权（SAF 一次只能选一个目录，只能一个个来）。 */
+    private fun launchNextScanAuth() {
+        val next = pendingScanQueue.firstOrNull()
+        if (next == null) {
+            pendingScanQueue = emptyList()
+            if (scanQueueNew > 0) {
+                toast(getString(R.string.scan_all_done, scanQueueNew))
+                scanLibrary()
+            }
+            return
+        }
+        toast(
+            getString(R.string.scan_all_auth, scanQueueDone + 1, scanQueueTotal, next.label)
+        )
+        // 预定位到该文件夹（用户通常只需点「使用此文件夹」）
+        treePicker.launch(next.docId)
+    }
 
     /** 是否要在下次扫描完成后补写「应用内兜底」的识别歌词（重选文件夹拿到写权限时置真）。 */
     private var pendingLrcFlush = false
@@ -638,6 +759,9 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         // 最先安装全局崩溃捕获（越早越好），并检测上次未读崩溃日志 → 稍后弹窗
         CrashCatcher.install(applicationContext)
+        // 3.0.1：运行日志实时落盘 —— 闪退后重开时内存缓冲已清空，只有落盘才留得住崩溃前的最后几条
+        // （粉丝反馈：崩过一次后重开，导出的日志里完全没有崩溃前的内容，查不到崩在哪一步）
+        PlaybackLog.attach(applicationContext)
         val pendingCrash = CrashCatcher.takeCrashLog(this)
         // 在 Activity 创建前应用保存的深色模式（进程级设置，不调用会回系统默认导致深色失效）
         applyDarkMode(prefs.getBoolean(KEY_DARK, false))
@@ -1415,26 +1539,23 @@ class MainActivity : AppCompatActivity() {
 
     /** 递归遍历：Button 的文字、勾选框 / 开关的选中色统一 tint 为主题色。 */
     private fun tintAccentViews(view: View, list: android.content.res.ColorStateList) {
-        if (view is Button) {
+        if (view is android.widget.CheckBox) {
+            // ⚠️ 必须放在 `is Button` **之前**：CheckBox 就是 Button 的子类
+            // （CompoundButton extends Button），写在后面永远进不来 —— 真机上正是因此
+            // 「文字被染成主题色、对勾却还是系统默认蓝」（弱志 3.0.1 复测截图）。
+            view.buttonTintList = list
+            view.setTextColor(list) // 文字也跟随主题色，与既有观感一致
+        } else if (view is android.widget.Switch) {
+            view.buttonTintList = list
+            view.thumbTintList = list
+            view.trackTintList = list
+        } else if (view is androidx.appcompat.widget.SwitchCompat) {
+            view.buttonTintList = list
+            view.thumbTintList = list
+            view.trackTintList = list
+        } else if (view is Button) {
             view.backgroundTintList = null
             view.setTextColor(list)
-        } else if (view is android.widget.CompoundButton) {
-            // 3.0.1：对勾 / 开关的滑块与轨道默认取主题的 colorAccent —— 那是**静态资源**
-            // （@color/accent 恒为默认靛蓝），而用户自选的主题色是运行时值；不显式 tint，
-            // 换色后勾选框永远是蓝的（粉丝反馈：主题色设成绿色，设置里的对勾还是蓝色）。
-            view.buttonTintList = list
-            when (view) {
-                is android.widget.Switch -> {
-                    view.thumbTintList = list
-                    view.trackTintList = list
-                }
-                is androidx.appcompat.widget.SwitchCompat -> {
-                    view.thumbTintList = list
-                    view.trackTintList = list
-                }
-                else -> {
-                }
-            }
         } else if (view is ImageButton && view.id == R.id.btnPlayPlayer) {
             view.backgroundTintList = list
         }
@@ -1462,18 +1583,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 弹窗按钮跟随主题色的 Builder：工程里所有 `AccentDialogBuilder(this)` 都换成了它。
+     * 弹窗按钮跟随主题色的 Builder：工程里所有弹窗都用它构造。
      *
      * 为什么要在 [show] 里补一刀：AlertDialog 的按钮在**独立窗口**里，
      * `tintAccentViews(android.R.id.content)` 那趟递归遍历不到它们；而按钮颜色取自主题的
      * `colorAccent` —— 静态资源（`@color/accent` 恒为默认靛蓝），用户自选的主题色是运行时值，
      * 所以不补就永远是系统默认色（粉丝反馈：主题色换成绿色后，「取消 / 确定」还是蓝的）。
      *
-     * 注：`AlertDialog.Builder` **没有** `setOnShowListener`（那是 `AlertDialog` 实例的方法），
-     * 所以只能覆写 show()，在返回给调用方之前把三个按钮刷一遍。
+     * ⚠️ **两条路都要覆盖**：多数弹窗是 `Builder(...).show()`；但**设置弹窗**这类是
+     * `Builder(...).create()` 之后再 `dialog.show()` —— 那走的是 `AlertDialog.show()`，
+     * 根本不经过覆写的 [show]，所以 [create] 里也得挂一次
+     * （`setOnShowListener` 在 `AlertDialog` 实例上有，`AlertDialog.Builder` 上没有）。
      */
     private inner class AccentDialogBuilder(context: android.content.Context) :
         AlertDialog.Builder(context) {
+        override fun create(): AlertDialog {
+            val d = super.create()
+            d.setOnShowListener { tintDialogButtons(d) }
+            return d
+        }
+
         override fun show(): AlertDialog {
             val d = super.show()
             tintDialogButtons(d)
@@ -3170,6 +3299,11 @@ class MainActivity : AppCompatActivity() {
         view.findViewById<Button>(R.id.btnChangeFolder).setOnClickListener {
             settingsDialog?.dismiss()
             treePicker.launch(null)
+        }
+        // 3.0.1：一键扫描文件库（方案 D）——先列出手机里所有含音频的文件夹，再逐个引导授权
+        view.findViewById<Button>(R.id.btnScanAll).setOnClickListener {
+            settingsDialog?.dismiss()
+            startScanAll()
         }
         // 长按「添加扫描文件夹」：清除全部已添加根，回到空库（下次可重新添加）
         view.findViewById<Button>(R.id.btnChangeFolder).setOnLongClickListener {
@@ -5278,6 +5412,34 @@ class MainActivity : AppCompatActivity() {
 
     /** 导出播放运行日志（1.34）：滚动窗口展示 + 一键复制，用户发给作者定位播放异常。 */
     /** 歌词识别入口（1.33.1 实验）：模型未就绪先引导下载，就绪后选音频生成 lrc。 */
+    /**
+     * 删除已下载的识别模型（3.0.1）。
+     *
+     * 为什么需要：就绪判定只能保证「文件长度对」，**保证不了内容没坏** —— 旧版下载断流
+     * 留下的半截文件、或内容损坏的文件，一跑就闪退（而且多是 native 崩，连崩溃日志都抓不到）。
+     * 给一个「删掉重下」的入口，既让卡住的用户能自救，也能帮我们排除这一类原因。
+     */
+    private fun confirmDeleteAsrModel() {
+        AccentDialogBuilder(this)
+            .setTitle(R.string.asr_delete_model)
+            .setMessage(R.string.asr_delete_model_confirm)
+            .setPositiveButton(R.string.ok) { _, _ ->
+                val ok = try {
+                    SpeechRecManager.modelDir(this).deleteRecursively()
+                } catch (e: Exception) {
+                    false
+                }
+                PlaybackLog.log("asr model deleted: $ok")
+                toast(
+                    getString(
+                        if (ok) R.string.asr_model_deleted else R.string.asr_delete_failed
+                    )
+                )
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
     private fun showAsrDialog() {
         val ready = SpeechRecManager.isModelReady(this)
         val builder = AccentDialogBuilder(this)
@@ -5291,6 +5453,10 @@ class MainActivity : AppCompatActivity() {
                 } catch (e: Exception) {
                     toast(getString(R.string.asr_failed, e.message))
                 }
+            }
+            // 3.0.1：模型可能「长度对、内容坏」（旧版下载断流留下的）—— 给一条自救路
+            builder.setNeutralButton(R.string.asr_delete_model) { _, _ ->
+                confirmDeleteAsrModel()
             }
         } else {
             builder.setPositiveButton(R.string.asr_download_model) { _, _ ->
@@ -5440,6 +5606,14 @@ class MainActivity : AppCompatActivity() {
     /** 歌词页「生成歌词」：检测台本 → 提示用台本识别（更准）或直接实时识别。 */
     private fun startAsrForCurrentSong() {
         val song = lastSong
+        val ready = try {
+            SpeechRecManager.isModelReady(this)
+        } catch (e: Exception) {
+            false
+        }
+        // 3.0.1：细粒度日志 —— 有粉丝「点生成歌词就闪退、却没有任何崩溃日志」，
+        // 而这条路径（asr start 之前）此前一条日志都没有，完全看不出崩在哪一步。
+        PlaybackLog.log("asr tap: ready=$ready song=${song?.title ?: "-"}")
         when {
             // 2.14 防呆：识别进行中就不要再弹这个对话框。
             // 旧实现只在 startAsrTranscribe 里拦 asrRunning，但对话框已经弹出来了——
@@ -5447,23 +5621,27 @@ class MainActivity : AppCompatActivity() {
             // createLrcTarget；这正是「lrc(1)/(2)/(3)」残留的入口（粉丝反馈）。
             asrRunning -> toast(getString(R.string.asr_busy_running))
             song == null -> toast(getString(R.string.no_song))
-            !SpeechRecManager.isModelReady(this) -> showAsrDialog()
+            !ready -> showAsrDialog()
             else -> {
                 val script = findScriptText(song.uri, savedTreeUris())
+                PlaybackLog.log("asr script lookup: ${script?.length ?: 0}chars")
                 val builder = AccentDialogBuilder(this)
                     .setTitle(R.string.asr_gen_short)
                 if (script != null) {
                     builder.setMessage(R.string.asr_script_found)
                         .setPositiveButton(R.string.asr_use_script) { _, _ ->
+                            PlaybackLog.log("asr confirm: use script")
                             startAsrTranscribe(song.uri, script)
                         }
                         .setNeutralButton(R.string.asr_start_direct) { _, _ ->
+                            PlaybackLog.log("asr confirm: direct")
                             startAsrTranscribe(song.uri, null)
                         }
                         .setNegativeButton(R.string.cancel, null)
                 } else {
                     builder.setMessage(R.string.asr_gen_confirm)
                         .setPositiveButton(R.string.ok) { _, _ ->
+                            PlaybackLog.log("asr confirm: ok")
                             startAsrTranscribe(song.uri, null)
                         }
                         .setNegativeButton(R.string.cancel, null)
@@ -5516,6 +5694,9 @@ class MainActivity : AppCompatActivity() {
             toast(getString(R.string.asr_busy_running))
             return
         }
+        // 3.0.1：把这条路径每一步都记下来 —— 粉丝的闪退就发生在 asr start 之前，
+        // 那段以前没有任何日志，事后完全看不出崩在哪（native 崩连崩溃日志都不给）
+        PlaybackLog.log("asr startAsrTranscribe uri=$uri script=${scriptText?.length ?: 0}chars")
         asrRunning = true
         asrCancelled = false
         asrLiveUri = null
@@ -5530,6 +5711,7 @@ class MainActivity : AppCompatActivity() {
         asrStatusRowVisible(true)
         updateAsrStatus(0, 0, 0)
         val trees = savedTreeUris()
+        PlaybackLog.log("asr trees=${trees.size}")
         val asrWakeLock = (getSystemService(Context.POWER_SERVICE) as android.os.PowerManager)
             .newWakeLock(
                 android.os.PowerManager.PARTIAL_WAKE_LOCK,
@@ -5539,6 +5721,7 @@ class MainActivity : AppCompatActivity() {
         Thread {
             try {
                 asrWakeLock.acquire()
+                PlaybackLog.log("asr wakeLock acquired -> transcribe")
                 SpeechRecManager.transcribe(
                 this,
                 uri,
@@ -6378,17 +6561,33 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** 选择整个文件夹并请求可持久化读+写权限。 */
-    private class OpenTreePersistable : ActivityResultContract<Void?, Uri?>() {
-        override fun createIntent(context: Context, input: Void?): Intent {
+    private class OpenTreePersistable : ActivityResultContract<String?, Uri?>() {
+        override fun createIntent(context: Context, input: String?): Intent {
             // 【2.1 关键修复】原来只带 FLAG_GRANT_READ_URI_PERMISSION：
             // 系统就不会授予写权限 → 识别歌词写同目录 .lrc 必然 Permission Denial
             // → 100% 落进「应用内兜底」（所有机型、所有用户都一样，重选文件夹也没用）。
             // 必须把写权限一起申请，SAF 才能在同目录 createDocument 出 .lrc。
-            return Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or
                     Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                     Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
             )
+            // 3.0.1：一键扫描时传 SAF docId（如 `primary:asmr/RJ1`）预定位到候选文件夹 ——
+            // 用户进去后通常只需点一下「使用此文件夹」，不用自己翻目录（这正是粉丝的痛点）
+            if (!input.isNullOrBlank()) {
+                try {
+                    intent.putExtra(
+                        "android.provider.extra.INITIAL_URI",
+                        DocumentsContract.buildDocumentUri(
+                            "com.android.externalstorage.documents",
+                            input
+                        )
+                    )
+                } catch (e: Exception) {
+                    // 预定位失败不影响授权本身
+                }
+            }
+            return intent
         }
 
         override fun parseResult(resultCode: Int, intent: Intent?): Uri? {
