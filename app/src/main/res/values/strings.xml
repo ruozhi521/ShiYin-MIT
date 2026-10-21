@@ -14,6 +14,12 @@
     <string name="scan_all_done">已授权 %1$d 个文件夹，正在扫描…</string>
     <string name="scan_all_added">已添加</string>
     <string name="scan_all_undone">还剩 %1$d 个未授权（随时可以再点一次「一键扫描文件库」继续）</string>
+    <!-- 3.0.2：禁止上下滑动切歌（粉丝反馈容易误触切下一首） -->
+    <string name="no_swipe_switch">禁止上下滑动切歌</string>
+    <string name="no_swipe_switch_hint">关闭后播放页上下滑不再切歌（避免误触）；左右滑切页不受影响</string>
+    <!-- 3.0.2：歌词页全屏 -->
+    <string name="lyrics_fullscreen">全屏</string>
+    <string name="lyrics_exit_fullscreen">退出全屏</string>
     <string name="about">关于拾音</string>
     <string name="trans_settings">翻译设置</string>
     <string name="eq_entry">音效</string>
@@ -275,7 +281,7 @@
     <string name="title_from_filename_hint">忽略标签标题，重新扫描后生效</string>
     <string name="tab_video">视频</string>
     <string name="videos_empty">这个导航页还没有视频文件\n把含视频的文件夹添加进音乐库即可</string>
-    <string name="about_version">版本 3.0.1</string>
+    <string name="about_version">版本 3.0.2</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>

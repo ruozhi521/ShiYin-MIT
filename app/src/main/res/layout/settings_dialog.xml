@@ -309,6 +309,17 @@
         <LinearLayout style="@style/SettingsCard">
 
             <CheckBox
+                android:id="@+id/chkNoSwipeSwitch"
+                style="@style/SettingsSwitch"
+                android:text="@string/no_swipe_switch" />
+
+            <TextView
+                style="@style/SettingsHint"
+                android:text="@string/no_swipe_switch_hint" />
+
+            <View style="@style/SettingsDivider" />
+
+            <CheckBox
                 android:id="@+id/chkMixAudio"
                 style="@style/SettingsSwitch"
                 android:text="@string/mix_audio_label" />

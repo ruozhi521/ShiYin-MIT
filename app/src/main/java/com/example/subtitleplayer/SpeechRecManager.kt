@@ -886,6 +886,19 @@ object SpeechRecManager {
 
     private val sentenceEnds = "。！？!?.,、，…"
 
+    /**
+     * 停顿超过这么久才另起一行（3.0.2）。
+     * 原来 0.6 秒太敏感 —— 音声 / ASMR 语速慢、字间停顿多，结果每个词都被切成一行，
+     * 粉丝截图里就是「興味あ / る / んだ / うん / まああ …」这种碎片。
+     */
+    private const val LINE_BREAK_GAP = 1.2
+
+    /** 一行短于这个字数时，尽量并到相邻行（除非前一行以句末标点结尾）。 */
+    private const val MIN_LINE_CHARS = 6
+
+    /** 合并短行时允许的最大间隔（秒）。 */
+    private const val MERGE_GAP = 2.5
+
     private fun tokensToLines(tokens: List<Pair<Double, String>>): List<LrcLine> {
         val lines = mutableListOf<LrcLine>()
         var cur = StringBuilder()
@@ -906,7 +919,7 @@ object SpeechRecManager {
 
         for ((t, tok) in tokens) {
             if (tok.isBlank()) continue
-            if (last >= 0 && t - last > 0.6) flush()
+            if (last >= 0 && t - last > LINE_BREAK_GAP) flush()
             if (start < 0) start = t
             cur.append(tok)
             last = t
@@ -917,7 +930,38 @@ object SpeechRecManager {
             }
         }
         flush()
-        return lines
+
+        // 二次合并（3.0.2）：只按停顿切行仍会留下零碎短句，这里把不足 MIN_LINE_CHARS 的行
+        // 并进前一行；遇到「前一行以句末标点结尾」不合并 —— 那才是真正的句子边界。
+        if (lines.size < 2) return lines
+        val merged = ArrayList<LrcLine>(lines.size)
+        for (l in lines) {
+            val prev = merged.lastOrNull()
+            val prevEndsSentence = prev != null && prev.text.isNotEmpty() &&
+                sentenceEnds.contains(prev.text.last())
+            if (prev != null && prev.text.length < MIN_LINE_CHARS && !prevEndsSentence &&
+                l.startSec - prev.endSec <= MERGE_GAP
+            ) {
+                merged[merged.size - 1] = LrcLine(prev.startSec, l.endSec, prev.text + l.text)
+            } else {
+                merged.add(l)
+            }
+        }
+        // 最后一行仍然过短 → 并进前一行（同样要求前一行不是句子边界）
+        if (merged.size >= 2) {
+            val tail = merged.last()
+            val prev = merged[merged.size - 2]
+            val prevEndsSentence = prev.text.isNotEmpty() &&
+                sentenceEnds.contains(prev.text.last())
+            if (tail.text.length < MIN_LINE_CHARS && !prevEndsSentence &&
+                tail.startSec - prev.endSec <= MERGE_GAP
+            ) {
+                merged[merged.size - 2] =
+                    LrcLine(prev.startSec, tail.endSec, prev.text + tail.text)
+                merged.removeAt(merged.size - 1)
+            }
+        }
+        return merged
     }
 
     // ---------- LRC 增量落盘 ----------

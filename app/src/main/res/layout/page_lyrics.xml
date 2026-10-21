@@ -8,6 +8,7 @@
     android:visibility="gone">
 
     <LinearLayout
+        android:id="@+id/lyricsHeaderRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
@@ -36,7 +37,13 @@
             android:textStyle="bold" />
 
     </LinearLayout>
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:gravity="end" android:orientation="horizontal">
+    <LinearLayout
+        android:id="@+id/lyricsToolsRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:gravity="end"
+        android:orientation="horizontal">
         <Button
             android:id="@+id/btnLyricOffset"
             style="@style/BtnStyle"
@@ -62,6 +69,15 @@
             android:layout_height="wrap_content"
             android:minWidth="56dp"
             android:text="@string/translate" />
+
+        <Button
+            android:id="@+id/btnLyricsFullscreen"
+            style="@style/BtnStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:minWidth="56dp"
+            android:text="@string/lyrics_fullscreen" />
     </LinearLayout>
 
     <LinearLayout
@@ -105,6 +121,18 @@
             android:clipToPadding="false"
             android:paddingTop="12dp"
             android:paddingBottom="12dp" />
+
+        <!-- 3.0.2：全屏时标题与工具栏都隐藏了，这是唯一的退出入口（另一个是返回键） -->
+        <Button
+            android:id="@+id/btnLyricsExitFull"
+            style="@style/BtnStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end"
+            android:layout_margin="12dp"
+            android:minWidth="48dp"
+            android:text="@string/lyrics_exit_fullscreen"
+            android:visibility="gone" />
 
         <!-- 2.16：无歌词空状态（此前是整屏空白，用户不知道该干什么） -->
         <LinearLayout

@@ -922,7 +922,10 @@ class MainActivity : AppCompatActivity() {
         (viewLyrics as SwipeFrameLayout).onHorizontalSwipe = { dir, downY -> handleSwipe(dir, downY) }
         // 播放页上下滑切歌（1.33）：上滑下一首、下滑上一首（歌词页不启用），带过渡动画
         (viewPlayer as SwipeFrameLayout).onVerticalSwipe = { dir ->
-            swipeSwitchSong(up = dir > 0)
+            // 3.0.2：设置里可关掉「上下滑动切歌」—— 粉丝反馈很容易误触切到下一首
+            if (!prefs.getBoolean("no_swipe_switch", false)) {
+                swipeSwitchSong(up = dir > 0)
+            }
         }
 
         miniPlayer = findViewById(R.id.miniPlayer)
@@ -1062,6 +1065,13 @@ class MainActivity : AppCompatActivity() {
 
         // ---- 全屏歌词 ----
         lyricAdapter = LyricAdapter { pos -> onLyricClick(pos) }
+        // 3.0.2：歌词全屏的进入 / 退出按钮
+        findViewById<Button>(R.id.btnLyricsFullscreen).setOnClickListener {
+            setLyricsFullscreen(true)
+        }
+        findViewById<Button>(R.id.btnLyricsExitFull).setOnClickListener {
+            setLyricsFullscreen(false)
+        }
         recyclerLyricFull.layoutManager = LinearLayoutManager(this)
         recyclerLyricFull.adapter = lyricAdapter
         // 用户手动滑动时记录时间（自动回位冷却；按下与移动都刷新，松手后才开始计 5 秒）
@@ -2111,10 +2121,14 @@ class MainActivity : AppCompatActivity() {
             return
         }
         when (page) {
-            Page.LYRICS -> backFromLyricsPage()
+            // 3.0.2：歌词页全屏时，返回键先退出全屏
+            Page.LYRICS ->
+                if (lyricsFullscreen) setLyricsFullscreen(false) else backFromLyricsPage()
             Page.PLAYER -> backFromPlayerPage()
             Page.VIDEO -> closeVideoPage()
-            Page.PLAYLIST, Page.SEARCH -> showPage(Page.LIBRARY)
+            // 3.0.2：歌单返回**来源页**（从「歌单」页进来就回歌单页，不再一律回音乐库）
+            Page.PLAYLIST -> showPage(playlistSourcePage)
+            Page.SEARCH -> showPage(Page.LIBRARY)
             // 2.14：收藏页现在是「歌单」页的子页（从那里点进来），返回它才是对的
             // 2.15：与页内返回按钮共用 leaveFavorites()，避免两处行为漂移
             Page.FAVORITES -> leaveFavorites()
@@ -2672,8 +2686,18 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- 歌单/搜索 ----------
 
+    /**
+     * 进入歌单详情前所在的页面（3.0.2）。
+     *
+     * 粉丝反馈「在歌单页面返回上级会到音乐库」——歌单既可能从音乐库进，也可能从「歌单」页进，
+     * 返回应该回**来源页**，而不是一律回音乐库。若已经在歌单页里再打开另一个歌单，
+     * 沿用上一次的来源（避免把 PLAYLIST 记成来源后返回原地打转）。
+     */
+    private var playlistSourcePage: Page = Page.LIBRARY
+
     private fun openPlaylist(playlist: Playlist) {
         bindPlaylist(playlist)
+        if (page != Page.PLAYLIST) playlistSourcePage = page
         showPage(Page.PLAYLIST)
     }
 
@@ -2916,8 +2940,38 @@ class MainActivity : AppCompatActivity() {
         playbackService?.seekToAndPlay(line.startMs)
         currentLyricHighlight = pos
         lyricAdapter.setCurrent(pos)
-        scrollToLyric(pos)
+        // 3.0.2：点击歌词后**把这一行滚到屏幕正中**（粉丝建议，对齐 QQ 音乐）。
+        // 不能走 scrollToLyric —— 它有「手动滑动后 5 秒不自动回位」的冷却，
+        // 而点击是用户主动操作，必须立刻居中。
+        centerLyricRow(pos)
         updateNowLyric(pos)
+    }
+
+    /** 把某一行歌词滚到可视区域正中（点击歌词时用）。 */
+    private fun centerLyricRow(pos: Int) {
+        val lm = recyclerLyricFull.layoutManager as? LinearLayoutManager ?: return
+        recyclerLyricFull.post {
+            val h = lm.findViewByPosition(pos)?.height ?: dp(48f)
+            val offset = ((recyclerLyricFull.height - h) / 2).coerceAtLeast(0)
+            lm.scrollToPositionWithOffset(pos, offset)
+            lastLyricUserScroll = System.currentTimeMillis()
+        }
+    }
+
+    // ---------- 歌词页全屏（3.0.2）----------
+
+    /** 歌词页是否处于全屏（隐藏标题与工具栏，让歌词占满）。 */
+    private var lyricsFullscreen = false
+
+    /** 进入/退出歌词全屏；退出入口是返回键与右下角浮动按钮。 */
+    private fun setLyricsFullscreen(on: Boolean) {
+        lyricsFullscreen = on
+        findViewById<View>(R.id.lyricsHeaderRow).visibility =
+            if (on) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.lyricsToolsRow).visibility =
+            if (on) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.btnLyricsExitFull).visibility =
+            if (on) View.VISIBLE else View.GONE
     }
 
     // ---------- 播放页 CD / 歌词 ----------
@@ -3172,6 +3226,8 @@ class MainActivity : AppCompatActivity() {
         val rgDesktopAlpha = view.findViewById<RadioGroup>(R.id.rgDesktopAlpha)
         val chkLyricsLocked = view.findViewById<CheckBox>(R.id.chkLyricsLocked)
         val chkDesktopCenter = view.findViewById<CheckBox>(R.id.chkDesktopCenter)
+        val chkNoSwipe = view.findViewById<CheckBox>(R.id.chkNoSwipeSwitch)
+        chkNoSwipe.isChecked = prefs.getBoolean("no_swipe_switch", false)
         val chkMixAudio = view.findViewById<CheckBox>(R.id.chkMixAudio)
         chkMixAudio.isChecked = prefs.getBoolean(KEY_MIX_AUDIO, false)
         val chkPerSong = view.findViewById<CheckBox>(R.id.chkPerSong)
@@ -3258,6 +3314,7 @@ class MainActivity : AppCompatActivity() {
                     .putInt(KEY_DESKTOP_ALPHA, tagOf(rgDesktopAlpha))
                     .putBoolean(KEY_DESKTOP_LOCKED, chkLyricsLocked.isChecked)
                     .putBoolean(KEY_DESKTOP_CENTER, chkDesktopCenter.isChecked)
+                    .putBoolean("no_swipe_switch", chkNoSwipe.isChecked)
                     .putBoolean(KEY_MIX_AUDIO, chkMixAudio.isChecked)
                     .putBoolean(MediaPlaybackService.KEY_PER_SONG, chkPerSong.isChecked)
                     .putBoolean(MediaPlaybackService.KEY_ALARM_ONCE, chkAlarmOnce.isChecked)
@@ -4372,6 +4429,7 @@ class MainActivity : AppCompatActivity() {
         // 空歌单进去是一片白，用户不知道下一步做什么 —— 给一句指引
         if (songs.isEmpty()) toast(getString(R.string.playlist_songs_empty))
         bindPlaylist(Playlist(name, songs), isCustom = true)
+        if (page != Page.PLAYLIST) playlistSourcePage = page
         showPage(Page.PLAYLIST)
     }
 
