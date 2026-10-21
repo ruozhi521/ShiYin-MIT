@@ -191,6 +191,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var viewVideos: View
     private lateinit var recyclerVideos: RecyclerView
     private lateinit var txtVideosEmpty: TextView
+    private lateinit var txtVideosSubtitle: TextView
     private lateinit var videoAdapter: SongAdapter
     private var videoSongs: List<Song> = emptyList()
     /**
@@ -828,7 +829,7 @@ class MainActivity : AppCompatActivity() {
         viewVideos = findViewById(R.id.pageVideos)
         recyclerVideos = findViewById(R.id.recyclerVideos)
         txtVideosEmpty = findViewById(R.id.txtVideosEmpty)
-        findViewById<Button>(R.id.btnBackVideos).setOnClickListener { backFromPlayer() }
+        txtVideosSubtitle = findViewById(R.id.txtVideosSubtitle)
         videoAdapter = SongAdapter(
             hasLyric = { false },
             onClick = { pos ->
@@ -1986,6 +1987,7 @@ class MainActivity : AppCompatActivity() {
         // 未命中时按扩展名兜底为「是视频」→ 列表先显示、预热完成后自动收窄（只会先多后准）
         videoSongs = library?.allSongs?.filter { isVideoFileCached(it.uri) } ?: emptyList()
         videoAdapter.submit(videoSongs)
+        txtVideosSubtitle.text = getString(R.string.videos_summary, videoSongs.size)
         txtVideosEmpty.visibility = if (videoSongs.isEmpty()) View.VISIBLE else View.GONE
     }
 

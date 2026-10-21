@@ -20,6 +20,8 @@
     <!-- 3.0.2：歌词页全屏 -->
     <string name="lyrics_fullscreen">全屏</string>
     <string name="lyrics_exit_fullscreen">退出全屏</string>
+    <!-- 3.0.3：视频列表页副标题（与音乐库页的「N 个文件夹 · N 首歌曲」同规格） -->
+    <string name="videos_summary">共 %1$d 个视频</string>
     <string name="about">关于拾音</string>
     <string name="trans_settings">翻译设置</string>
     <string name="eq_entry">音效</string>
@@ -281,7 +283,7 @@
     <string name="title_from_filename_hint">忽略标签标题，重新扫描后生效</string>
     <string name="tab_video">视频</string>
     <string name="videos_empty">这个导航页还没有视频文件\n把含视频的文件夹添加进音乐库即可</string>
-    <string name="about_version">版本 3.0.2</string>
+    <string name="about_version">版本 3.0.3</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>
