@@ -1024,12 +1024,10 @@ class MainActivity : AppCompatActivity() {
         )
         txtTreePath = findViewById(R.id.txtTreePath)
         txtTreePath.setOnClickListener { backTree() }
-        recyclerPlaylists.layoutManager = GridLayoutManager(this, 2)
+        recyclerPlaylists.layoutManager = GridLayoutManager(this, playlistColumns())
         recyclerPlaylists.adapter = gridAdapter
-        // 3.0：两列卡片此前左右贴死（实机实测列间距 0px），加水平间距（弱志反馈"太紧凑"）
-        recyclerPlaylists.addItemDecoration(
-            GridSpacingDecoration(2, dp(GridSpacingDecoration.DEFAULT_SPACING_DP.toFloat()))
-        )
+        // 3.0.2.1：列数 / 列间距 / 封面高度统一交给 applyPlaylistGridDensity()（设置改了要能重建）
+        applyPlaylistGridDensity()
         applyLibLayout()
 
         // ---- 音乐库页：歌手 ----
@@ -1131,12 +1129,10 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         )
-        recyclerPlaylistsPage.layoutManager = GridLayoutManager(this, 2)
+        recyclerPlaylistsPage.layoutManager = GridLayoutManager(this, playlistColumns())
         recyclerPlaylistsPage.adapter = playlistsPageAdapter
-        // 3.0：与音乐库页网格同一套列间距，两页观感一致
-        recyclerPlaylistsPage.addItemDecoration(
-            GridSpacingDecoration(2, dp(GridSpacingDecoration.DEFAULT_SPACING_DP.toFloat()))
-        )
+        // 3.0.2.1：列数 / 间距 / 封面高度由 applyPlaylistGridDensity() 统一管
+        applyPlaylistGridDensity()
         findViewById<Button>(R.id.btnNewPlaylist).setOnClickListener { showCreatePlaylistDialog() }
 
         // ---- 底部导航 ----
@@ -3236,6 +3232,8 @@ class MainActivity : AppCompatActivity() {
         chkPerSong.isChecked = prefs.getBoolean(MediaPlaybackService.KEY_PER_SONG, false)
         val rgLibLayout = view.findViewById<RadioGroup>(R.id.rgLibLayout)
         checkByTag(rgLibLayout, if (prefs.getString(KEY_LIB_LAYOUT, "grid") == "tree") 1 else 0)
+        val rgPlaylistCols = view.findViewById<RadioGroup>(R.id.rgPlaylistCols)
+        checkByTag(rgPlaylistCols, playlistColumns())
         val rgSeekStep = view.findViewById<RadioGroup>(R.id.rgSeekStep)
         checkByTag(rgSeekStep, prefs.getInt(KEY_SEEK_STEP, 10))
         // 2.15：返回键级数（0 逐级 / 1 直跳）
@@ -3321,6 +3319,7 @@ class MainActivity : AppCompatActivity() {
                     .putBoolean(MediaPlaybackService.KEY_PER_SONG, chkPerSong.isChecked)
                     .putBoolean(MediaPlaybackService.KEY_ALARM_ONCE, chkAlarmOnce.isChecked)
                     .putString(KEY_LIB_LAYOUT, if (tagOf(rgLibLayout) == 1) "tree" else "grid")
+                    .putInt("playlist_columns", tagOf(rgPlaylistCols))
                     .putInt(KEY_SEEK_STEP, tagOf(rgSeekStep))
                     .putInt(KEY_BACK_STEP, tagOf(rgBackStep))
                     .putInt(KEY_VIDEO_TAP_ZONE, tagOf(rgVideoTapZone))
@@ -6385,6 +6384,49 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
+    // ---------- 歌单网格：每行个数（3.0.2.1）----------
+
+    /** 歌单每行个数（2/3/4，默认 2）。粉丝反馈「一列只有两个、卡片太大，多的时候翻找麻烦」。 */
+    private fun playlistColumns(): Int =
+        prefs.getInt("playlist_columns", 2).coerceIn(2, 4)
+
+    private var libGridDeco: GridSpacingDecoration? = null
+    private var pageGridDeco: GridSpacingDecoration? = null
+
+    /**
+     * 按当前设置重建两处歌单网格：列数、列间距、卡片封面高度。
+     *
+     * 为什么必须在这里统一管：`GridSpacingDecoration` 的 spanCount 是构造参数（val），
+     * 列数一变就得**换一个新的 decoration**（RecyclerView 没有「取出某个 decoration」的 API，
+     * 所以自己存引用）；封面高度也要跟着列宽缩，否则卡片会被拉成竖长条。
+     */
+    private fun applyPlaylistGridDensity() {
+        val cols = playlistColumns()
+        // 列多时卡片窄，间距适当收紧（2 列仍用原来的 24dp）
+        val spacingPx = dp(
+            (if (cols <= 2) GridSpacingDecoration.DEFAULT_SPACING_DP else 14).toFloat()
+        )
+        // 音乐库页（树形模式下是 LinearLayoutManager → 跳过；切回网格时 applyLibLayout 会重建）
+        (recyclerPlaylists.layoutManager as? GridLayoutManager)?.spanCount = cols
+        libGridDeco?.let { recyclerPlaylists.removeItemDecoration(it) }
+        libGridDeco = GridSpacingDecoration(cols, spacingPx).also {
+            recyclerPlaylists.addItemDecoration(it)
+        }
+        // 歌单页
+        (recyclerPlaylistsPage.layoutManager as? GridLayoutManager)?.spanCount = cols
+        pageGridDeco?.let { recyclerPlaylistsPage.removeItemDecoration(it) }
+        pageGridDeco = GridSpacingDecoration(cols, spacingPx).also {
+            recyclerPlaylistsPage.addItemDecoration(it)
+        }
+        // 封面高度 = 单列卡片宽度（页面左右各 20dp padding）→ 保持方形
+        val usable = resources.displayMetrics.widthPixels - dp(40f) - spacingPx * (cols - 1)
+        val coverPx = (usable / cols).coerceAtLeast(dp(56f))
+        gridAdapter.setCoverHeightPx(coverPx)
+        if (::playlistsPageAdapter.isInitialized) {
+            playlistsPageAdapter.setCoverHeightPx(coverPx)
+        }
+    }
+
     /** 音乐库歌单展示布局：网格大图标（默认）/ 树形目录，切换时重挂 adapter 并刷新数据。 */
     private fun applyLibLayout() {
         val mode = prefs.getString(KEY_LIB_LAYOUT, "grid")
@@ -6400,7 +6442,7 @@ class MainActivity : AppCompatActivity() {
             treeScrollMemo.clear() // 3.0.1：层级已重置，位置记忆跟着清（免得下次进树回到旧位置）
             refreshTree()
         } else {
-            recyclerPlaylists.layoutManager = GridLayoutManager(this, 2)
+            recyclerPlaylists.layoutManager = GridLayoutManager(this, playlistColumns())
             if (recyclerPlaylists.adapter !== gridAdapter) {
                 recyclerPlaylists.adapter = gridAdapter
             }
@@ -6414,6 +6456,8 @@ class MainActivity : AppCompatActivity() {
             // 首项「全部歌曲」是虚拟固定项，不参与排序
             gridAdapter.canDragItem = { pos -> pos != 0 }
             gridAdapter.submit(list)
+            // 3.0.2.1：列数 / 间距 / 封面高度按设置重建（切回网格、或设置里改了每行个数都走这里）
+            applyPlaylistGridDensity()
         }
         txtTreePath.visibility = if (mode == "tree") View.VISIBLE else View.GONE
     }

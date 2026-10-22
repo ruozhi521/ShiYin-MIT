@@ -63,6 +63,38 @@
                     android:text="@string/lib_tree" />
             </RadioGroup>
 
+            <!-- 3.0.2.1：歌单卡片大小（每行 2/3/4 个）——粉丝反馈一列两个太大、翻找麻烦 -->
+            <TextView
+                style="@style/SettingsLabel"
+                android:text="@string/playlist_columns" />
+
+            <RadioGroup
+                android:id="@+id/rgPlaylistCols"
+                style="@style/SettingsSegment">
+
+                <RadioButton
+                    android:id="@+id/rbCols2"
+                    style="@style/SettingsSegItem"
+                    android:tag="2"
+                    android:text="@string/cols_2" />
+
+                <RadioButton
+                    android:id="@+id/rbCols3"
+                    style="@style/SettingsSegItem"
+                    android:tag="3"
+                    android:text="@string/cols_3" />
+
+                <RadioButton
+                    android:id="@+id/rbCols4"
+                    style="@style/SettingsSegItem"
+                    android:tag="4"
+                    android:text="@string/cols_4" />
+            </RadioGroup>
+
+            <TextView
+                style="@style/SettingsHint"
+                android:text="@string/playlist_columns_hint" />
+
             <LinearLayout style="@style/SettingsBtnRow">
 
                 <Button

@@ -52,6 +52,11 @@ class FolderTreeAdapter(
         val isDir = node.isDir
         if (isDir) {
             // 目录：文件夹图标 + "›" 进入箭头
+            // 3.0.2.1：与发现页 / 歌单网格一致 —— 无封面时铺低饱和渐变（按路径稳定选色，
+            // 滚动 / Holder 复用都不跳色），不再是白底 + 文件夹图标（弱志反馈树形目录没有随机色）
+            holder.cover.setBackground(
+                PlaylistGradient.drawable(holder.itemView.context, node.path, 20f)
+            )
             holder.cover.setImageResource(R.drawable.ic_folder_tinted)
             holder.arrow.visibility = View.VISIBLE
             holder.arrow.text = "›"
@@ -62,6 +67,10 @@ class FolderTreeAdapter(
             holder.count.visibility = View.VISIBLE
             holder.count.text = holder.itemView.context
                 .getString(R.string.songs_count, node.playlist?.songs?.size ?: 0)
+            // 3.0.2.1：同上 —— 渐变兜底，与歌单网格用同一个按名选色的色板
+            holder.cover.setBackground(
+                PlaylistGradient.drawableFor(holder.itemView.context, node.name)
+            )
             holder.cover.setImageResource(R.drawable.ic_music_tinted)
             val pl = node.playlist
             if (pl != null) {

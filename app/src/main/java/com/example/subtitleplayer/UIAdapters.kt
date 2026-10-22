@@ -70,6 +70,12 @@ class PlaylistGridAdapter(
 
     private var items: List<Playlist> = emptyList()
     private var uiSizeSp = 14f
+    /**
+     * 封面高度（px）。0 = 用布局里的默认 172dp。
+     * 3.0.2.1：歌单每行个数可调（粉丝反馈一列两个太大、翻找麻烦）——列数一变，
+     * 卡片变窄，封面高度要跟着缩，否则卡片会被拉成竖长条。
+     */
+    private var coverHeightPx = 0
     /** 是否显示拖拽把手（3.0）。只有音乐库页的「默认顺序」下才开。 */
     private var dragHandleVisible = false
     /**
@@ -94,6 +100,13 @@ class PlaylistGridAdapter(
     fun setDragHandleVisible(visible: Boolean) {
         if (dragHandleVisible == visible) return
         dragHandleVisible = visible
+        notifyDataSetChanged()
+    }
+
+    /** 设置封面高度（px）；0 = 用布局默认值。列数变化时由 Activity 调用（3.0.2.1）。 */
+    fun setCoverHeightPx(px: Int) {
+        if (coverHeightPx == px) return
+        coverHeightPx = px
         notifyDataSetChanged()
     }
 
@@ -133,6 +146,14 @@ class PlaylistGridAdapter(
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
         val playlist = items[position]
+        // 3.0.2.1：按「歌单每行个数」调整封面高度（列多 → 卡片窄 → 封面跟着变矮，保持方形）
+        if (coverHeightPx > 0) {
+            val lp = holder.coverBox.layoutParams
+            if (lp.height != coverHeightPx) {
+                lp.height = coverHeightPx
+                holder.coverBox.layoutParams = lp
+            }
+        }
         holder.name.text = playlist.name
         holder.name.setTextSize(uiSizeSp)
         holder.count.text = holder.itemView.context
@@ -184,6 +205,7 @@ class PlaylistGridAdapter(
     override fun getItemCount(): Int = items.size
 
     class Holder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+        val coverBox: View = itemView.findViewById(R.id.gridCoverBox)
         val cover: ImageView = itemView.findViewById(R.id.imgGridCover)
         val name: TextView = itemView.findViewById(R.id.txtGridName)
         val count: TextView = itemView.findViewById(R.id.txtGridCount)

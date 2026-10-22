@@ -17,7 +17,9 @@
     android:paddingBottom="14dp"
     android:foreground="?attr/selectableItemBackground">
 
+    <!-- 3.0.2.1：加 id，供适配器按「歌单每行个数」缩放封面高度（默认 172dp 对应 2 列 ≈ 方形） -->
     <FrameLayout
+        android:id="@+id/gridCoverBox"
         android:layout_width="match_parent"
         android:layout_height="172dp">
 
