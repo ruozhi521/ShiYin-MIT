@@ -134,6 +134,17 @@
     <string name="immersion_seconds_title">沉浸模式进入时间</string>
     <string name="immersion_enabled_title">沉浸模式</string>
     <string name="immersion_hint">播放页停留片刻后自动隐藏控件，只留封面与歌词</string>
+    <!-- 3.0.3：沉浸歌词行数（粉丝反馈三条看着难受） -->
+    <string name="immersion_lines_title">沉浸歌词行数</string>
+    <string name="immersion_lines_one">1 行（只看当前）</string>
+    <string name="immersion_lines_three">3 行（当前 + 上下各一）</string>
+    <!-- 3.0.3：左右声道反转（粉丝诉求：音声常长时间只在一侧出声） -->
+    <string name="channel_flip_on">左右声道反转</string>
+    <string name="channel_flip_off">关闭声道反转</string>
+    <string name="channel_flip_toast_on">已开启左右声道反转</string>
+    <string name="channel_flip_toast_off">已关闭左右声道反转</string>
+    <string name="channel_flip_show_button">显示声道反转按钮</string>
+    <string name="channel_flip_show_button_hint">在播放页工具行最右侧显示「左右声道反转」按钮；关闭则不显示（下拉通知栏的按钮始终可用）</string>
     <string name="saved">已保存</string>
     <string name="eq_pick_preset">选择预设</string>
     <string name="trans_base_hint">接口地址（默认 https://api.deepseek.com/v1）</string>
@@ -289,7 +300,7 @@
     <string name="title_from_filename_hint">忽略标签标题，重新扫描后生效</string>
     <string name="tab_video">视频</string>
     <string name="videos_empty">这个导航页还没有视频文件\n把含视频的文件夹添加进音乐库即可</string>
-    <string name="about_version">版本 3.0.2.1</string>
+    <string name="about_version">版本 3.0.3</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>

@@ -34,6 +34,8 @@
         <ImageButton android:id="@+id/btnQueue" style="@style/PlayerTool" android:contentDescription="@string/queue" android:src="@drawable/ic_queue" />
         <ImageButton android:id="@+id/btnLyricsIcon" style="@style/PlayerTool" android:contentDescription="@string/lyrics_full" android:src="@drawable/ic_lyric" />
         <ImageButton android:id="@+id/btnVideo" style="@style/PlayerTool" android:contentDescription="@string/video_btn" android:src="@drawable/ic_video" android:visibility="gone" />
+        <!-- 3.0.3：左右声道反转（显隐由「设置 → 主题」控制，默认隐藏以免工具行臃肿） -->
+        <ImageButton android:id="@+id/btnChannelFlip" style="@style/PlayerTool" android:contentDescription="@string/channel_flip_on" android:src="@drawable/ic_channel_flip" android:visibility="gone" />
     </LinearLayout>
     <LinearLayout android:id="@+id/playerControlsSeek" android:layout_width="match_parent" android:layout_height="48dp" android:gravity="center">
         <TextView android:id="@+id/btnSeekBack" style="@style/PlayerSeekTool" android:text="-10s" />

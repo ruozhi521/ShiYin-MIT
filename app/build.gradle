@@ -29,8 +29,8 @@ android {
         applicationId "com.example.subtitleplayer"
         minSdk 26
         targetSdk 34
-        versionCode 35
-        versionName "3.0.2.1"
+        versionCode 36
+        versionName "3.0.3"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -81,6 +81,8 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+        // 注：media3 的 @UnstableApi 是普通 Java 注解（不是 Kotlin @RequiresOptIn），
+        // 不能写进 optIn.add()（会报 "is not an opt-in requirement marker" 警告），直接用它即可。
     }
 }
 

@@ -46,6 +46,9 @@ class MediaPlaybackService : Service() {
         fun onProgress(position: Int, duration: Int, lyricIndex: Int)
 
         fun onPlayStateChanged(playing: Boolean)
+
+        /** 声道反转开关变化（3.0.3）。默认空实现，避免所有实现类被迫改动。 */
+        fun onChannelFlipChanged(on: Boolean) {}
     }
 
     companion object {
@@ -55,6 +58,10 @@ class MediaPlaybackService : Service() {
         const val ACTION_NEXT = "com.example.subtitleplayer.NEXT"
         const val ACTION_PREV = "com.example.subtitleplayer.PREV"
         const val ACTION_TOGGLE_LYRICS = "com.example.subtitleplayer.TOGGLE_LYRICS"
+        /** 一键左右声道反转（3.0.3）。通知栏按钮与设置里的快捷开关都发这个 action。 */
+        const val ACTION_TOGGLE_CHANNEL_FLIP = "com.example.subtitleplayer.TOGGLE_CHANNEL_FLIP"
+        /** 声道反转状态（应用级共享，Activity 与服务都读它）。 */
+        const val KEY_CHANNEL_FLIP = "channel_flip"
         const val ACTION_ALARM_PLAY = "com.example.subtitleplayer.ALARM_PLAY"
         const val KEY_LAST_URI = "last_uri"
         const val KEY_LAST_POS = "last_pos"
@@ -87,6 +94,15 @@ class MediaPlaybackService : Service() {
      */
     private var exoPlayer: androidx.media3.exoplayer.ExoPlayer? = null
     private var useExo = false
+    /**
+     * 声道反转是否已生效（3.0.3）。
+     *
+     * 为什么必须切引擎：**MediaPlayer 没有任何交换声道的 API**（AudioEffect 标准库里
+     * 只有均衡器 / 混响 / 虚拟环绕，都做不了 L/R 交换）。唯一可行的是 media3 的
+     * `AudioProcessor`（PCM 层逐帧交换），所以「开启反转」时强制走 ExoPlayer。
+     * 依据弱志 2026-10-27 的选择：默认仍走 MediaPlayer，只在开启声道反转时才切。
+     */
+    private var channelFlipOn = false
     /** 视频 surface（视频页绑定时记录；切歌/循环后新播放器需重新绑定画面）。 */
     private var attachedVideoSurface: android.view.Surface? = null
     /** 解码后的真实视频尺寸（含旋转修正，区别于 MediaMetadataRetriever 的存储方向）。 */
@@ -234,6 +250,7 @@ class MediaPlaybackService : Service() {
             ACTION_PREV -> playPrev()
             ACTION_NEXT -> playNext()
             ACTION_TOGGLE_LYRICS -> toggleDesktopLyrics()
+            ACTION_TOGGLE_CHANNEL_FLIP -> toggleChannelFlip()
             ACTION_ALARM_PLAY -> {
                 android.util.Log.d("ShiYinAlarm", "onStartCommand: ACTION_ALARM_PLAY")
                 playLast()
@@ -359,14 +376,14 @@ class MediaPlaybackService : Service() {
 
     /** 当前引擎是否正在出声（两引擎通用）。 */
     private fun engineIsPlaying(): Boolean = try {
-        if (useExo) exoPlayer?.isPlaying == true else mediaPlayer?.isPlaying == true
+        if (engineShouldUseExo()) exoPlayer?.isPlaying == true else mediaPlayer?.isPlaying == true
     } catch (e: Exception) {
         false
     }
 
     /** 当前引擎的播放位置（毫秒）。 */
     private fun enginePosition(): Int = try {
-        if (useExo) (exoPlayer?.currentPosition ?: 0L).toInt()
+        if (engineShouldUseExo()) (exoPlayer?.currentPosition ?: 0L).toInt()
         else mediaPlayer?.currentPosition ?: 0
     } catch (e: Exception) {
         0
@@ -374,7 +391,7 @@ class MediaPlaybackService : Service() {
 
     /** 当前引擎的音频会话 id（均衡器挂载用；未初始化返回 null）。 */
     private fun engineAudioSessionId(): Int? = try {
-        if (useExo) exoPlayer?.audioSessionId else mediaPlayer?.audioSessionId
+        if (engineShouldUseExo()) exoPlayer?.audioSessionId else mediaPlayer?.audioSessionId
     } catch (e: Exception) {
         null
     }
@@ -426,7 +443,7 @@ class MediaPlaybackService : Service() {
     fun seekTo(ms: Int) {
         if (!isPrepared) return
         try {
-            if (useExo) {
+            if (engineShouldUseExo()) {
                 exoPlayer?.seekTo(ms.coerceIn(0, durationMs).toLong())
             } else {
                 val mp = mediaPlayer ?: return
@@ -486,7 +503,7 @@ class MediaPlaybackService : Service() {
         this.speed = speed
         try {
             if (speed >= 0.5f && speed <= 16f) {
-                if (useExo) {
+                if (engineShouldUseExo()) {
                     exoPlayer?.setPlaybackSpeed(speed)
                 } else {
                     val mp = mediaPlayer ?: return
@@ -679,6 +696,77 @@ class MediaPlaybackService : Service() {
         }
     }
 
+    /** 供 Activity / 通知按钮调用：切换左右声道反转（3.0.3）。 */
+    fun toggleChannelFlipSafe() {
+        toggleChannelFlip()
+    }
+
+    /**
+     * 一键切换左右声道（3.0.3）。
+     *
+     * 为什么切换时要重建播放器：MediaPlayer 做不到声道交换，只能用 ExoPlayer 的
+     * `AudioProcessor`（见 [ChannelFlipProcessor]）。所以开关一改就必须换引擎，
+     * 而换引擎无法「就地改」，只能重建 —— 这里**保住播放进度与播放状态**，
+     * 让用户感觉只是顿了一下（弱志 2026-10-27 选择：默认仍走 MediaPlayer，
+     * 只在开启声道反转时才切 ExoPlayer）。
+     */
+    private fun toggleChannelFlip() {
+        val on = !isChannelFlipPrefOn()
+        val pos = enginePosition()
+        val wasPlaying = isPlaying()
+        val wasPrepared = isPrepared
+        getSharedPreferences("player", Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_CHANNEL_FLIP, on).apply()
+        channelFlipOn = on
+        PlaybackLog.log("channel flip -> $on pos=$pos playing=$wasPlaying (engine rebuild)")
+        if (wasPrepared) {
+            // 重建时带上进度与播放状态，handlePreparedResume 会还原。
+            // ⚠️ pos 可能是 0（刚开播就切换）：handlePreparedResume 里 resume<=0 会走
+            // 「else -> play()」分支，把**原本暂停**的播放意外启动。故暂停态时取 1ms，
+            // 让它走「恢复到该位置并保持暂停」那条路（1ms 用户感知不到）。
+            pendingResumeMs = if (wasPlaying) pos else pos.coerceAtLeast(1)
+            forcePlayAfterSeek = wasPlaying
+            playCurrent()
+        } else {
+            showForeground()
+        }
+        listener?.onChannelFlipChanged(on)
+        handler.post {
+            android.widget.Toast.makeText(
+                this,
+                getString(
+                    if (on) R.string.channel_flip_toast_on else R.string.channel_flip_toast_off
+                ),
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    /** 给 ExoPlayer 装渲染器工厂；[flip] 为真时在音频链上挂声道交换处理器。 */
+    private fun buildRenderersFactory(flip: Boolean): androidx.media3.exoplayer.RenderersFactory =
+        object : androidx.media3.exoplayer.DefaultRenderersFactory(this) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean
+            ): androidx.media3.exoplayer.audio.AudioSink {
+                val b = androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
+                    .setEnableFloatOutput(enableFloatOutput)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                if (flip) {
+                    b.setAudioProcessors(arrayOf(ChannelFlipProcessor()))
+                }
+                return b.build()
+            }
+        }
+
+    /** 该用 ExoPlayer 吗：-19 兜底已启用，或用户开了声道反转（3.0.3）。 */
+    private fun engineShouldUseExo(): Boolean =
+        useExo || channelFlipOn || isChannelFlipPrefOn()
+
+    private fun isChannelFlipPrefOn(): Boolean =
+        getSharedPreferences("player", Context.MODE_PRIVATE).getBoolean(KEY_CHANNEL_FLIP, false)
+
     private fun playCurrent() {
         val song = currentSong() ?: return
         releasePlayer()
@@ -689,7 +777,7 @@ class MediaPlaybackService : Service() {
         videoWidth = 0
         videoHeight = 0
         PlaybackLog.log(
-            "playCurrent #$index engine=${if (useExo) "exo" else "media"} ${song.uri.lastPathSegment}"
+            "playCurrent #$index engine=${if (engineShouldUseExo()) "exo" else "media"} flip=$channelFlipOn ${song.uri.lastPathSegment}"
         )
 
         loadLyric(song)
@@ -697,7 +785,7 @@ class MediaPlaybackService : Service() {
         loadNotificationArtwork(song)
         listener?.onSongChanged(song, lyricLines, lyricName)
 
-        if (useExo) startExo(song) else startMp(song)
+        if (engineShouldUseExo()) startExo(song) else startMp(song)
     }
 
     /** MediaPlayer 主引擎：所有正常机型的默认路径，行为与历史版本一致。 */
@@ -878,8 +966,13 @@ class MediaPlaybackService : Service() {
 
     /** ExoPlayer 兜底引擎（Media3）：MediaPlayer 出声即 -19 的机型上自动启用。 */
     private fun startExo(song: Song) {
+        // 3.0.3：必须读 prefs 而不是只看字段 —— 服务重启后字段是 false，
+        // 而 prefs 可能还是「开启声道反转」，那样会走 ExoPlayer 却不装处理器（开关失效）。
+        channelFlipOn = isChannelFlipPrefOn()
         val p = try {
-            androidx.media3.exoplayer.ExoPlayer.Builder(this).build()
+            androidx.media3.exoplayer.ExoPlayer.Builder(this)
+                .setRenderersFactory(buildRenderersFactory(channelFlipOn))
+                .build()
         } catch (e: Exception) {
             PlaybackLog.log("exo build THREW: ${e.javaClass.simpleName}: ${e.message}")
             val failedUri = song.uri.toString()
@@ -1025,7 +1118,7 @@ class MediaPlaybackService : Service() {
             if (durationMs > 0 && enginePosition() >= durationMs) {
                 seekTo(0)
             }
-            if (useExo) {
+            if (engineShouldUseExo()) {
                 exoPlayer?.play()
             } else {
                 mediaPlayer?.start()
@@ -1041,7 +1134,7 @@ class MediaPlaybackService : Service() {
         // 真正播响了：失败记录不清空（等稳定播放 3 秒后在进度循环里清，
         // 否则 start 后立刻到达的 onError 会被清空的记录绕过熔断）
         android.util.Log.d("ShiYinAlarm", "play: started")
-        PlaybackLog.log("play: started OK (${if (useExo) "exo" else "media"})")
+        PlaybackLog.log("play: started OK (${if (engineShouldUseExo()) "exo" else "media"})")
         lyriconBridge.syncPlaybackState(true)
         updateAll(true)
     }
@@ -1050,7 +1143,7 @@ class MediaPlaybackService : Service() {
         savePosition()
         cancelSleepTimer()
         try {
-            if (useExo) exoPlayer?.pause() else mediaPlayer?.pause()
+            if (engineShouldUseExo()) exoPlayer?.pause() else mediaPlayer?.pause()
         } catch (_: Exception) {
             // Error 状态调用 pause 会抛异常，忽略
         }
@@ -1389,6 +1482,7 @@ class MediaPlaybackService : Service() {
         val ppPi = servicePi(ACTION_PLAY_PAUSE, 2)
         val nextPi = servicePi(ACTION_NEXT, 3)
         val lyricsPi = servicePi(ACTION_TOGGLE_LYRICS, 4)
+        val flipPi = servicePi(ACTION_TOGGLE_CHANNEL_FLIP, 5)
 
         val playIcon = if (playing) R.drawable.ic_pause else R.drawable.ic_play
         val playLabel = getString(if (playing) R.string.pause else R.string.play)
@@ -1415,6 +1509,17 @@ class MediaPlaybackService : Service() {
             )
             .addAction(
                 Notification.Action.Builder(R.drawable.ic_lyric, lyricsLabel, lyricsPi).build()
+            )
+            // 3.0.3：下拉状态栏即可一键换边（粉丝诉求：不能死等作品本身的编排）
+            .addAction(
+                Notification.Action.Builder(
+                    R.drawable.ic_channel_flip,
+                    getString(
+                        if (isChannelFlipPrefOn()) R.string.channel_flip_off
+                        else R.string.channel_flip_on
+                    ),
+                    flipPi
+                ).build()
             )
             .setStyle(
                 Notification.MediaStyle()

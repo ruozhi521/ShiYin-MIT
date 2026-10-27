@@ -500,6 +500,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        override fun onChannelFlipChanged(on: Boolean) {
+            applyChannelFlipButton()
+        }
+
         override fun onPlayStateChanged(playing: Boolean) {
             updatePlayButtons(playing)
             updateCdAnimation(playing)
@@ -1144,6 +1148,11 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnLyrics).setOnClickListener { showPage(Page.LYRICS, 1) }
         findViewById<ImageButton>(R.id.btnQueue).setOnClickListener { showQueueDialog() }
         findViewById<ImageButton>(R.id.btnLyricsIcon).setOnClickListener { showPage(Page.LYRICS, 1) }
+        // 3.0.3：左右声道反转（按钮显隐由「设置 → 主题」控制）
+        findViewById<ImageButton>(R.id.btnChannelFlip).setOnClickListener {
+            playbackService?.toggleChannelFlipSafe()
+        }
+        applyChannelFlipButton()
         findViewById<ImageButton>(R.id.btnPlayMode).setOnClickListener {
             val mode = playbackService?.cyclePlayMode() ?: 0
             updatePlayModeButton(mode)
@@ -1818,7 +1827,7 @@ class MainActivity : AppCompatActivity() {
         txtImmersiveLyric.setTextColor(primary)
         val iconTint = android.content.res.ColorStateList.valueOf(primary)
         for (id in listOf(R.id.btnPrev, R.id.btnNext, R.id.btnTimer, R.id.btnPlayMode,
-            R.id.btnQueue, R.id.btnLyricsIcon, R.id.btnVideo)) {
+            R.id.btnQueue, R.id.btnLyricsIcon, R.id.btnVideo, R.id.btnChannelFlip)) {
             findViewById<ImageButton>(id).imageTintList = iconTint
         }
         for (id in listOf(R.id.btnSeekBack, R.id.btnSpeed, R.id.btnSeekForward)) {
@@ -3094,6 +3103,26 @@ class MainActivity : AppCompatActivity() {
      * 改用 [SpannableStringBuilder] 逐行上样式：当前行 = 主题色 + 加粗 + 字号放大，
      * 上下两行 = 次级灰（[R.color.text_normal]）不抢焦点。
      */
+    /**
+     * 刷新「声道反转」按钮的显隐与选中态（3.0.3）。
+     *
+     * 显隐读设置（默认隐藏）；选中态读共享开关 —— 开启时用主题色标出来，
+     * 否则和普通工具按钮同色，用户看不出当前是「已反转」还是「没反」。
+     */
+    private fun applyChannelFlipButton() {
+        val btn = findViewById<ImageButton>(R.id.btnChannelFlip) ?: return
+        val show = prefs.getBoolean(KEY_SHOW_CHANNEL_FLIP, false)
+        btn.visibility = if (show) View.VISIBLE else View.GONE
+        val on = prefs.getBoolean(MediaPlaybackService.KEY_CHANNEL_FLIP, false)
+        btn.imageTintList = android.content.res.ColorStateList.valueOf(
+            if (on) ThemeManager.accent(this) else getColor(R.color.text_normal)
+        )
+    }
+
+    /** 沉浸歌词显示几行：1（默认，只看当前）或 3（当前 + 上下各一）。 */
+    private fun immersionLines(): Int =
+        if (prefs.getInt(KEY_IMMERSION_LINES, 1) >= 3) 3 else 1
+
     private fun updateImmersiveLyric() {
         if (lyricLines.isEmpty()) {
             txtImmersiveLyric.text = ""
@@ -3102,9 +3131,20 @@ class MainActivity : AppCompatActivity() {
         val idx = currentLyricHighlight.coerceIn(0, lyricLines.size - 1)
         val sb = SpannableStringBuilder()
         val accent = ThemeManager.accent(this)
-        val idleColor = getColor(R.color.text_normal)
+        // 3.0.3：`idleColor` 以前硬写 getColor(R.color.text_normal) —— 用户自设的
+        // 「非当前歌词颜色」在沉浸里完全不起作用（粉丝报的就是这个）。
+        // 现在：用户显式设过 → 用他的；没设过且封面背景开启 → 用提亮色（压 70% 黑遮罩才看得清）。
+        val savedIdle = prefs.getInt(KEY_LYRIC_IDLE_COLOR, IDLE_DEFAULT)
+        val idleColor = when {
+            savedIdle != IDLE_DEFAULT -> savedIdle
+            coverBgEnabled() && currentCoverBmp != null ->
+                getColor(R.color.cover_lyric_idle_on_photo)
+            else -> getColor(R.color.text_normal)
+        }
+        // 3.0.3：行数可设（粉丝反馈三行看着难受）；1 行时只渲染当前行
+        val span = if (immersionLines() == 1) 0 else 1
         var first = true
-        for (i in idx - 1..idx + 1) {
+        for (i in idx - span..idx + span) {
             if (i !in lyricLines.indices) continue
             if (!first) sb.append("\n")
             first = false
@@ -3583,6 +3623,62 @@ class MainActivity : AppCompatActivity() {
                     if (page == Page.PLAYER) scheduleImmersion()
                 }
             }
+        })
+
+        // 显示声道反转按钮（3.0.3）：默认关闭，避免播放页工具行臃肿（弱志要求做成自定义开关）
+        box.addView(android.widget.Switch(this).apply {
+            isChecked = prefs.getBoolean(KEY_SHOW_CHANNEL_FLIP, false)
+            text = getString(R.string.channel_flip_show_button)
+            textSize = 16f
+            setTextColor(getColor(R.color.text_primary))
+            setPadding(0, dp(14f), 0, dp(4f))
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(KEY_SHOW_CHANNEL_FLIP, checked).apply()
+                applyChannelFlipButton()
+            }
+        })
+        box.addView(android.widget.TextView(this).apply {
+            text = getString(R.string.channel_flip_show_button_hint)
+            textSize = 12f
+            setTextColor(getColor(R.color.text_hint))
+            setPadding(0, 0, 0, dp(6f))
+        })
+
+        // 沉浸歌词行数（3.0.3，紧随「沉浸模式」开关）：粉丝反馈三行看着难受，默认只显当前行
+        box.addView(android.widget.TextView(this).apply {
+            text = getString(R.string.immersion_lines_title)
+            textSize = 16f
+            setTextColor(getColor(R.color.text_primary))
+            setPadding(0, dp(10f), 0, 0)
+            setOnClickListener {
+                val options = arrayOf(
+                    getString(R.string.immersion_lines_one),
+                    getString(R.string.immersion_lines_three)
+                )
+                val values = intArrayOf(1, 3)
+                val cur = immersionLines()
+                val idx = values.indexOf(cur).coerceAtLeast(0)
+                AccentDialogBuilder(this@MainActivity)
+                    .setTitle(R.string.immersion_lines_title)
+                    .setSingleChoiceItems(options, idx) { d, which ->
+                        prefs.edit().putInt(KEY_IMMERSION_LINES, values[which]).apply()
+                        d.dismiss()
+                        // 正在沉浸时立即重绘，不用退出再进
+                        if (playerImmersed) updateImmersiveLyric()
+                        toast(getString(R.string.saved))
+                    }
+                    .show()
+            }
+        })
+        box.addView(android.widget.TextView(this).apply {
+            text = if (immersionLines() == 1) {
+                getString(R.string.immersion_lines_one)
+            } else {
+                getString(R.string.immersion_lines_three)
+            }
+            textSize = 13f
+            setTextColor(getColor(R.color.text_hint))
+            setPadding(dp(2f), dp(2f), 0, dp(2f))
         })
 
         // 沉浸进入时间（开关开启时生效）
@@ -6562,6 +6658,10 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_AUTO_SCAN = "auto_scan"
         private const val KEY_IMMERSION_SECONDS = "immersion_seconds"
         private const val KEY_IMMERSION_ENABLED = "immersion_enabled"
+        /** 沉浸歌词显示几行（1 = 只看当前行，3 = 当前 + 上下各一，3.0.3）。 */
+        private const val KEY_IMMERSION_LINES = "immersion_lines"
+        /** 是否在播放页显示「左右声道反转」按钮（3.0.3，默认不显示以免工具行臃肿）。 */
+        private const val KEY_SHOW_CHANNEL_FLIP = "show_channel_flip"
         private const val MODULE_DISCOVER = "discover"
         private const val MODULE_LIBRARY = "library"
         /**
