@@ -3261,11 +3261,12 @@ class MainActivity : AppCompatActivity() {
      *        它不是歌单，不该参与分桶，但它的存在会让真实歌单的下标整体 +1。
      */
     private fun refreshAlphaIndex(names: List<String>, skipFirst: Boolean) {
-        val bar = findViewById<android.widget.LinearLayout>(R.id.alphaIndexBar)
+        val bar = findViewById<AlphaIndexBar>(R.id.alphaIndexBar)
+        val bubble = findViewById<TextView>(R.id.alphaBubble)
         val rv = if (segArtistsShown()) recyclerArtists else recyclerPlaylists
-        bar.removeAllViews()
-        // 树形目录是层级结构，首字母导航无意义
-        if (isTreeMode()) {
+        bubble.visibility = View.GONE
+        // 3.0.4：开关默认关（弱志：默认加上观感不好）；树形目录是层级结构，导航无意义
+        if (!prefs.getBoolean(KEY_ALPHA_INDEX, false) || isTreeMode()) {
             bar.visibility = View.GONE
             applyAlphaPadding(rv, false)
             return
@@ -3284,21 +3285,25 @@ class MainActivity : AppCompatActivity() {
             applyAlphaPadding(rv, false)
             return
         }
-        val accent = ThemeManager.accent(this)
-        for ((letter, pos) in index) {
-            bar.addView(TextView(this).apply {
-                text = letter.toString()
-                textSize = 10f
-                gravity = android.view.Gravity.CENTER
-                setTextColor(accent)
-                setPadding(dp(6f), dp(1f), dp(6f), dp(1f))
-                contentDescription = getString(R.string.alpha_index)
-                setOnClickListener {
-                    val target = pos + offset
-                    (rv.layoutManager as? LinearLayoutManager)
-                        ?.scrollToPositionWithOffset(target, 0) ?: rv.scrollToPosition(target)
-                }
-            })
+        // 记住「第几个字母 → 列表下标」，拖动回调里按它滚动
+        val targets = index.map { it.second + offset }
+        bar.setLetters(
+            index.map { it.first },
+            ThemeManager.accent(this),
+            getColor(R.color.text_hint)
+        )
+        bar.contentDescription = getString(R.string.alpha_index)
+        bar.onLetterChange = { i, letter ->
+            // 微信式：拖动经过就跳转 + 中央气泡显示当前字母
+            bubble.text = letter.toString()
+            bubble.visibility = View.VISIBLE
+            targets.getOrNull(i)?.let { target ->
+                (rv.layoutManager as? LinearLayoutManager)
+                    ?.scrollToPositionWithOffset(target, 0) ?: rv.scrollToPosition(target)
+            }
+        }
+        bar.onTouchStateChange = { active ->
+            if (!active) bubble.visibility = View.GONE
         }
         bar.visibility = View.VISIBLE
         applyAlphaPadding(rv, true)
@@ -3549,6 +3554,8 @@ class MainActivity : AppCompatActivity() {
         chkPlaylistDrag.isChecked = prefs.getBoolean(KEY_PLAYLIST_DRAG, true)
         val chkLibSegRow = view.findViewById<CheckBox>(R.id.chkLibSegRow)
         chkLibSegRow.isChecked = prefs.getBoolean(KEY_LIB_SEG_ROW, true)
+        val chkAlphaIndex = view.findViewById<CheckBox>(R.id.chkAlphaIndex)
+        chkAlphaIndex.isChecked = prefs.getBoolean(KEY_ALPHA_INDEX, false)
         val rgSeekStep = view.findViewById<RadioGroup>(R.id.rgSeekStep)
         checkByTag(rgSeekStep, prefs.getInt(KEY_SEEK_STEP, 10))
         // 2.15：返回键级数（0 逐级 / 1 直跳）
@@ -3638,6 +3645,7 @@ class MainActivity : AppCompatActivity() {
                     .putInt(KEY_LIB_HEADER, tagOf(rgLibHeader))
                     .putBoolean(KEY_PLAYLIST_DRAG, chkPlaylistDrag.isChecked)
                     .putBoolean(KEY_LIB_SEG_ROW, chkLibSegRow.isChecked)
+                    .putBoolean(KEY_ALPHA_INDEX, chkAlphaIndex.isChecked)
                     .putInt(KEY_SEEK_STEP, tagOf(rgSeekStep))
                     .putInt(KEY_BACK_STEP, tagOf(rgBackStep))
                     .putInt(KEY_VIDEO_TAP_ZONE, tagOf(rgVideoTapZone))
@@ -3646,6 +3654,7 @@ class MainActivity : AppCompatActivity() {
                 applyLibLayout()
                 applyLibraryHeader()
                 applyLibrarySegRow()
+                refreshAlphaIndex(playlistList().map { it.name }, skipFirst = true)
                 updateSeekButtons()
                 playbackService?.refreshDesktopLyricsStyle()
                 // 标题显示来源变了：重新扫描让歌名立即切换（标签标题 ↔ 文件名）
@@ -6961,6 +6970,13 @@ class MainActivity : AppCompatActivity() {
          * 同时排序入口必须迁到搜索行，否则用户再也改不了歌单排序。
          */
         private const val KEY_LIB_SEG_ROW = "lib_seg_row"
+        /**
+         * 是否显示首字母导航（3.0.4，**默认关**）。
+         *
+         * 弱志 2026-10-30 实测后反馈「加上以后观感其实不好，所以我建议是加开关」，
+         * 所以默认不显示，需要的用户自己去设置里打开。
+         */
+        private const val KEY_ALPHA_INDEX = "alpha_index_enabled"
         private const val MODULE_DISCOVER = "discover"
         private const val MODULE_LIBRARY = "library"
         /**

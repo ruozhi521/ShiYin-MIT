@@ -109,6 +109,18 @@
 
             <View style="@style/SettingsDivider" />
 
+            <!-- 3.0.4：首字母导航开关（默认关——弱志反馈默认加上观感不好） -->
+            <CheckBox
+                android:id="@+id/chkAlphaIndex"
+                style="@style/SettingsSwitch"
+                android:text="@string/alpha_index_enabled" />
+
+            <TextView
+                style="@style/SettingsHint"
+                android:text="@string/alpha_index_enabled_hint" />
+
+            <View style="@style/SettingsDivider" />
+
             <CheckBox
                 android:id="@+id/chkPlaylistDrag"
                 style="@style/SettingsSwitch"

@@ -52,4 +52,23 @@ object AlphaIndexRules {
      * 还会白占列表右侧空间，所以宁可不显示。
      */
     fun hasUsefulIndex(index: List<Pair<Char, Int>>): Boolean = index.size >= 2
+
+    /**
+     * 手指在索引条上的纵坐标 → 第几个字母（3.0.4 拖动选中）。
+     *
+     * 微信式的索引条是「按住拖动、中央出气泡」，所以必须能把 y 换算成下标。
+     * 抽成纯函数是因为这里有三个易错边界，全部值得单测：
+     * - 手指滑到条**上方**（y < 0）→ 取第一个，不能返回负数；
+     * - 手指滑到条**下方**（y > 总高）→ 取最后一个，不能越界崩溃；
+     * - 字母表为空 → 返回 -1，调用方据此不做任何滚动。
+     *
+     * @param offsetY 相对索引条顶部的 y（像素）
+     * @param itemHeight 单个字母条目的高度（像素）
+     * @param count 字母个数
+     */
+    fun indexAt(offsetY: Float, itemHeight: Float, count: Int): Int {
+        if (count <= 0) return -1
+        if (itemHeight <= 0f) return 0
+        return (offsetY / itemHeight).toInt().coerceIn(0, count - 1)
+    }
 }

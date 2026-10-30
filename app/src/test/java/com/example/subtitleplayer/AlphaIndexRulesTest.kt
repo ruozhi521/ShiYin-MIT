@@ -75,4 +75,34 @@ class AlphaIndexRulesTest {
         ) { pinyin[it] ?: AlphaIndexRules.OTHER }
         assertEquals(listOf('A' to 2, 'L' to 1, 'Z' to 0), index)
     }
+
+    // ---------- 拖动选中：手指 y → 第几个字母（3.0.4）----------
+
+    @Test
+    fun `手指纵坐标换算成字母下标`() {
+        // 每项 100px：y=0 → 第0个，y=150 → 第1个，y=250 → 第2个
+        assertEquals(0, AlphaIndexRules.indexAt(0f, 100f, 5))
+        assertEquals(1, AlphaIndexRules.indexAt(150f, 100f, 5))
+        assertEquals(2, AlphaIndexRules.indexAt(250f, 100f, 5))
+    }
+
+    @Test
+    fun `滑到索引条上方取第一个而不是负数`() {
+        assertEquals(0, AlphaIndexRules.indexAt(-80f, 100f, 5))
+    }
+
+    @Test
+    fun `滑到索引条下方取最后一个而不是越界`() {
+        assertEquals(4, AlphaIndexRules.indexAt(9999f, 100f, 5))
+    }
+
+    @Test
+    fun `字母表为空时返回负一`() {
+        assertEquals(-1, AlphaIndexRules.indexAt(50f, 100f, 0))
+    }
+
+    @Test
+    fun `条目高度为零时退回第一个且不除零崩溃`() {
+        assertEquals(0, AlphaIndexRules.indexAt(50f, 0f, 3))
+    }
 }

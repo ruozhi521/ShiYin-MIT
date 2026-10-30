@@ -170,16 +170,29 @@
             android:visibility="gone" />
 
         <!--
-          3.0.4：首字母快捷导航（粉丝：切换栏用不到，右侧加个首字母导航会实用得多）。
-          叠在列表右边缘，字母由代码动态填充；仅当能分出 ≥2 个桶且有足够条目时显示。
+          3.0.4：首字母快捷导航（默认关闭，设置 → 媒体库 里开）。
+          3.0.4 修订：改为自绘控件 [AlphaIndexBar] —— 按微信通讯录的用法，
+          按住可以**拖动**连续选字母，当前字母高亮，并在屏幕中央弹大气泡提示。
         -->
-        <LinearLayout
+        <com.example.subtitleplayer.AlphaIndexBar
             android:id="@+id/alphaIndexBar"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="end|center_vertical"
             android:layout_marginEnd="2dp"
-            android:orientation="vertical"
+            android:visibility="gone" />
+
+        <!-- 拖动时的中央气泡（显示当前选中的字母） -->
+        <TextView
+            android:id="@+id/alphaBubble"
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:layout_gravity="center"
+            android:background="@drawable/bg_alpha_bubble"
+            android:gravity="center"
+            android:textColor="@color/white"
+            android:textSize="32sp"
+            android:textStyle="bold"
             android:visibility="gone" />
     </FrameLayout>
 

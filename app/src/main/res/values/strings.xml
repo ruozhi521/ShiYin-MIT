@@ -41,6 +41,8 @@
     <string name="lib_header_style_hint">「精简」去掉副标题、缩小标题；「极简」只留搜索栏 —— 顶栏越矮，下面能看到的文件夹越多。设置按钮始终保留在搜索栏右侧。</string>
     <!-- 3.0.4：歌单拖拽排序开关（粉丝反馈自己有整理习惯、用不到且容易误触） -->
     <string name="alpha_index">首字母导航</string>
+    <string name="alpha_index_enabled">显示首字母导航</string>
+    <string name="alpha_index_enabled_hint">列表右侧出现 A–Z 字母条，按住可上下拖动跳跃，屏幕中央会显示当前字母。默认关闭。</string>
     <string name="lib_seg_row">显示「歌单 / 歌手」切换栏</string>
     <string name="lib_seg_row_hint">用不到歌手列表就关掉，能省下一整行空间。关闭后固定显示歌单，歌手列表将不再可见；歌单排序入口会自动移到搜索栏右侧。</string>
     <string name="playlist_drag_enabled">歌单可拖动排序</string>
