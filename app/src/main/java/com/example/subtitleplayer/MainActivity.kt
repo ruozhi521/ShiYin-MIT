@@ -571,9 +571,32 @@ class MainActivity : AppCompatActivity() {
             if (granted) {
                 showScanAllDialog()
             } else {
-                toast(getString(R.string.scan_all_need_perm))
+                // 3.0.4：拒绝后必须给出路。勾了「不再询问」时系统连弹窗都不再给，
+                // 只留一句 toast 用户会以为功能坏了（粉丝原话：「根本点不进去」）。
+                showScanPermHelp()
             }
         }
+
+    /** 读媒体权限被拒后的引导：讲清用途 + 一键跳到本应用的权限页。 */
+    private fun showScanPermHelp() {
+        AccentDialogBuilder(this)
+            .setTitle(R.string.scan_perm_title)
+            .setMessage(R.string.scan_perm_msg)
+            .setPositiveButton(R.string.scan_perm_go) { _, _ ->
+                try {
+                    startActivity(
+                        android.content.Intent(
+                            android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            android.net.Uri.fromParts("package", packageName, null)
+                        )
+                    )
+                } catch (e: Exception) {
+                    toast(getString(R.string.scan_all_need_perm))
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
 
     /** 入口：有权限就直接列文件夹，没有就先要权限。 */
     private fun startScanAll() {
@@ -1012,7 +1035,11 @@ class MainActivity : AppCompatActivity() {
 
         // ---- 音乐库页：歌单展示（默认网格大图标，设置里可切树形目录）----
         // 歌单排序入口（2.13）：库页「歌单/歌手」行最右端的下拉箭头
+        // 3.0.4：切换栏隐藏后排序入口改在搜索行，两处共用同一个对话框
         findViewById<TextView>(R.id.btnPlaylistSort).setOnClickListener {
+            showPlaylistSortDialog()
+        }
+        findViewById<TextView>(R.id.btnSortInline).setOnClickListener {
             showPlaylistSortDialog()
         }
         gridAdapter = PlaylistGridAdapter(
@@ -1033,6 +1060,8 @@ class MainActivity : AppCompatActivity() {
         // 3.0.2.1：列数 / 列间距 / 封面高度统一交给 applyPlaylistGridDensity()（设置改了要能重建）
         applyPlaylistGridDensity()
         applyLibLayout()
+        applyLibraryHeader()
+        applyLibrarySegRow()
 
         // ---- 音乐库页：歌手 ----
         artistAdapter = ArtistAdapter { pos -> openArtistSongs(pos) }
@@ -2244,15 +2273,84 @@ class MainActivity : AppCompatActivity() {
         if (scanning) return
         scanning = true
         if (!silent) toast(getString(R.string.scanning))
+        // 3.0.4：非静默扫描时显示进度（大库要扫几分钟，此前只有一句 toast，粉丝以为卡死）
+        if (!silent) showScanProgress()
         Thread {
             val roots = savedTreeUris()
             val lib = try {
-                LibraryScanner(this, contentResolver).scanAll(roots)
+                LibraryScanner(this, contentResolver).also { scanner ->
+                    scanner.onProgress = { folders, songs -> reportScanProgress(folders, songs) }
+                }.scanAll(roots)
             } catch (e: Exception) {
                 null
             }
-            runOnUiThread { finishScan(lib, silent) }
+            runOnUiThread {
+                dismissScanProgress()
+                finishScan(lib, silent)
+            }
         }.start()
+    }
+
+    // ---------- 扫描进度（3.0.4）----------
+
+    private var scanProgressDialog: AlertDialog? = null
+    private var scanProgressText: TextView? = null
+    @Volatile
+    private var scanProgressLastMs = 0L
+
+    private fun showScanProgress() {
+        dismissScanProgress()
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(dp(20f).toInt(), dp(8f).toInt(), dp(20f).toInt(), dp(4f).toInt())
+        }
+        val bar = android.widget.ProgressBar(this).apply {
+            isIndeterminate = true
+            indeterminateTintList = android.content.res.ColorStateList.valueOf(
+                ThemeManager.accent(this@MainActivity)
+            )
+        }
+        val tv = TextView(this).apply {
+            text = getString(R.string.scan_progress, 0, 0)
+            textSize = 14f
+            setTextColor(getColor(R.color.text_hint))
+            setPadding(0, dp(10f).toInt(), 0, 0)
+        }
+        box.addView(bar)
+        box.addView(tv)
+        scanProgressText = tv
+        scanProgressLastMs = 0L
+        val d = AccentDialogBuilder(this)
+            .setTitle(R.string.scan_progress_title)
+            .setView(box)
+            .setCancelable(false)
+            .create()
+        d.show()
+        scanProgressDialog = d
+    }
+
+    /**
+     * 后台线程报告进度 → 节流后刷到对话框。
+     *
+     * 节流是必须的：一次全量扫描会遍历成百上千个目录，每个都 post 一次会把主线程刷爆，
+     * 反而更卡。200ms 一条对「感知得到在动」已经足够。
+     */
+    private fun reportScanProgress(folders: Int, songs: Int) {
+        val now = System.currentTimeMillis()
+        if (now - scanProgressLastMs < 200L) return
+        scanProgressLastMs = now
+        runOnUiThread {
+            scanProgressText?.text = getString(R.string.scan_progress, folders, songs)
+        }
+    }
+
+    private fun dismissScanProgress() {
+        try {
+            scanProgressDialog?.dismiss()
+        } catch (_: Exception) {
+        }
+        scanProgressDialog = null
+        scanProgressText = null
     }
 
     /**
@@ -2516,8 +2614,15 @@ class MainActivity : AppCompatActivity() {
      * 只有「默认顺序」下拖动才有意义：按名称 / 按最近播放 / 随机都是**算出来的**顺序，
      * 拖完一次会被立刻重排覆盖，用户会以为「拖了没用」。所以其它模式下不开放拖动。
      */
+    /**
+     * 现在能不能拖歌单：用户没关掉开关 **且** 当前是默认顺序。
+     *
+     * 非默认顺序下拖了会被排序规则立刻覆盖，用户会以为"拖了没用"，所以整体禁用（2.13 起的约定）。
+     * 3.0.4 再加一道用户开关 —— 把手、移动标志、可拖项判定三处都读这一个函数，改它即全部生效。
+     */
     private fun playlistDragEnabled(): Boolean =
-        (prefs.getString(KEY_PLAYLIST_SORT, SORT_DEFAULT) ?: SORT_DEFAULT) == SORT_DEFAULT
+        prefs.getBoolean(KEY_PLAYLIST_DRAG, true) &&
+            (prefs.getString(KEY_PLAYLIST_SORT, SORT_DEFAULT) ?: SORT_DEFAULT) == SORT_DEFAULT
 
     /**
      * 拖动结束后保存歌单新顺序（3.0）。
@@ -2667,7 +2772,12 @@ class MainActivity : AppCompatActivity() {
         // 排序入口只对歌单视图有意义（2.13）
         findViewById<View>(R.id.btnPlaylistSort).visibility =
             if (songs) View.VISIBLE else View.GONE
-        if (!songs) loadArtistsIfNeeded()
+        if (!songs) {
+            loadArtistsIfNeeded()
+            refreshAlphaIndex(artistGroups.map { it.first }, skipFirst = false)
+        } else {
+            refreshAlphaIndex(playlistList().map { it.name }, skipFirst = true)
+        }
     }
 
     private fun loadArtistsIfNeeded() {
@@ -2678,7 +2788,9 @@ class MainActivity : AppCompatActivity() {
             artistLoading = false
             artistLoaded = true
             artistGroups = groups
-            artistAdapter.submit(groups.map { it.first to it.second.size })
+            val pairs = groups.map { it.first to it.second.size }
+            artistAdapter.submit(pairs)
+            refreshAlphaIndex(pairs.map { it.first }, skipFirst = false)
         }
     }
 
@@ -3109,6 +3221,163 @@ class MainActivity : AppCompatActivity() {
      * 显隐读设置（默认隐藏）；选中态读共享开关 —— 开启时用主题色标出来，
      * 否则和普通工具按钮同色，用户看不出当前是「已反转」还是「没反」。
      */
+    /** 列表少于此数时不显示索引条（几条歌单用不着导航，白占地方）。 */
+    private val alphaIndexMinItems = 8
+
+    /**
+     * 取字母规则：优先用系统 ICU 按**拼音**分桶（中文歌单名才能落到 Z / L 这种字母上）。
+     *
+     * `android.icu.text.AlphabeticIndex` 是 Android 4.4+ 提供的 ICU 实现（本项目 minSdk 26），
+     * 纯 JVM 单测里没有它，所以 [AlphaIndexRules] 把「取字母」做成可注入参数：
+     * 这里注入 ICU 版，单测注入固定规则。
+     */
+    private fun icuLetterOf(): ((String) -> Char)? {
+        return try {
+            val index = android.icu.text.AlphabeticIndex<Int>(
+                android.icu.util.ULocale.SIMPLIFIED_CHINESE
+            )
+            val imm = index.buildImmutableIndex()
+            val labels = (0 until imm.bucketCount).map { imm.getBucket(it).label }
+            // 显式声明函数类型：直接写 `{ name -> ... }` 会被 Kotlin 当成上一行的 trailing lambda
+            val letterOf: (String) -> Char = { name ->
+                val bi = imm.getBucketIndex(name)
+                val label = labels.getOrNull(bi)
+                // underflow / inflow / overflow 桶的 label 不是字母（如 "…"），一律归 Other
+                val ch = label?.firstOrNull()?.uppercaseChar()
+                if (ch != null && ch in 'A'..'Z') ch else AlphaIndexRules.OTHER
+            }
+            letterOf
+        } catch (e: Throwable) {
+            PlaybackLog.log("alpha index ICU unavailable: ${e.javaClass.simpleName}")
+            null
+        }
+    }
+
+    /**
+     * 刷新右边缘的首字母索引条（3.0.4）。
+     *
+     * @param names 列表里显示的名字（顺序与 adapter 一致）
+     * @param skipFirst 首项是否为「虚拟固定项」——歌单网格首项恒为「全部歌曲」，
+     *        它不是歌单，不该参与分桶，但它的存在会让真实歌单的下标整体 +1。
+     */
+    private fun refreshAlphaIndex(names: List<String>, skipFirst: Boolean) {
+        val bar = findViewById<android.widget.LinearLayout>(R.id.alphaIndexBar)
+        val rv = if (segArtistsShown()) recyclerArtists else recyclerPlaylists
+        bar.removeAllViews()
+        // 树形目录是层级结构，首字母导航无意义
+        if (isTreeMode()) {
+            bar.visibility = View.GONE
+            applyAlphaPadding(rv, false)
+            return
+        }
+        val offset = if (skipFirst) 1 else 0
+        val pool = if (skipFirst) names.drop(1) else names
+        if (pool.size < alphaIndexMinItems) {
+            bar.visibility = View.GONE
+            applyAlphaPadding(rv, false)
+            return
+        }
+        val letterOf = icuLetterOf() ?: AlphaIndexRules::fallbackLetterOf
+        val index = AlphaIndexRules.buildIndex(pool, letterOf)
+        if (!AlphaIndexRules.hasUsefulIndex(index)) {
+            bar.visibility = View.GONE
+            applyAlphaPadding(rv, false)
+            return
+        }
+        val accent = ThemeManager.accent(this)
+        for ((letter, pos) in index) {
+            bar.addView(TextView(this).apply {
+                text = letter.toString()
+                textSize = 10f
+                gravity = android.view.Gravity.CENTER
+                setTextColor(accent)
+                setPadding(dp(6f), dp(1f), dp(6f), dp(1f))
+                contentDescription = getString(R.string.alpha_index)
+                setOnClickListener {
+                    val target = pos + offset
+                    (rv.layoutManager as? LinearLayoutManager)
+                        ?.scrollToPositionWithOffset(target, 0) ?: rv.scrollToPosition(target)
+                }
+            })
+        }
+        bar.visibility = View.VISIBLE
+        applyAlphaPadding(rv, true)
+    }
+
+    /** 索引条可见时给列表右侧留出空间，否则字母会压在卡片上。 */
+    private fun applyAlphaPadding(rv: RecyclerView, indexed: Boolean) {
+        val end = if (indexed) dp(22f) else 0
+        if (rv.paddingEnd != end) {
+            rv.setPadding(rv.paddingLeft, rv.paddingTop, end, rv.paddingBottom)
+        }
+    }
+
+    /**
+     * 应用「显示歌单/歌手切换栏」开关（3.0.4）。
+     *
+     * 关掉时要做两件补偿，否则会丢功能：
+     * 1. 强制切回歌单视图 —— 歌手列表的唯一入口就是这条切换栏；
+     * 2. 把排序入口从切换栏里挪到搜索行（[R.id.btnSortInline]），
+     *    否则整行隐藏后用户再也打不开「歌单排序」。
+     */
+    private fun applyLibrarySegRow() {
+        val row = findViewById<View>(R.id.libSegRow) ?: return
+        val show = prefs.getBoolean(KEY_LIB_SEG_ROW, true)
+        row.visibility = if (show) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.btnSortInline).visibility =
+            if (show) View.GONE else View.VISIBLE
+        if (!show && segArtistsShown()) {
+            // 歌手列表不可达了：切回歌单，避免停在一个再也进不去的视图上
+            showSegment(true)
+        }
+    }
+
+    /** 顶部标题栏档位：0 完整（默认）/ 1 精简 / 2 极简。 */
+    private fun libHeaderStyle(): Int = prefs.getInt(KEY_LIB_HEADER, 0).coerceIn(0, 2)
+
+    /**
+     * 按档位调整音乐库顶部栏（3.0.4）。
+     *
+     * 粉丝反馈「最上方的固定栏占据面积太大，明显挤压了文件夹的显示」。
+     * 三档只改「标题 / 副标题 / 边距」，**搜索行与其右侧的设置按钮永远保留** ——
+     * 设置弹窗全工程只有 btnSettings 这一处入口，藏掉就再也进不去设置。
+     */
+    private fun applyLibraryHeader() {
+        if (!::txtLibrarySubtitle.isInitialized) return
+        val title = findViewById<TextView>(R.id.txtLibraryTitle)
+        val searchRow = findViewById<android.widget.LinearLayout>(R.id.libSearchRow)
+        val pageView = findViewById<android.widget.LinearLayout>(R.id.pageLibrary)
+        fun setRowTopMargin(px: Int) {
+            val lp = searchRow.layoutParams as android.widget.LinearLayout.LayoutParams
+            lp.topMargin = px
+            searchRow.layoutParams = lp
+        }
+        when (libHeaderStyle()) {
+            0 -> {
+                title.visibility = View.VISIBLE
+                title.textSize = 30f
+                txtLibrarySubtitle.visibility = View.VISIBLE
+                setRowTopMargin(dp(16f))
+                pageView.setPadding(dp(20f), dp(20f), dp(20f), dp(20f))
+            }
+            1 -> {
+                title.visibility = View.VISIBLE
+                title.textSize = 22f
+                txtLibrarySubtitle.visibility = View.GONE
+                setRowTopMargin(dp(8f))
+                pageView.setPadding(dp(16f), dp(10f), dp(16f), dp(12f))
+            }
+            else -> {
+                title.visibility = View.GONE
+                txtLibrarySubtitle.visibility = View.GONE
+                setRowTopMargin(0)
+                pageView.setPadding(dp(16f), dp(6f), dp(16f), dp(12f))
+            }
+        }
+        searchRow.requestLayout()
+        pageView.requestLayout()
+    }
+
     private fun applyChannelFlipButton() {
         val btn = findViewById<ImageButton>(R.id.btnChannelFlip) ?: return
         val show = prefs.getBoolean(KEY_SHOW_CHANNEL_FLIP, false)
@@ -3274,6 +3543,12 @@ class MainActivity : AppCompatActivity() {
         checkByTag(rgLibLayout, if (prefs.getString(KEY_LIB_LAYOUT, "grid") == "tree") 1 else 0)
         val rgPlaylistCols = view.findViewById<RadioGroup>(R.id.rgPlaylistCols)
         checkByTag(rgPlaylistCols, playlistColumns())
+        val rgLibHeader = view.findViewById<RadioGroup>(R.id.rgLibHeader)
+        checkByTag(rgLibHeader, libHeaderStyle())
+        val chkPlaylistDrag = view.findViewById<CheckBox>(R.id.chkPlaylistDrag)
+        chkPlaylistDrag.isChecked = prefs.getBoolean(KEY_PLAYLIST_DRAG, true)
+        val chkLibSegRow = view.findViewById<CheckBox>(R.id.chkLibSegRow)
+        chkLibSegRow.isChecked = prefs.getBoolean(KEY_LIB_SEG_ROW, true)
         val rgSeekStep = view.findViewById<RadioGroup>(R.id.rgSeekStep)
         checkByTag(rgSeekStep, prefs.getInt(KEY_SEEK_STEP, 10))
         // 2.15：返回键级数（0 逐级 / 1 直跳）
@@ -3360,12 +3635,17 @@ class MainActivity : AppCompatActivity() {
                     .putBoolean(MediaPlaybackService.KEY_ALARM_ONCE, chkAlarmOnce.isChecked)
                     .putString(KEY_LIB_LAYOUT, if (tagOf(rgLibLayout) == 1) "tree" else "grid")
                     .putInt("playlist_columns", tagOf(rgPlaylistCols))
+                    .putInt(KEY_LIB_HEADER, tagOf(rgLibHeader))
+                    .putBoolean(KEY_PLAYLIST_DRAG, chkPlaylistDrag.isChecked)
+                    .putBoolean(KEY_LIB_SEG_ROW, chkLibSegRow.isChecked)
                     .putInt(KEY_SEEK_STEP, tagOf(rgSeekStep))
                     .putInt(KEY_BACK_STEP, tagOf(rgBackStep))
                     .putInt(KEY_VIDEO_TAP_ZONE, tagOf(rgVideoTapZone))
                     .apply()
                 applyAppearance()
                 applyLibLayout()
+                applyLibraryHeader()
+                applyLibrarySegRow()
                 updateSeekButtons()
                 playbackService?.refreshDesktopLyricsStyle()
                 // 标题显示来源变了：重新扫描让歌名立即切换（标签标题 ↔ 文件名）
@@ -6552,6 +6832,7 @@ class MainActivity : AppCompatActivity() {
             // 首项「全部歌曲」是虚拟固定项，不参与排序
             gridAdapter.canDragItem = { pos -> pos != 0 }
             gridAdapter.submit(list)
+            refreshAlphaIndex(list.map { it.name }, skipFirst = true)
             // 3.0.2.1：列数 / 间距 / 封面高度按设置重建（切回网格、或设置里改了每行个数都走这里）
             applyPlaylistGridDensity()
         }
@@ -6662,6 +6943,24 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_IMMERSION_LINES = "immersion_lines"
         /** 是否在播放页显示「左右声道反转」按钮（3.0.3，默认不显示以免工具行臃肿）。 */
         private const val KEY_SHOW_CHANNEL_FLIP = "show_channel_flip"
+        /** 音乐库顶部标题栏密度（3.0.4）：0 完整 / 1 精简 / 2 极简。 */
+        private const val KEY_LIB_HEADER = "lib_header_style"
+        /**
+         * 歌单是否可拖动排序（3.0.4，默认开）。
+         *
+         * 粉丝反馈「我本身有整理归纳文件夹的习惯，这个功能完全用不到而且很容易误触，
+         * 希望这个功能和对应的图标遮挡能关闭」。默认保持开启，老用户观感不变。
+         */
+        private const val KEY_PLAYLIST_DRAG = "playlist_drag_enabled"
+        /**
+         * 是否显示音乐库的「歌单 / 歌手」切换栏（3.0.4，默认显示）。
+         *
+         * 粉丝反馈「搜索栏下方的歌单/歌手的切换栏对于我个人也完全用不到」。
+         * ⚠️ 关掉后歌手列表就没有入口了（3.0 起底部导航已移除「歌手」tab，
+         * 这条切换栏是唯一入口），所以关掉时强制回到歌单视图；
+         * 同时排序入口必须迁到搜索行，否则用户再也改不了歌单排序。
+         */
+        private const val KEY_LIB_SEG_ROW = "lib_seg_row"
         private const val MODULE_DISCOVER = "discover"
         private const val MODULE_LIBRARY = "library"
         /**

@@ -37,6 +37,16 @@ class LibraryScanner(
     private val context: Context,
     private val resolver: ContentResolver
 ) {
+    /**
+     * 扫描进度回调（3.0.4）：每进入一个文件夹回调一次 ——（已扫文件夹数, 已收歌曲数）。
+     *
+     * 为什么要有它：大库（几万首）全量扫描要遍历所有目录，粉丝反馈「等半天没有任何提示，
+     * 不知道是不是卡死了」。回调在**调用方的工作线程**上触发，UI 更新由调用方自己切主线程。
+     */
+    var onProgress: ((folders: Int, songs: Int) -> Unit)? = null
+
+    /** 已扫过的文件夹计数（每次新建 scanner 从 0 开始）。 */
+    private var scannedFolders = 0
 
     private val audioExts = setOf(
         "mp3", "m4a", "wav", "flac", "aac", "ogg", "opus", "amr", "wma", "mid", "midi",
@@ -123,6 +133,9 @@ class LibraryScanner(
         all: MutableList<Song>,
         useFileNameTitle: Boolean
     ) {
+        // 3.0.4：进度回调（进入每个目录时报告一次）
+        scannedFolders++
+        onProgress?.invoke(scannedFolders, all.size)
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId)
         val projection = arrayOf(
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,

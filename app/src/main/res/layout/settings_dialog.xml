@@ -95,6 +95,61 @@
                 style="@style/SettingsHint"
                 android:text="@string/playlist_columns_hint" />
 
+            <View style="@style/SettingsDivider" />
+
+            <!-- 3.0.4：切换栏可隐藏（粉丝反馈这一栏自己用不到，占地方） -->
+            <CheckBox
+                android:id="@+id/chkLibSegRow"
+                style="@style/SettingsSwitch"
+                android:text="@string/lib_seg_row" />
+
+            <TextView
+                style="@style/SettingsHint"
+                android:text="@string/lib_seg_row_hint" />
+
+            <View style="@style/SettingsDivider" />
+
+            <CheckBox
+                android:id="@+id/chkPlaylistDrag"
+                style="@style/SettingsSwitch"
+                android:text="@string/playlist_drag_enabled" />
+
+            <TextView
+                style="@style/SettingsHint"
+                android:text="@string/playlist_drag_enabled_hint" />
+
+            <!-- 3.0.4：顶部标题栏高度（粉丝反馈「最上方的固定栏占据面积太大，挤压了文件夹显示」） -->
+            <TextView
+                style="@style/SettingsLabel"
+                android:text="@string/lib_header_style" />
+
+            <RadioGroup
+                android:id="@+id/rgLibHeader"
+                style="@style/SettingsSegment">
+
+                <RadioButton
+                    android:id="@+id/rbHeaderFull"
+                    style="@style/SettingsSegItem"
+                    android:tag="0"
+                    android:text="@string/lib_header_full" />
+
+                <RadioButton
+                    android:id="@+id/rbHeaderCompact"
+                    style="@style/SettingsSegItem"
+                    android:tag="1"
+                    android:text="@string/lib_header_compact" />
+
+                <RadioButton
+                    android:id="@+id/rbHeaderMinimal"
+                    style="@style/SettingsSegItem"
+                    android:tag="2"
+                    android:text="@string/lib_header_minimal" />
+            </RadioGroup>
+
+            <TextView
+                style="@style/SettingsHint"
+                android:text="@string/lib_header_style_hint" />
+
             <LinearLayout style="@style/SettingsBtnRow">
 
                 <Button

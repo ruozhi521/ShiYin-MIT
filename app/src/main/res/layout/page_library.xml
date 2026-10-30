@@ -28,7 +28,9 @@
     -->
     <TextView android:id="@+id/txtLibrarySubtitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:textColor="@color/text_hint" android:textSize="13sp" />
 
+    <!-- 3.0.4：加 id，供「顶部标题栏」三档自定义动态调边距 -->
     <LinearLayout
+        android:id="@+id/libSearchRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="16dp"
@@ -54,6 +56,22 @@
             android:textColorHint="@color/text_hint"
             android:textSize="14sp" />
 
+        <!-- 3.0.4：切换栏隐藏时，歌单排序入口挪到这里（否则用户再也改不了排序） -->
+        <TextView
+            android:id="@+id/btnSortInline"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_mini"
+            android:contentDescription="@string/playlist_sort"
+            android:gravity="center"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:text="⌄"
+            android:textColor="@color/text_normal"
+            android:textSize="18sp"
+            android:visibility="gone" />
+
         <Button
             android:id="@+id/btnSettings"
             style="@style/BtnStyle"
@@ -64,7 +82,9 @@
             android:text="@string/settings" />
     </LinearLayout>
 
+    <!-- 3.0.4：加 id，供「显示歌单/歌手切换栏」开关整行隐藏 -->
     <LinearLayout
+        android:id="@+id/libSegRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="20dp"
@@ -147,6 +167,19 @@
             android:layout_height="match_parent"
             android:clipToPadding="false"
             android:paddingBottom="8dp"
+            android:visibility="gone" />
+
+        <!--
+          3.0.4：首字母快捷导航（粉丝：切换栏用不到，右侧加个首字母导航会实用得多）。
+          叠在列表右边缘，字母由代码动态填充；仅当能分出 ≥2 个桶且有足够条目时显示。
+        -->
+        <LinearLayout
+            android:id="@+id/alphaIndexBar"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end|center_vertical"
+            android:layout_marginEnd="2dp"
+            android:orientation="vertical"
             android:visibility="gone" />
     </FrameLayout>
 

@@ -15,6 +15,23 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!--
+      读取媒体库权限（3.0.4）：
+      「一键扫描文件库」要用 MediaStore 列出手机里含音频的文件夹，必须声明这两个权限。
+
+      ⚠️ 3.0.3 及更早**完全没有声明**任一读取权限，但 startScanAll() 一直在
+      checkSelfPermission(READ_MEDIA_AUDIO) —— 未声明的权限永远返回 DENIED，
+      requestPermissions 也会立刻回调 denied 后只弹一句 toast。
+      所以粉丝看到的是「设置里显示未请求任何权限，根本点不进去」，功能等于完全不可用。
+
+      API 33+ 用 READ_MEDIA_AUDIO；32 及以下用 READ_EXTERNAL_STORAGE（加 maxSdkVersion
+      限定，避免在新系统上申请一个已废弃的权限）。
+    -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
