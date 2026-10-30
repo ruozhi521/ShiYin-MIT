@@ -449,6 +449,16 @@
     <!-- 3.0.5：设置改为「一级分类 + 二级详情」。一级页每个分类配一句说明，
          让人第一眼就知道这一类里大概有什么（粉丝反馈「打开设置第一眼看不懂」）。 -->
     <string name="settings_back">‹ 返回</string>
+    <!-- 3.0.5：扫描入口提到设置一级页最前（弱志要求） -->
+    <string name="scan_home_title">扫描音乐文件夹</string>
+    <string name="scan_home_hint">先让拾音找到你的音乐。支持整盘自动发现，也可手动添加指定文件夹。</string>
+
+    <!-- 3.0.5：首次使用的空态引导（弱志：新用户第一次进来不知道该怎么办） -->
+    <string name="empty_guide_title">还没有音乐</string>
+    <string name="empty_guide_msg">拾音需要你告诉它音乐放在哪：\n从手机里找出所有含音乐的文件夹，逐个授权即可（Android 不允许一次授权整个存储）。</string>
+    <string name="empty_guide_scan">一键扫描（推荐）</string>
+    <string name="empty_guide_add">手动选择文件夹</string>
+    <string name="empty_guide_discover">还没有音乐，去「音乐库」扫描一下文件夹</string>
     <!-- 3.0.5：封面显示方式（粉丝反馈大封面只显示中间一小块） -->
     <string name="cover_fit_label">封面显示方式</string>
     <string name="cover_fit_crop">裁满</string>

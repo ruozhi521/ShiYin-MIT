@@ -194,6 +194,59 @@
             android:textSize="32sp"
             android:textStyle="bold"
             android:visibility="gone" />
+
+        <!--
+          3.0.5：首次使用的空态引导。
+          弱志反馈：新用户第一次进来「发现没有任何可播放选项，一时不知道该怎么办」。
+          原来这里是一片空白（连一句提示都没有），现在给出「为什么空 + 该做什么 + 一个按钮」。
+        -->
+        <LinearLayout
+            android:id="@+id/libraryEmptyGuide"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:text="@string/empty_guide_title"
+                android:textColor="@color/text_primary"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center"
+                android:lineSpacingExtra="4dp"
+                android:text="@string/empty_guide_msg"
+                android:textColor="@color/text_hint"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btnEmptyScan"
+                style="@style/BtnStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:minWidth="180dp"
+                android:text="@string/empty_guide_scan" />
+
+            <Button
+                android:id="@+id/btnEmptyAddFolder"
+                style="@style/BtnStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:minWidth="180dp"
+                android:text="@string/empty_guide_add" />
+        </LinearLayout>
     </FrameLayout>
 
 </LinearLayout>

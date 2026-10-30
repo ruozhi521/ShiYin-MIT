@@ -2699,6 +2699,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateDiscoverSubtitle() {
+        // 3.0.5：空库时别再说「挑一首让此刻安静下来」—— 一首都没有，应该说去哪加
+        if (library?.allSongs.isNullOrEmpty()) {
+            findViewById<TextView>(R.id.txtDiscoverSubtitle)
+                ?.text = getString(R.string.empty_guide_discover)
+            return
+        }
         val arr = resources.getStringArray(R.array.discover_subtitles)
         if (arr.isEmpty()) return
         val tv = findViewById<TextView>(R.id.txtDiscoverSubtitle) ?: return
@@ -3271,6 +3277,18 @@ class MainActivity : AppCompatActivity() {
             applyAlphaPadding(rv, false)
             return
         }
+        // 3.0.5：歌单网格只在「默认顺序」下显示字母导航（弱志实测：随机排序时它还在，
+        // 而随机顺序里字母位置毫无规律，点 Z 跳过去看到的是别的名字 → 自相矛盾）。
+        // 与拖拽排序同一套判断：其它排序是算出来的，字母表与之对不上，直接隐藏。
+        // 歌手列表按名字排，始终有效，不做限制。
+        if (!segArtistsShown()) {
+            val sortMode = prefs.getString(KEY_PLAYLIST_SORT, SORT_DEFAULT) ?: SORT_DEFAULT
+            if (sortMode != SORT_DEFAULT) {
+                bar.visibility = View.GONE
+                applyAlphaPadding(rv, false)
+                return
+            }
+        }
         val offset = if (skipFirst) 1 else 0
         val pool = if (skipFirst) names.drop(1) else names
         if (pool.size < alphaIndexMinItems) {
@@ -3780,18 +3798,34 @@ class MainActivity : AppCompatActivity() {
             settingsDialog?.dismiss()
             showEqualizerDialog()
         }
-        view.findViewById<Button>(R.id.btnTheme).setOnClickListener {
-            settingsDialog?.dismiss()
-            showThemeDialog()
+        // 3.0.5：空库时的首次引导（音乐库页那块空白区域）
+        findViewById<Button>(R.id.btnEmptyScan).setOnClickListener { startScanAll() }
+        findViewById<Button>(R.id.btnEmptyAddFolder).setOnClickListener {
+            treePicker.launch(null)
         }
+
+        // 3.0.5：扫描入口在一级页最前面（新用户第一件事就是让它找到音乐）
+        view.findViewById<Button>(R.id.btnScanHome).setOnClickListener {
+            settingsDialog?.dismiss()
+            startScanAll()
+        }
+        // 3.0.5：主题设置已内嵌进「外观与主题」页，不再弹三级窗口
+        view.findViewById<android.widget.LinearLayout>(R.id.themeSettingsBox)
+            ?.addView(buildThemeSettingsBox())
     }
 
-    /** 主题设置弹窗：主题色 + 背景图 + 深色模式三合一。 */
-    private fun showThemeDialog() {
-        val d = resources.displayMetrics.density
+    /**
+     * 主题设置项（3.0.5）：主题色 + 背景图 + 封面背景 + 三种歌词/进度条颜色 + 深色模式
+     * + 导航栏 + 沉浸模式 + 沉浸行数 + 沉浸时间 + 声道反转按钮。
+     *
+     * 返回一个可直接内嵌的容器 —— 以前它是独立弹窗（`showThemeDialog`），
+     * 但从设置二级页点进来还要再点一次「主题」才能设置，等于三级菜单，
+     * 弱志反馈「不合理」。现在直接摊进「外观与主题」页里。
+     */
+    private fun buildThemeSettingsBox(): android.widget.LinearLayout {
         val box = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
-            setPadding(dp(18f), dp(8f), dp(18f), dp(8f))
+            setPadding(dp(16f), 0, dp(16f), dp(8f))
         }
 
         // 主题色行（带当前色圆点）
@@ -4051,11 +4085,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dp(6f), 0, dp(2f))
         })
 
-        AccentDialogBuilder(this)
-            .setTitle(R.string.theme_entry)
-            .setView(box)
-            .setNegativeButton(R.string.cancel, null)
-            .show()
+        return box
     }
 
     // ---------- 播放列表 ----------
@@ -6898,6 +6928,22 @@ class MainActivity : AppCompatActivity() {
             applyPlaylistGridDensity()
         }
         txtTreePath.visibility = if (mode == "tree") View.VISIBLE else View.GONE
+        updateLibraryEmptyGuide()
+    }
+
+    /**
+     * 空库时显示首次使用引导（3.0.5）。
+     *
+     * 弱志反馈：新用户第一次进来「发现没有任何可播放选项，一时不知道该怎么办」——
+     * 原来列表区就是一片空白，连一句「为什么空」都没有。
+     *
+     * 判断用 `library == null || allSongs.isEmpty()`：两种空法都算空库
+     * （首次安装 = null；授权了但里面没音频 = 空列表）。
+     */
+    private fun updateLibraryEmptyGuide() {
+        val guide = findViewById<View>(R.id.libraryEmptyGuide) ?: return
+        val empty = library?.allSongs.isNullOrEmpty()
+        guide.visibility = if (empty) View.VISIBLE else View.GONE
     }
 
     /** 网格拖拽是否已挂载（3.0）。ItemTouchHelper 反复 attach 会叠加监听，只能挂一次。 */

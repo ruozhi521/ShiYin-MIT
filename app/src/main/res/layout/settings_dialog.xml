@@ -30,7 +30,53 @@
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
+            <!--
+              3.0.5：扫描文件夹提到一级页最前面（弱志要求）。
+              理由：新用户装完 App 第一件事就是「让软件找到我的音乐」，
+              把它埋在「媒体库」二级页里多绕一层没必要。
+            -->
             <LinearLayout style="@style/SettingsCard">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:paddingTop="14dp"
+                    android:paddingBottom="4dp">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/scan_home_title"
+                        android:textColor="@color/text_primary"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="3dp"
+                        android:text="@string/scan_home_hint"
+                        android:textColor="@color/text_hint"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <LinearLayout style="@style/SettingsBtnRow">
+
+                    <Button
+                        android:id="@+id/btnScanHome"
+                        style="@style/BtnStyle"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/scan_all" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout style="@style/SettingsCard"
+                android:layout_marginTop="10dp">
 
             <LinearLayout
                 android:id="@+id/rowGroup0"
@@ -1139,16 +1185,19 @@
                     android:text="@string/size_large" />
             </RadioGroup>
 
-            <Button
-                android:id="@+id/btnTheme"
-                style="@style/BtnStyle"
+            <View style="@style/SettingsDivider" />
+
+            <!--
+              3.0.5：主题相关设置直接摊在这里（弱志反馈「外观与主题点开只有很小一部分，
+              想设主题还要再点一次进三级菜单，不合理」）。
+              原先这里只有一个「主题」按钮，现在把弹窗里那 9 项全部内嵌进来，
+              二级页就是终点，不再有第三级。
+            -->
+            <LinearLayout
+                android:id="@+id/themeSettingsBox"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="12dp"
-                android:layout_marginEnd="12dp"
-                android:layout_marginTop="12dp"
-                android:layout_marginBottom="6dp"
-                android:text="@string/theme_entry" />
+                android:orientation="vertical" />
         </LinearLayout>
         </LinearLayout>
 
