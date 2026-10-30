@@ -15,6 +15,21 @@ class DiscoverAdapter(
     private var items: List<Song> = emptyList()
     private var uiSizeSp = 14f
 
+    /**
+     * 封面是否「完整显示」（3.0.5）。
+     *
+     * false（默认）= centerCrop 裁满，保持历史观感；true = fitCenter，整张图缩进容器不裁切，
+     * 空出的部分露出 ImageView 的渐变/纯色底。派生自设置里的「封面显示方式」，见 [applyCoverScale]。
+     */
+    private var coverFullImage = false
+
+    /** 设置变更后下发（3.0.5）。 */
+    fun applyCoverFit(fullImage: Boolean) {
+        if (coverFullImage == fullImage) return
+        coverFullImage = fullImage
+        notifyDataSetChanged()
+    }
+
     fun submit(list: List<Song>) {
         items = list
         notifyDataSetChanged()
@@ -33,6 +48,7 @@ class DiscoverAdapter(
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
         val song = items[position]
+        applyCoverScale(holder.cover, coverFullImage)
         holder.title.text = song.title
         holder.title.setTextSize(uiSizeSp)
         holder.artist.text = song.artist.ifBlank { song.folder }
@@ -78,6 +94,22 @@ class PlaylistGridAdapter(
     private var coverHeightPx = 0
     /** 是否显示拖拽把手（3.0）。只有音乐库页的「默认顺序」下才开。 */
     private var dragHandleVisible = false
+
+    /**
+     * 封面是否「完整显示」（3.0.5）。
+     *
+     * false（默认）= centerCrop 裁满，保持历史观感；true = fitCenter，整张图缩进容器不裁切，
+     * 空出的部分露出 ImageView 的渐变/纯色底。派生自设置里的「封面显示方式」，见 [applyCoverScale]。
+     */
+    private var coverFullImage = false
+
+    /** 设置变更后下发（3.0.5）。 */
+    fun applyCoverFit(fullImage: Boolean) {
+        if (coverFullImage == fullImage) return
+        coverFullImage = fullImage
+        notifyDataSetChanged()
+    }
+
     /**
      * 把手按下 → 请求外部发起拖拽（3.0）。
      * 与 [SongAdapter.onStartDrag] 同一套约定：**按住把手**才拖，长按留给「设置封面」菜单。
@@ -146,6 +178,7 @@ class PlaylistGridAdapter(
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
         val playlist = items[position]
+        applyCoverScale(holder.cover, coverFullImage)
         // 3.0.2.1：按「歌单每行个数」调整封面高度（列多 → 卡片窄 → 封面跟着变矮，保持方形）
         if (coverHeightPx > 0) {
             val lp = holder.coverBox.layoutParams

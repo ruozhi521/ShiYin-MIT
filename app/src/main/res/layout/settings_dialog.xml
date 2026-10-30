@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 设置：分组卡片式。所有 View id / tag 与原布局一致，MainActivity 接线零改动。 -->
+<!--
+  设置：一级分类页 + 二级详情页（3.0.5）。
+  所有 View id / tag 与原布局一致，MainActivity 接线零改动；
+  改动只是「分别包进 settingsPageXxx 容器」，由代码切换可见性。
+-->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/settingsScroll"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:overScrollMode="ifContentScrolls"
@@ -15,13 +20,352 @@
         android:paddingTop="2dp"
         android:paddingBottom="10dp">
 
-        <!-- ════════ 媒体库 ════════ -->
-        <TextView
-            style="@style/SettingsSection"
-            android:layout_marginTop="2dp"
-            android:text="@string/settings_cat_library" />
+        <!-- ════════ 一级页：分类入口（3.0.5）════════
+            粉丝反馈「打开设置第一眼要能看明白什么是什么」。
+            37 项设置原本摊在一页里，现在按用途分成 6 类，点进去才是详情。
+            ⚠️ 所有原控件 id 均未改动，MainActivity 的读取/保存逻辑照旧生效。 -->
+        <LinearLayout
+            android:id="@+id/settingsHome"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
 
-        <LinearLayout style="@style/SettingsCard">
+            <LinearLayout style="@style/SettingsCard">
+
+            <LinearLayout
+                android:id="@+id/rowGroup0"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:minHeight="62dp"
+                android:orientation="horizontal"
+                android:paddingStart="16dp"
+                android:paddingEnd="10dp"
+                android:paddingTop="7dp"
+                android:paddingBottom="7dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_group_library_title"
+                        android:textColor="@color/text_primary"
+                        android:textSize="16sp" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/settings_group_library_desc"
+                        android:textColor="@color/text_hint"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="›"
+                    android:textColor="@color/text_hint"
+                    android:textSize="20sp" />
+            </LinearLayout>
+
+            <View style="@style/SettingsDivider" />
+
+            <LinearLayout
+                android:id="@+id/rowGroup1"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:minHeight="62dp"
+                android:orientation="horizontal"
+                android:paddingStart="16dp"
+                android:paddingEnd="10dp"
+                android:paddingTop="7dp"
+                android:paddingBottom="7dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_group_lyrics_title"
+                        android:textColor="@color/text_primary"
+                        android:textSize="16sp" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/settings_group_lyrics_desc"
+                        android:textColor="@color/text_hint"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="›"
+                    android:textColor="@color/text_hint"
+                    android:textSize="20sp" />
+            </LinearLayout>
+
+            <View style="@style/SettingsDivider" />
+
+            <LinearLayout
+                android:id="@+id/rowGroup2"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:minHeight="62dp"
+                android:orientation="horizontal"
+                android:paddingStart="16dp"
+                android:paddingEnd="10dp"
+                android:paddingTop="7dp"
+                android:paddingBottom="7dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_group_desktop_title"
+                        android:textColor="@color/text_primary"
+                        android:textSize="16sp" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/settings_group_desktop_desc"
+                        android:textColor="@color/text_hint"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="›"
+                    android:textColor="@color/text_hint"
+                    android:textSize="20sp" />
+            </LinearLayout>
+
+            <View style="@style/SettingsDivider" />
+
+            <LinearLayout
+                android:id="@+id/rowGroup3"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:minHeight="62dp"
+                android:orientation="horizontal"
+                android:paddingStart="16dp"
+                android:paddingEnd="10dp"
+                android:paddingTop="7dp"
+                android:paddingBottom="7dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_group_playback_title"
+                        android:textColor="@color/text_primary"
+                        android:textSize="16sp" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/settings_group_playback_desc"
+                        android:textColor="@color/text_hint"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="›"
+                    android:textColor="@color/text_hint"
+                    android:textSize="20sp" />
+            </LinearLayout>
+
+            <View style="@style/SettingsDivider" />
+
+            <LinearLayout
+                android:id="@+id/rowGroup4"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:minHeight="62dp"
+                android:orientation="horizontal"
+                android:paddingStart="16dp"
+                android:paddingEnd="10dp"
+                android:paddingTop="7dp"
+                android:paddingBottom="7dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_group_appearance_title"
+                        android:textColor="@color/text_primary"
+                        android:textSize="16sp" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/settings_group_appearance_desc"
+                        android:textColor="@color/text_hint"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="›"
+                    android:textColor="@color/text_hint"
+                    android:textSize="20sp" />
+            </LinearLayout>
+
+            <View style="@style/SettingsDivider" />
+
+            <LinearLayout
+                android:id="@+id/rowGroup5"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:minHeight="62dp"
+                android:orientation="horizontal"
+                android:paddingStart="16dp"
+                android:paddingEnd="10dp"
+                android:paddingTop="7dp"
+                android:paddingBottom="7dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_group_tools_title"
+                        android:textColor="@color/text_primary"
+                        android:textSize="16sp" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/settings_group_tools_desc"
+                        android:textColor="@color/text_hint"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="›"
+                    android:textColor="@color/text_hint"
+                    android:textSize="20sp" />
+            </LinearLayout>
+
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- ════════ 媒体库 ════════ -->
+        <LinearLayout
+            android:id="@+id/settingsPageLibrary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <!-- 顶部一行：左「返回」、右「当前分类名」——进二级页也知道自己在哪 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:minHeight="44dp"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/btnBackLibrary"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="?attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:minHeight="44dp"
+                    android:gravity="center_vertical"
+                    android:paddingStart="2dp"
+                    android:paddingEnd="12dp"
+                    android:text="@string/settings_back"
+                    android:textColor="@color/accent"
+                    android:textSize="14sp" />
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_group_library_title"
+                    android:textColor="@color/text_hint"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+<LinearLayout style="@style/SettingsCard">
 
             <CheckBox
                 android:id="@+id/chkAutoScan"
@@ -162,6 +506,32 @@
                 style="@style/SettingsHint"
                 android:text="@string/lib_header_style_hint" />
 
+            <!-- 3.0.5：封面显示方式（粉丝反馈「封面比较大就只显示中间一小块」） -->
+            <TextView
+                style="@style/SettingsLabel"
+                android:text="@string/cover_fit_label" />
+
+            <RadioGroup
+                android:id="@+id/rgCoverFit"
+                style="@style/SettingsSegment">
+
+                <RadioButton
+                    android:id="@+id/rbCoverCrop"
+                    style="@style/SettingsSegItem"
+                    android:tag="0"
+                    android:text="@string/cover_fit_crop" />
+
+                <RadioButton
+                    android:id="@+id/rbCoverFull"
+                    style="@style/SettingsSegItem"
+                    android:tag="1"
+                    android:text="@string/cover_fit_full" />
+            </RadioGroup>
+
+            <TextView
+                style="@style/SettingsHint"
+                android:text="@string/cover_fit_hint" />
+
             <LinearLayout style="@style/SettingsBtnRow">
 
                 <Button
@@ -195,13 +565,53 @@
                     android:text="@string/scan_all" />
             </LinearLayout>
         </LinearLayout>
+        </LinearLayout>
 
-        <!-- ════════ 歌词 ════════ -->
-        <TextView
-            style="@style/SettingsSection"
-            android:text="@string/settings_cat_lyrics" />
+        <!-- ════════ 歌词显示 ════════ -->
+        <LinearLayout
+            android:id="@+id/settingsPageLyrics"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
 
-        <LinearLayout style="@style/SettingsCard">
+            <!-- 顶部一行：左「返回」、右「当前分类名」——进二级页也知道自己在哪 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:minHeight="44dp"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/btnBackLyrics"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="?attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:minHeight="44dp"
+                    android:gravity="center_vertical"
+                    android:paddingStart="2dp"
+                    android:paddingEnd="12dp"
+                    android:text="@string/settings_back"
+                    android:textColor="@color/accent"
+                    android:textSize="14sp" />
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_group_lyrics_title"
+                    android:textColor="@color/text_hint"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+<LinearLayout style="@style/SettingsCard">
 
             <CheckBox
                 android:id="@+id/chkAutoTrans"
@@ -281,13 +691,53 @@
                     android:text="@string/font_mono" />
             </RadioGroup>
         </LinearLayout>
+        </LinearLayout>
 
         <!-- ════════ 桌面歌词 ════════ -->
-        <TextView
-            style="@style/SettingsSection"
-            android:text="@string/settings_cat_desktop" />
+        <LinearLayout
+            android:id="@+id/settingsPageDesktop"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
 
-        <LinearLayout style="@style/SettingsCard">
+            <!-- 顶部一行：左「返回」、右「当前分类名」——进二级页也知道自己在哪 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:minHeight="44dp"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/btnBackDesktop"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="?attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:minHeight="44dp"
+                    android:gravity="center_vertical"
+                    android:paddingStart="2dp"
+                    android:paddingEnd="12dp"
+                    android:text="@string/settings_back"
+                    android:textColor="@color/accent"
+                    android:textSize="14sp" />
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_group_desktop_title"
+                    android:textColor="@color/text_hint"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+<LinearLayout style="@style/SettingsCard">
 
             <CheckBox
                 android:id="@+id/chkDesktopLyrics"
@@ -399,13 +849,53 @@
                     android:text="@string/desktop_lyrics_center_hint" />
             </LinearLayout>
         </LinearLayout>
+        </LinearLayout>
 
-        <!-- ════════ 播放 ════════ -->
-        <TextView
-            style="@style/SettingsSection"
-            android:text="@string/settings_cat_playback" />
+        <!-- ════════ 播放控制 ════════ -->
+        <LinearLayout
+            android:id="@+id/settingsPagePlayback"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
 
-        <LinearLayout style="@style/SettingsCard">
+            <!-- 顶部一行：左「返回」、右「当前分类名」——进二级页也知道自己在哪 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:minHeight="44dp"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/btnBackPlayback"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="?attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:minHeight="44dp"
+                    android:gravity="center_vertical"
+                    android:paddingStart="2dp"
+                    android:paddingEnd="12dp"
+                    android:text="@string/settings_back"
+                    android:textColor="@color/accent"
+                    android:textSize="14sp" />
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_group_playback_title"
+                    android:textColor="@color/text_hint"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+<LinearLayout style="@style/SettingsCard">
 
             <CheckBox
                 android:id="@+id/chkNoSwipeSwitch"
@@ -573,13 +1063,53 @@
                 android:layout_marginBottom="6dp"
                 android:text="@string/eq_entry" />
         </LinearLayout>
+        </LinearLayout>
 
-        <!-- ════════ 外观 ════════ -->
-        <TextView
-            style="@style/SettingsSection"
-            android:text="@string/settings_cat_appearance" />
+        <!-- ════════ 外观与主题 ════════ -->
+        <LinearLayout
+            android:id="@+id/settingsPageAppearance"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
 
-        <LinearLayout style="@style/SettingsCard">
+            <!-- 顶部一行：左「返回」、右「当前分类名」——进二级页也知道自己在哪 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:minHeight="44dp"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/btnBackAppearance"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="?attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:minHeight="44dp"
+                    android:gravity="center_vertical"
+                    android:paddingStart="2dp"
+                    android:paddingEnd="12dp"
+                    android:text="@string/settings_back"
+                    android:textColor="@color/accent"
+                    android:textSize="14sp" />
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_group_appearance_title"
+                    android:textColor="@color/text_hint"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+<LinearLayout style="@style/SettingsCard">
 
             <TextView
                 style="@style/SettingsLabel"
@@ -620,13 +1150,53 @@
                 android:layout_marginBottom="6dp"
                 android:text="@string/theme_entry" />
         </LinearLayout>
+        </LinearLayout>
 
-        <!-- ════════ 工具 ════════ -->
-        <TextView
-            style="@style/SettingsSection"
-            android:text="@string/settings_cat_tools" />
+        <!-- ════════ 工具与数据 ════════ -->
+        <LinearLayout
+            android:id="@+id/settingsPageTools"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
 
-        <LinearLayout style="@style/SettingsCard"
+            <!-- 顶部一行：左「返回」、右「当前分类名」——进二级页也知道自己在哪 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:minHeight="44dp"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/btnBackTools"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="?attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:minHeight="44dp"
+                    android:gravity="center_vertical"
+                    android:paddingStart="2dp"
+                    android:paddingEnd="12dp"
+                    android:text="@string/settings_back"
+                    android:textColor="@color/accent"
+                    android:textSize="14sp" />
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_group_tools_title"
+                    android:textColor="@color/text_hint"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+<LinearLayout style="@style/SettingsCard"
             android:paddingBottom="2dp">
 
             <LinearLayout style="@style/SettingsBtnRow"
@@ -690,6 +1260,7 @@
                 style="@style/SettingsHint"
                 android:layout_marginTop="0dp"
                 android:text="@string/playback_log_hint" />
+        </LinearLayout>
         </LinearLayout>
 
     </LinearLayout>

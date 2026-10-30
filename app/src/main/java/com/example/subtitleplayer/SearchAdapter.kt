@@ -41,6 +41,22 @@ class SearchAdapter(
     private var items: List<Item> = emptyList()
     private var uiSizeSp = 15f
 
+    /**
+     * 封面是否「完整显示」（3.0.5）。
+     *
+     * false（默认）= centerCrop 裁满，保持历史观感；true = fitCenter，整张图缩进容器不裁切，
+     * 空出的部分露出 ImageView 的渐变/纯色底。派生自设置里的「封面显示方式」，见 [applyCoverScale]。
+     */
+    private var coverFullImage = false
+
+    /** 设置变更后下发（3.0.5）。 */
+    fun applyCoverFit(fullImage: Boolean) {
+        if (coverFullImage == fullImage) return
+        coverFullImage = fullImage
+        notifyDataSetChanged()
+    }
+
+
     fun submit(pl: List<Playlist>, sg: List<Song>) {
         playlists = pl
         allSongs = sg
@@ -114,6 +130,7 @@ class SearchAdapter(
             is Item.SongItem -> {
                 val song = allSongs[item.globalIndex]
                 val h = holder as SongHolder
+                applyCoverScale(h.cover, coverFullImage)
                 h.index.text = (item.globalIndex + 1).toString()
                 h.title.text = song.title
                 h.title.setTextSize(uiSizeSp)

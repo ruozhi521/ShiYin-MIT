@@ -445,4 +445,25 @@
     <string name="settings_cat_playback">播放</string>
     <string name="settings_cat_appearance">外观</string>
     <string name="settings_cat_tools">工具</string>
+
+    <!-- 3.0.5：设置改为「一级分类 + 二级详情」。一级页每个分类配一句说明，
+         让人第一眼就知道这一类里大概有什么（粉丝反馈「打开设置第一眼看不懂」）。 -->
+    <string name="settings_back">‹ 返回</string>
+    <!-- 3.0.5：封面显示方式（粉丝反馈大封面只显示中间一小块） -->
+    <string name="cover_fit_label">封面显示方式</string>
+    <string name="cover_fit_crop">裁满</string>
+    <string name="cover_fit_full">完整</string>
+    <string name="cover_fit_hint">「裁满」铺满方框、边缘会被裁掉；「完整」整张图缩放显示、不裁切（空出的地方是渐变底色）。封面不是正方形时差别最明显。</string>
+    <string name="settings_group_library_title">媒体库</string>
+    <string name="settings_group_library_desc">扫描文件夹、歌名来源、列表布局、封面显示</string>
+    <string name="settings_group_lyrics_title">歌词显示</string>
+    <string name="settings_group_lyrics_desc">歌词字号与字体、自动翻译、状态栏歌词</string>
+    <string name="settings_group_desktop_title">桌面歌词</string>
+    <string name="settings_group_desktop_desc">悬浮在桌面上的歌词：字号、透明度、颜色、位置</string>
+    <string name="settings_group_playback_title">播放控制</string>
+    <string name="settings_group_playback_desc">切歌手势、快进时长、返回层级、定时播放、均衡器</string>
+    <string name="settings_group_appearance_title">外观与主题</string>
+    <string name="settings_group_appearance_desc">界面字号、主题色、封面背景</string>
+    <string name="settings_group_tools_title">工具与数据</string>
+    <string name="settings_group_tools_desc">歌词识别、翻译设置、运行日志、已隐藏内容、关于</string>
 </resources>

@@ -3337,6 +3337,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** 封面是否完整显示（3.0.5）：false = 裁满（默认），true = fitCenter 不裁切。 */
+    private fun coverFullImage(): Boolean = prefs.getBoolean(KEY_COVER_FIT, false)
+
     /** 顶部标题栏档位：0 完整（默认）/ 1 精简 / 2 极简。 */
     private fun libHeaderStyle(): Int = prefs.getInt(KEY_LIB_HEADER, 0).coerceIn(0, 2)
 
@@ -3556,6 +3559,8 @@ class MainActivity : AppCompatActivity() {
         chkLibSegRow.isChecked = prefs.getBoolean(KEY_LIB_SEG_ROW, true)
         val chkAlphaIndex = view.findViewById<CheckBox>(R.id.chkAlphaIndex)
         chkAlphaIndex.isChecked = prefs.getBoolean(KEY_ALPHA_INDEX, false)
+        val rgCoverFit = view.findViewById<RadioGroup>(R.id.rgCoverFit)
+        checkByTag(rgCoverFit, if (coverFullImage()) 1 else 0)
         val rgSeekStep = view.findViewById<RadioGroup>(R.id.rgSeekStep)
         checkByTag(rgSeekStep, prefs.getInt(KEY_SEEK_STEP, 10))
         // 2.15：返回键级数（0 逐级 / 1 直跳）
@@ -3646,6 +3651,7 @@ class MainActivity : AppCompatActivity() {
                     .putBoolean(KEY_PLAYLIST_DRAG, chkPlaylistDrag.isChecked)
                     .putBoolean(KEY_LIB_SEG_ROW, chkLibSegRow.isChecked)
                     .putBoolean(KEY_ALPHA_INDEX, chkAlphaIndex.isChecked)
+                    .putBoolean(KEY_COVER_FIT, tagOf(rgCoverFit) == 1)
                     .putInt(KEY_SEEK_STEP, tagOf(rgSeekStep))
                     .putInt(KEY_BACK_STEP, tagOf(rgBackStep))
                     .putInt(KEY_VIDEO_TAP_ZONE, tagOf(rgVideoTapZone))
@@ -3674,6 +3680,52 @@ class MainActivity : AppCompatActivity() {
                 (dm.heightPixels * 0.86f).toInt()
             )
         }
+
+        // ---- 3.0.5：一级分类页 ↔ 二级详情页 ----
+        // 37 项设置原本全摊在一页里，粉丝反馈「打开设置第一眼要能看明白什么是什么」。
+        // 现在一级页只放 6 个分类入口，点进去才是详情。
+        // ⚠️ 只切换可见性：所有控件的读取/保存逻辑与之前完全一致（原 id 一个没改），
+        //    所以「确定」按钮那套 putXxx 不需要任何改动。
+        val settingsHome = view.findViewById<View>(R.id.settingsHome)
+        val settingsScroll =
+            view.findViewById<android.widget.ScrollView>(R.id.settingsScroll)
+        val pageIds = intArrayOf(
+            R.id.settingsPageLibrary, R.id.settingsPageLyrics, R.id.settingsPageDesktop,
+            R.id.settingsPagePlayback, R.id.settingsPageAppearance, R.id.settingsPageTools
+        )
+        val backIds = intArrayOf(
+            R.id.btnBackLibrary, R.id.btnBackLyrics, R.id.btnBackDesktop,
+            R.id.btnBackPlayback, R.id.btnBackAppearance, R.id.btnBackTools
+        )
+        val rowIds = intArrayOf(
+            R.id.rowGroup0, R.id.rowGroup1, R.id.rowGroup2,
+            R.id.rowGroup3, R.id.rowGroup4, R.id.rowGroup5
+        )
+
+        /** pageId = 0 表示回到一级分类页。 */
+        fun showSettingsPage(pageId: Int) {
+            settingsHome.visibility = if (pageId == 0) View.VISIBLE else View.GONE
+            for (id in pageIds) {
+                view.findViewById<View>(id)?.visibility =
+                    if (id == pageId) View.VISIBLE else View.GONE
+            }
+            // 换页回到顶部：二级页内容比一级页长，不滚回顶部会直接落到页面中段
+            settingsScroll?.scrollTo(0, 0)
+        }
+
+        // 「返回」文字跟随用户自选的主题色（@color/accent 是静态资源，不会自动变）
+        val accentList =
+            android.content.res.ColorStateList.valueOf(ThemeManager.accent(this))
+        for (i in pageIds.indices) {
+            view.findViewById<View>(rowIds[i])?.setOnClickListener {
+                showSettingsPage(pageIds[i])
+            }
+            view.findViewById<TextView>(backIds[i])?.apply {
+                setTextColor(accentList)
+                setOnClickListener { showSettingsPage(0) }
+            }
+        }
+        showSettingsPage(0)
 
         view.findViewById<Button>(R.id.btnRescanNow).setOnClickListener {
             settingsDialog?.dismiss()
@@ -6885,6 +6937,30 @@ class MainActivity : AppCompatActivity() {
         if (::playlistsPageAdapter.isInitialized) playlistsPageAdapter.applyUiSize(uiSize)
         // 2.16：主推荐卡片同样跟随字号
         updateDiscoverPrimaryTextSize()
+        // 3.0.5：封面显示方式（裁满 / 完整）下发到所有列表
+        applyCoverFitEverywhere()
+    }
+
+    /**
+     * 把「封面显示方式」应用到所有封面位（3.0.5）。
+     *
+     * 列表走各自的 [applyCoverFit]（内部 notifyDataSetChanged，绑定时会调用 [applyCoverScale]）；
+     * 播放页大封面与发现页主推荐不是列表项，单独设 scaleType。
+     */
+    private fun applyCoverFitEverywhere() {
+        val full = coverFullImage()
+        if (::songAdapter.isInitialized) songAdapter.applyCoverFit(full)
+        if (::searchAdapter.isInitialized) searchAdapter.applyCoverFit(full)
+        if (::gridAdapter.isInitialized) gridAdapter.applyCoverFit(full)
+        if (::treeAdapter.isInitialized) treeAdapter.applyCoverFit(full)
+        if (::discoverAdapter.isInitialized) discoverAdapter.applyCoverFit(full)
+        if (::playlistsPageAdapter.isInitialized) playlistsPageAdapter.applyCoverFit(full)
+        if (::favoritesAdapter.isInitialized) favoritesAdapter.applyCoverFit(full)
+        if (::videoAdapter.isInitialized) videoAdapter.applyCoverFit(full)
+        // 播放页 CD 大封面（280dp 正方形）——非 1:1 封面在这里最明显
+        if (::imgCd.isInitialized) applyCoverScale(imgCd, full)
+        // 发现页主推荐大卡
+        findViewById<ImageView>(R.id.imgPrimaryCover)?.let { applyCoverScale(it, full) }
     }
 
     private fun applyDarkMode(dark: Boolean) {
@@ -6954,6 +7030,14 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_SHOW_CHANNEL_FLIP = "show_channel_flip"
         /** 音乐库顶部标题栏密度（3.0.4）：0 完整 / 1 精简 / 2 极简。 */
         private const val KEY_LIB_HEADER = "lib_header_style"
+        /**
+         * 封面显示方式（3.0.5）：false 裁满（centerCrop，默认，与历史观感一致）/ true 完整（fitCenter）。
+         *
+         * 粉丝反馈「封面比较大就只显示中间一小块」——根因是所有封面容器都是固定正方形，
+         * 非 1:1 的封面用 centerCrop 必然被居中裁掉两侧或上下。按弱志 2026-10-30 的决定
+         * 做成开关（方案 B），默认保持「裁满」，不改变老用户观感。
+         */
+        private const val KEY_COVER_FIT = "cover_full_image"
         /**
          * 歌单是否可拖动排序（3.0.4，默认开）。
          *

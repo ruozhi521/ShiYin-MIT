@@ -27,6 +27,22 @@ class FolderTreeAdapter(
     private var nodes: List<TreeNode> = emptyList()
     private var uiSizeSp = 14f
 
+    /**
+     * 封面是否「完整显示」（3.0.5）。
+     *
+     * false（默认）= centerCrop 裁满，保持历史观感；true = fitCenter，整张图缩进容器不裁切，
+     * 空出的部分露出 ImageView 的渐变/纯色底。派生自设置里的「封面显示方式」，见 [applyCoverScale]。
+     */
+    private var coverFullImage = false
+
+    /** 设置变更后下发（3.0.5）。 */
+    fun applyCoverFit(fullImage: Boolean) {
+        if (coverFullImage == fullImage) return
+        coverFullImage = fullImage
+        notifyDataSetChanged()
+    }
+
+
     /** 显示当前层节点列表（由 MainActivity 按路径栈提供）。 */
     fun submit(list: List<TreeNode>) {
         nodes = list
@@ -46,6 +62,7 @@ class FolderTreeAdapter(
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
         val node = nodes[position]
+        applyCoverScale(holder.cover, coverFullImage)
         holder.name.text = node.name
         holder.name.setTextSize(uiSizeSp)
 

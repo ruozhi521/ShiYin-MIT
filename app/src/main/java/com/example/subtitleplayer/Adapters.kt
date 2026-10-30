@@ -23,6 +23,22 @@ class SongAdapter(
     private var currentIndex = -1
     /** 是否显示拖拽把手（2.14）。只有「可排序的歌单页」才开。 */
     private var dragHandleVisible = false
+
+    /**
+     * 封面是否「完整显示」（3.0.5）。
+     *
+     * false（默认）= centerCrop 裁满，保持历史观感；true = fitCenter，整张图缩进容器不裁切，
+     * 空出的部分露出 ImageView 的渐变/纯色底。派生自设置里的「封面显示方式」，见 [applyCoverScale]。
+     */
+    private var coverFullImage = false
+
+    /** 设置变更后下发（3.0.5）。 */
+    fun applyCoverFit(fullImage: Boolean) {
+        if (coverFullImage == fullImage) return
+        coverFullImage = fullImage
+        notifyDataSetChanged()
+    }
+
     /**
      * 把手按下 → 请求外部发起拖拽（2.14）。
      * 由 MainActivity 接到后调 `ItemTouchHelper.startDrag(holder)`。
@@ -129,6 +145,7 @@ class SongAdapter(
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
         val song = items[position]
+        applyCoverScale(holder.cover, coverFullImage)
         holder.index.text = (position + 1).toString()
         holder.title.text = song.title
         holder.title.setTextSize(uiSizeSp)
