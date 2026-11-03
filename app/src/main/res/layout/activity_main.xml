@@ -75,6 +75,17 @@
                 android:text="@string/batch_select_all" />
 
             <Button
+                android:id="@+id/btnBatchAddTo"
+                style="@style/BtnStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="64dp"
+                android:maxWidth="110dp"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                android:text="@string/batch_add_to" />
+
+            <Button
                 android:id="@+id/btnBatchDelete"
                 style="@style/BtnStyle"
                 android:layout_width="wrap_content"

@@ -43,11 +43,49 @@ class FolderTreeAdapter(
     }
 
 
+    /** 是否显示拖拽把手（3.0.6，仅当树形可拖动时开）。 */
+    private var dragHandleVisible = false
+
+    /**
+     * 该项能否拖动（3.0.6）。
+     *
+     * 「本文件夹的歌曲」那一行是虚拟节点（path 与父目录相同、只为展示本层歌曲），
+     * 它不参与排序 —— 拖了会在下次 [submit] 时被重新拼回第一位。
+     */
+    var canDragItem: ((Int) -> Boolean)? = null
+
+    /** 把手按下 → 请求外部发起拖拽（与网格版同一约定）。 */
+    var onStartDrag: ((RecyclerView.ViewHolder) -> Unit)? = null
+
     /** 显示当前层节点列表（由 MainActivity 按路径栈提供）。 */
     fun submit(list: List<TreeNode>) {
         nodes = list
         notifyDataSetChanged()
     }
+
+    /** 是否显示拖拽把手（3.0.6）。 */
+    fun setDragHandleVisible(visible: Boolean) {
+        if (dragHandleVisible == visible) return
+        dragHandleVisible = visible
+        notifyDataSetChanged()
+    }
+
+    /**
+     * 拖拽排序：移动指定项并刷新（3.0.6）。
+     * @return 移动后的新列表——调用方必须用它同步自己的数据源（与网格版同一约定）。
+     */
+    fun move(from: Int, to: Int): List<TreeNode> {
+        if (from !in nodes.indices || to !in nodes.indices) return nodes
+        val list = nodes.toMutableList()
+        val item = list.removeAt(from)
+        list.add(to, item)
+        nodes = list
+        notifyItemMoved(from, to)
+        return list
+    }
+
+    /** 当前展示的节点（拖拽松手时取它来保存顺序）。 */
+    fun currentItems(): List<TreeNode> = nodes
 
     fun applyUiSize(sizeSp: Int) {
         uiSizeSp = sizeSp.toFloat()
@@ -111,6 +149,20 @@ class FolderTreeAdapter(
             }
         }
 
+        // 拖拽把手（3.0.6）：只有可排序时显示；按住它才拖，长按行仍归菜单
+        val showHandle = dragHandleVisible && (canDragItem?.invoke(position) ?: true)
+        holder.dragHandle.visibility = if (showHandle) View.VISIBLE else View.GONE
+        if (showHandle) {
+            holder.dragHandle.setOnTouchListener { _, ev ->
+                if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+                    onStartDrag?.invoke(holder)
+                }
+                false
+            }
+        } else {
+            holder.dragHandle.setOnTouchListener(null)
+        }
+
         holder.itemView.setOnClickListener {
             if (isDir) {
                 onOpenFolder(node)
@@ -134,5 +186,6 @@ class FolderTreeAdapter(
         val cover: ImageView = itemView.findViewById(R.id.imgTreeCover)
         val name: TextView = itemView.findViewById(R.id.txtTreeName)
         val count: TextView = itemView.findViewById(R.id.txtTreeCount)
+        val dragHandle: ImageView = itemView.findViewById(R.id.imgTreeDragHandle)
     }
 }

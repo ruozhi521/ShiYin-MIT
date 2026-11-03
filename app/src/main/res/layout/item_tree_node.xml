@@ -60,4 +60,20 @@
             android:textSize="11sp" />
     </LinearLayout>
 
+    <!--
+      3.0.6：树形目录的拖拽把手（粉丝反馈「树形目录希望可以增加拖动排序功能」）。
+      与网格版同一套约定：按住这里才拖，长按行仍走菜单。
+      放在行尾而不是左上角：树形行是窄条，左上角已被缩进/箭头占住。
+    -->
+    <ImageView
+        android:id="@+id/imgTreeDragHandle"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/song_drag_handle"
+        android:padding="6dp"
+        android:src="@drawable/ic_drag_handle"
+        android:tint="@color/text_hint"
+        android:visibility="gone" />
+
 </LinearLayout>

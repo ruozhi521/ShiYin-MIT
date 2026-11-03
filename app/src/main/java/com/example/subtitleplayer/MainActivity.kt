@@ -970,6 +970,8 @@ class MainActivity : AppCompatActivity() {
             if (a.selectedCount() == a.itemCount) a.clearSelection() else a.selectAll()
         }
         findViewById<Button>(R.id.btnBatchDelete).setOnClickListener { confirmBatchDelete() }
+        // 3.0.6：批量加进自建歌单（粉丝反馈「只能单首添加很麻烦，不能批量」）
+        findViewById<Button>(R.id.btnBatchAddTo).setOnClickListener { showBatchAddToPlaylist() }
 
         recyclerDiscover = findViewById(R.id.recyclerDiscover)
         searchEntry = findViewById(R.id.searchEntry)
@@ -1164,6 +1166,9 @@ class MainActivity : AppCompatActivity() {
         )
         recyclerPlaylistsPage.layoutManager = GridLayoutManager(this, playlistColumns())
         recyclerPlaylistsPage.adapter = playlistsPageAdapter
+        // 3.0.6：歌单页也支持拖动排序（粉丝反馈「歌单页面也加一个拖动排序」）。
+        // 与音乐库页同一套手势约定：从≡把手起手，长按仍归菜单。
+        pageGridTouchHelper.attachToRecyclerView(recyclerPlaylistsPage)
         // 3.0.2.1：列数 / 间距 / 封面高度由 applyPlaylistGridDensity() 统一管
         applyPlaylistGridDensity()
         findViewById<Button>(R.id.btnNewPlaylist).setOnClickListener { showCreatePlaylistDialog() }
@@ -2634,6 +2639,28 @@ class MainActivity : AppCompatActivity() {
     private fun savePlaylistOrder(newOrder: List<Playlist>) {
         if (newOrder.size <= 1) return
         PlaylistOrderStore.save(this, newOrder.drop(1).map { it.name })
+    }
+
+    /**
+     * 歌单页能否拖动自建歌单（3.0.6）。
+     *
+     * 与音乐库页共用同一个用户开关（[KEY_PLAYLIST_DRAG]）——对用户来说「歌单能不能拖」
+     * 是一个整体印象，分成两个开关反而奇怪。
+     * 但不看 [KEY_PLAYLIST_SORT]：那是**音乐库页文件夹**的排序方式，
+     * 自建歌单页一直是「创建顺序」，没有随机/按名称那套，所以永远可拖。
+     */
+    private fun customPlaylistDragEnabled(): Boolean =
+        prefs.getBoolean(KEY_PLAYLIST_DRAG, true)
+
+    /**
+     * 保存歌单页的新顺序（3.0.6）。
+     *
+     * 传进来含首项「收藏」，保存时摘掉——它不是自建歌单，混进顺序表会在
+     * 下次 [CustomPlaylistOrderStore.apply] 时把「收藏」摆到别处。
+     */
+    private fun saveCustomPlaylistOrder(newOrder: List<Playlist>) {
+        if (newOrder.size <= 1) return
+        CustomPlaylistOrderStore.save(this, newOrder.drop(1).map { it.name })
     }
 
     /** 歌单排序弹窗（点库页「歌单」右侧的下拉箭头触发）。 */
@@ -4756,6 +4783,62 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** 确认后批量隐藏选中项（与单曲删除同一套「隐藏」语义，不碰手机文件）。 */
+    /**
+     * 批量把选中的歌加入自建歌单（3.0.6）。
+     *
+     * 粉丝反馈：「从歌单新建文件夹后需要从音乐库添加歌曲，只能单首添加很麻烦，不能批量。」
+     *
+     * 与单首的 [showAddToPlaylistDialog] 的区别：
+     * - 一次写盘（[CustomPlaylistStore.addAll]），选 50 首也只读写一次 JSON；
+     * - 报告**实际新增**条数（已存在的会自动跳过），而不是笼统一句「已添加」。
+     */
+    private fun showBatchAddToPlaylist() {
+        val a = batchAdapter() ?: return
+        val songs = a.selectedSongs()
+        if (songs.isEmpty()) {
+            toast(getString(R.string.batch_none_selected))
+            return
+        }
+        val names = CustomPlaylistStore.names(this)
+        if (names.isEmpty()) {
+            // 没有自建歌单时直接给「新建」这一条路，不让用户对着空列表发呆
+            AccentDialogBuilder(this)
+                .setTitle(getString(R.string.batch_add_title, songs.size))
+                .setMessage(R.string.batch_add_need_create)
+                .setPositiveButton(R.string.playlist_create) { _, _ ->
+                    showCreatePlaylistDialog()
+                }
+                .setNegativeButton(R.string.cancel, null)
+                .show()
+            return
+        }
+        val labels = names.toMutableList()
+        labels.add(getString(R.string.playlist_create))
+        AccentDialogBuilder(this)
+            .setTitle(getString(R.string.batch_add_title, songs.size))
+            .setItems(labels.toTypedArray()) { _, which ->
+                if (which == names.size) {
+                    showCreatePlaylistDialog()
+                    return@setItems
+                }
+                val name = names[which]
+                val added = CustomPlaylistStore.addAll(
+                    this, name, songs.map { it.uri.toString() }
+                )
+                toast(
+                    if (added > 0) {
+                        getString(R.string.batch_add_done, name, added)
+                    } else {
+                        getString(R.string.batch_add_all_exist, name)
+                    }
+                )
+                exitBatchMode()
+                refreshPlaylistsPage()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
     private fun confirmBatchDelete() {
         val a = batchAdapter() ?: return
         val songs = a.selectedSongs()
@@ -4868,12 +4951,18 @@ class MainActivity : AppCompatActivity() {
                 displayCount = if (lib == null) favSet.size else null
             )
         )
-        // 自建歌单：按存储顺序（创建顺序）
+        // 自建歌单：按存储顺序（创建顺序），再套用户拖动过的顺序（3.0.6）
         val own = CustomPlaylistStore.load(this)
+        val ownItems = mutableListOf<Playlist>()
         for ((name, uris) in own) {
-            items.add(Playlist(name, resolveUris(uris)))
+            ownItems.add(Playlist(name, resolveUris(uris)))
         }
+        items.addAll(CustomPlaylistOrderStore.apply(this, ownItems))
         playlistsPageItems = items
+        // 把把手显隐与可拖项规则一次性设好（拖拽开关跟「媒体库」那套共用同一个设置）
+        playlistsPageAdapter.setDragHandleVisible(customPlaylistDragEnabled())
+        // 首项「收藏」是固定项，不参与排序
+        playlistsPageAdapter.canDragItem = { pos -> pos != 0 }
         playlistsPageAdapter.submit(items)
         txtPlaylistsEmpty.visibility =
             if (own.isEmpty()) View.VISIBLE else View.GONE
@@ -6760,7 +6849,8 @@ class MainActivity : AppCompatActivity() {
         // 把「本文件夹的歌曲」作为第一行再列子文件夹 —— 以前单击进来只列子文件夹、
         // 这层的音声看不到，只能长按目录才能打开（用户反馈：点进去只见子文件夹）。
         val nodes: List<TreeNode> = if (treeStack.isEmpty()) {
-            treeRoots
+            // 3.0.6：应用用户拖动过的顺序（没拖过 → 原样返回，仍按名称排）
+            TreeOrderStore.apply(this, "", treeRoots)
         } else {
             val cur = treeStack.last()
             val own = cur.playlist?.let { pl ->
@@ -6771,7 +6861,17 @@ class MainActivity : AppCompatActivity() {
                     playlist = pl
                 )
             }
-            if (own != null) listOf(own) + cur.children else cur.children
+            // 3.0.6：子文件夹也按用户顺序排；「本文件夹的歌曲」是虚拟行，恒在最前
+            val kids = TreeOrderStore.apply(this, cur.path, cur.children)
+            if (own != null) listOf(own) + kids else kids
+        }
+        // 3.0.6：树形模式下的把手显隐与可拖项
+        treeAdapter.setDragHandleVisible(treeDragEnabled())
+        // 「本文件夹的歌曲」那行的 path 与父目录相同（见上方构造），据此把它排除在排序外
+        val ownPath = currentTreeParentPath()
+        treeAdapter.canDragItem = { pos ->
+            val n = nodes.getOrNull(pos)
+            n != null && (treeStack.isEmpty() || n.path != ownPath)
         }
         treeAdapter.submit(nodes)
         // 3.0.1：回到这一层时还原滚动位置（submit 后 RecyclerView 必然回到顶部）。
@@ -6791,6 +6891,85 @@ class MainActivity : AppCompatActivity() {
             "‹ " + treeStack.joinToString(" > ") { it.name }
         }
         txtTreePath.visibility = if (isTreeMode()) View.VISIBLE else View.GONE
+    }
+
+    /** 树形拖拽是否已挂载（ItemTouchHelper 反复 attach 会叠加监听，只能挂一次）。 */
+    private var treeDragAttached = false
+
+    /**
+     * 树形目录能否拖动（3.0.6）。
+     *
+     * 与网格共用同一个用户开关（[KEY_PLAYLIST_DRAG]）——「歌单能不能拖」对用户是一个整体印象。
+     * 但**不看** [KEY_PLAYLIST_SORT]：树形一直是按名称排的固定心智模型（见 [LibraryTree]），
+     * 不存在「随机 / 按最近」那套。
+     */
+    private fun treeDragEnabled(): Boolean = prefs.getBoolean(KEY_PLAYLIST_DRAG, true)
+
+    /** 当前树层的父路径（根层为空串）——保存顺序时的分组键。 */
+    private fun currentTreeParentPath(): String = treeStack.lastOrNull()?.path ?: ""
+
+    /**
+     * 树形目录的拖动排序（3.0.6）。
+     *
+     * **只允许同层拖动**：跨层（拖进别的文件夹）在树里语义上等于「移动文件」，
+     * 本功能只改显示顺序、不碰文件，所以 movementFlags 只给 UP/DOWN。
+     * 当前渲染的本来就是同一层，天然满足。
+     */
+    private val treeTouchHelper by lazy {
+        ItemTouchHelper(object : ItemTouchHelper.Callback() {
+            override fun isLongPressDragEnabled() = false
+            override fun isItemViewSwipeEnabled() = false
+            override fun getMovementFlags(
+                recyclerView: androidx.recyclerview.widget.RecyclerView,
+                viewHolder: androidx.recyclerview.widget.RecyclerView.ViewHolder
+            ): Int = makeMovementFlags(
+                if (treeDragEnabled()) ItemTouchHelper.UP or ItemTouchHelper.DOWN else 0,
+                0
+            )
+
+            override fun onMove(
+                recyclerView: androidx.recyclerview.widget.RecyclerView,
+                viewHolder: androidx.recyclerview.widget.RecyclerView.ViewHolder,
+                target: androidx.recyclerview.widget.RecyclerView.ViewHolder
+            ): Boolean {
+                val from = viewHolder.bindingAdapterPosition
+                val to = target.bindingAdapterPosition
+                if (from < 0 || to < 0) return false
+                // 「本文件夹的歌曲」虚拟行既不能被拖走，也不能被别人挤掉位次
+                if (treeAdapter.canDragItem?.invoke(from) == false) return false
+                if (treeAdapter.canDragItem?.invoke(to) == false) return false
+                treeAdapter.move(from, to)
+                return true
+            }
+
+            override fun onSwiped(
+                viewHolder: androidx.recyclerview.widget.RecyclerView.ViewHolder,
+                direction: Int
+            ) {
+            }
+
+            override fun clearView(
+                recyclerView: androidx.recyclerview.widget.RecyclerView,
+                viewHolder: androidx.recyclerview.widget.RecyclerView.ViewHolder
+            ) {
+                super.clearView(recyclerView, viewHolder)
+                saveTreeOrder()
+            }
+        })
+    }
+
+    /**
+     * 保存当前树层的新顺序（3.0.6）。
+     *
+     * 要把「本文件夹的歌曲」那行虚拟节点剔掉再存 —— 它的 path 等于父目录 path，
+     * 混进顺序表会让下次 [TreeOrderStore.apply] 把它当成一个真实子节点去匹配。
+     */
+    private fun saveTreeOrder() {
+        val parentPath = currentTreeParentPath()
+        val paths = treeAdapter.currentItems()
+            .filter { treeStack.isEmpty() || it.path != parentPath }
+            .map { it.path }
+        TreeOrderStore.saveLevel(this, parentPath, paths)
     }
 
     /**
@@ -6851,6 +7030,63 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
+    /**
+     * 歌单页（底部「歌单」tab）的拖动排序（3.0.6）。
+     *
+     * 与音乐库页的 [playlistGridTouchHelper] 是**两个独立实例**：
+     * 它们绑在不同的 RecyclerView 上，共用一个实例会导致 attachToRecyclerView 互相踢掉。
+     * 手势约定保持一致：`isLongPressDragEnabled = false`（长按留给菜单），从把手起手。
+     */
+    private val pageGridTouchHelper by lazy {
+        ItemTouchHelper(object : ItemTouchHelper.Callback() {
+            override fun isLongPressDragEnabled() = false
+            override fun isItemViewSwipeEnabled() = false
+            override fun getMovementFlags(
+                recyclerView: androidx.recyclerview.widget.RecyclerView,
+                viewHolder: androidx.recyclerview.widget.RecyclerView.ViewHolder
+            ): Int = makeMovementFlags(
+                if (customPlaylistDragEnabled()) {
+                    ItemTouchHelper.UP or ItemTouchHelper.DOWN or
+                        ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT
+                } else {
+                    0
+                },
+                0
+            )
+
+            override fun onMove(
+                recyclerView: androidx.recyclerview.widget.RecyclerView,
+                viewHolder: androidx.recyclerview.widget.RecyclerView.ViewHolder,
+                target: androidx.recyclerview.widget.RecyclerView.ViewHolder
+            ): Boolean {
+                val from = viewHolder.bindingAdapterPosition
+                val to = target.bindingAdapterPosition
+                if (from < 0 || to < 0) return false
+                // 固定项「收藏」既不能被拖走，也不能被别人挤掉位次
+                if (playlistsPageAdapter.canDragItem?.invoke(from) == false) return false
+                if (playlistsPageAdapter.canDragItem?.invoke(to) == false) return false
+                val moved = playlistsPageAdapter.move(from, to)
+                // 页面自己那份列表必须同步，否则下拉菜单/点击取到的是旧顺序
+                playlistsPageItems = moved
+                return true
+            }
+
+            override fun onSwiped(
+                viewHolder: androidx.recyclerview.widget.RecyclerView.ViewHolder,
+                direction: Int
+            ) {
+            }
+
+            override fun clearView(
+                recyclerView: androidx.recyclerview.widget.RecyclerView,
+                viewHolder: androidx.recyclerview.widget.RecyclerView.ViewHolder
+            ) {
+                super.clearView(recyclerView, viewHolder)
+                saveCustomPlaylistOrder(playlistsPageAdapter.currentItems())
+            }
+        })
+    }
+
     // ---------- 歌单网格：每行个数（3.0.2.1）----------
 
     /** 歌单每行个数（2/3/4，默认 2）。粉丝反馈「一列只有两个、卡片太大，多的时候翻找麻烦」。 */
@@ -6907,13 +7143,30 @@ class MainActivity : AppCompatActivity() {
             treeRoots = LibraryTree.build(list)
             treeStack.clear()
             treeScrollMemo.clear() // 3.0.1：层级已重置，位置记忆跟着清（免得下次进树回到旧位置）
+            // 3.0.6：树形也支持拖拽（粉丝诉求）。与网格版同一套手势约定。
+            treeAdapter.onStartDrag = { holder -> treeTouchHelper.startDrag(holder) }
+            // ⚠️ 树形与网格共用同一个 recyclerPlaylists，两个 ItemTouchHelper 不能同时挂：
+            // 先摘掉网格那个，否则切回网格时会同时响应两个 helper（拖一次跳两格）。
+            if (gridDragAttached) {
+                playlistGridTouchHelper.attachToRecyclerView(null)
+                gridDragAttached = false
+            }
+            if (!treeDragAttached) {
+                treeTouchHelper.attachToRecyclerView(recyclerPlaylists)
+                treeDragAttached = true
+            }
             refreshTree()
         } else {
             recyclerPlaylists.layoutManager = GridLayoutManager(this, playlistColumns())
             if (recyclerPlaylists.adapter !== gridAdapter) {
                 recyclerPlaylists.adapter = gridAdapter
             }
-            // 3.0：网格模式挂上拖拽（树形模式不挂——树是层级结构，拖拽语义完全不同）
+            // 3.0：网格模式挂上拖拽。⚠️ 3.0.6 起树形也会挂（共用同一个 RecyclerView），
+            // 所以这里必须先摘掉树形那个，否则两个 helper 同时响应，拖一格跳两格。
+            if (treeDragAttached) {
+                treeTouchHelper.attachToRecyclerView(null)
+                treeDragAttached = false
+            }
             if (!gridDragAttached) {
                 playlistGridTouchHelper.attachToRecyclerView(recyclerPlaylists)
                 gridDragAttached = true

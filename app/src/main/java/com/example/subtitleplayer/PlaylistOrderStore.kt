@@ -22,16 +22,19 @@ import java.io.File
  * 存储：应用私有目录 `playlist_order.json`，格式 `["歌单名", ...]`。
  * 整文件覆盖写 + 加锁 + 原子替换（先 .tmp 再改名），与 [CustomPlaylistStore]、
  * [RecentPlaylist]、[LyricTranslationCache] 保持同一套纪律。
+ *
+ * 3.0.6：抽成 [NameOrderStore] 基类，好让「歌单页」复用同一套逻辑但**存到不同文件**
+ * —— 音乐库页存的是扫描出来的文件夹名，歌单页存的是用户自建歌单名，
+ * 两者完全可能重名（都叫「睡前听」），共用一个文件会互相覆盖。
  */
-object PlaylistOrderStore {
+open class NameOrderStore(private val fileName: String) {
 
-    private const val FILE_NAME = "playlist_order.json"
     /** 顺序表长度上限，防文件无限增长。 */
-    private const val MAX_NAMES = 500
+    private val maxNames = 500
 
     private val lock = Any()
 
-    private fun file(c: Context): File = File(c.filesDir, FILE_NAME)
+    private fun file(c: Context): File = File(c.filesDir, fileName)
 
     /** 读取用户保存的顺序。文件不存在或损坏都返回空表，不抛。 */
     fun load(c: Context): List<String> {
@@ -57,10 +60,10 @@ object PlaylistOrderStore {
         synchronized(lock) {
             try {
                 val arr = JSONArray()
-                names.take(MAX_NAMES).forEach { arr.put(it) }
+                names.take(maxNames).forEach { arr.put(it) }
                 val json = arr.toString()
                 val f = file(c)
-                val tmp = File(f.parentFile, "$FILE_NAME.tmp")
+                val tmp = File(f.parentFile, fileName + ".tmp")
                 tmp.writeText(json)
                 if (f.exists()) f.delete()
                 if (!tmp.renameTo(f)) {
@@ -109,3 +112,18 @@ object PlaylistOrderStore {
         return list
     }
 }
+
+/**
+ * 音乐库页「歌单」的展示顺序（3.0）。
+ */
+object PlaylistOrderStore : NameOrderStore("playlist_order.json")
+
+/**
+ * 歌单页（底部「歌单」tab）里**自建歌单之间**的排列顺序（3.0.6）。
+ *
+ * 粉丝反馈「歌单页面也加一个拖动排序（目前只有音乐库的网格图标有拖动排序功能）」。
+ * 首项「收藏」是固定项，不参与排序（与音乐库页「全部歌曲」同一约定）。
+ *
+ * 独立文件的原因见 [NameOrderStore] 的注释：两处的歌单名可能重名。
+ */
+object CustomPlaylistOrderStore : NameOrderStore("custom_playlist_order.json")

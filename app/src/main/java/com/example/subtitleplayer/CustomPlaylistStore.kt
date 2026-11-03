@@ -132,6 +132,34 @@ object CustomPlaylistStore {
         }
     }
 
+    /**
+     * 把多个 uri 一次性加入歌单（3.0.6，批量加歌用）。
+     *
+     * 与循环调用 [add] 的区别：**只落盘一次**。粉丝反馈「只能单首添加很麻烦」，
+     * 而一次加 50 首要是每首都整文件重写，等于把 JSON 读写了 50 遍。
+     *
+     * @return 实际新增的条数（已在歌单里的、超上限的都跳过）
+     */
+    fun addAll(c: Context, name: String, uris: List<String>): Int {
+        if (uris.isEmpty()) return 0
+        synchronized(lock) {
+            val map = load(c)
+            val cur = map[name] ?: return 0
+            val seen = cur.toHashSet()
+            val added = ArrayList<String>()
+            for (u in uris) {
+                if (u.isEmpty()) continue
+                if (cur.size + added.size >= MAX_SONGS) break
+                if (!seen.add(u)) continue
+                added.add(u)
+            }
+            if (added.isEmpty()) return 0
+            map[name] = cur + added
+            save(c, map)
+            return added.size
+        }
+    }
+
     /** 从歌单移除一首歌。 */
     fun remove(c: Context, name: String, uri: String) {
         synchronized(lock) {
