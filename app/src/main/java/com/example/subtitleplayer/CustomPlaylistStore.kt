@@ -160,6 +160,27 @@ object CustomPlaylistStore {
         }
     }
 
+    /**
+     * 从歌单批量移除（3.0.6，选歌界面里「取消勾选」用）。
+     *
+     * 与 [addAll] 对称：只落盘一次。
+     * @return 实际移除的条数
+     */
+    fun removeAll(c: Context, name: String, uris: List<String>): Int {
+        if (uris.isEmpty()) return 0
+        synchronized(lock) {
+            val map = load(c)
+            val cur = map[name] ?: return 0
+            val drop = uris.toHashSet()
+            val kept = cur.filterNot { it in drop }
+            val removed = cur.size - kept.size
+            if (removed == 0) return 0
+            map[name] = kept
+            save(c, map)
+            return removed
+        }
+    }
+
     /** 从歌单移除一首歌。 */
     fun remove(c: Context, name: String, uri: String) {
         synchronized(lock) {

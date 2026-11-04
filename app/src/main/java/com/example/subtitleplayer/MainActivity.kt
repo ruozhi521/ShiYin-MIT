@@ -1251,6 +1251,12 @@ class MainActivity : AppCompatActivity() {
 
         // ---- 列表页返回 ----
         findViewById<Button>(R.id.btnBackLib).setOnClickListener { showPage(Page.LIBRARY) }
+        // 3.0.6：歌单页「添加歌曲」入口（顶栏 + 空态里各一个）。
+        // 起因：空歌单里没有任何歌可长按，而加歌只能靠长按单曲 → 死路。
+        findViewById<Button>(R.id.btnPlaylistAdd)
+            .setOnClickListener { showPickSongsForPlaylist() }
+        findViewById<Button>(R.id.btnPlaylistEmptyAdd)
+            .setOnClickListener { showPickSongsForPlaylist() }
         findViewById<Button>(R.id.btnBackSearch).setOnClickListener { showPage(Page.LIBRARY) }
         // 2.15：收藏页返回 → 回歌单页（它是子页）。有「返回键级数」开关时走统一分支。
         findViewById<Button>(R.id.btnBackFav).setOnClickListener { leaveFavorites() }
@@ -2860,6 +2866,246 @@ class MainActivity : AppCompatActivity() {
         dragEnabled = true
         currentSongs = applyPlaylistOrder(playlist.songs, playlist.name)
         songAdapter.submit(currentSongs)
+        updatePlaylistEmpty()
+    }
+
+    /**
+     * 刷新歌单页的空态与「添加歌曲」按钮（3.0.6）。
+     *
+     * 三个可见性一起管，因为它们是一件事：
+     * - 空态块：`currentSongs` 为空时显示（此前只有一句一闪而过的 toast）
+     * - 顶栏「添加歌曲」：非空且是自建歌单时显示（文件夹歌单是扫描结果，只读）
+     * - 空态里的按钮：只要是自建歌单就显示（空的时候正是最需要它的时候）
+     */
+    private fun updatePlaylistEmpty() {
+        val box = findViewById<View>(R.id.playlistEmptyBox) ?: return
+        val empty = currentSongs.isEmpty()
+        box.visibility = if (empty) View.VISIBLE else View.GONE
+        findViewById<Button>(R.id.btnPlaylistAdd).visibility =
+            if (!empty && playlistIsCustom) View.VISIBLE else View.GONE
+        findViewById<Button>(R.id.btnPlaylistEmptyAdd).visibility =
+            if (playlistIsCustom) View.VISIBLE else View.GONE
+        findViewById<TextView>(R.id.txtPlaylistEmptyHint).text = getString(
+            if (playlistIsCustom) R.string.playlist_empty_hint else R.string.playlist_songs_empty
+        )
+    }
+
+    // ---------- 浏览式选歌器（3.0.6）----------
+    //
+    // 弱志的设计：「打开一个类似音乐库的界面，在里面可以对某个歌单长按进入多选状态，
+    // 能选好几个歌单；如果不长按，单击则是打开某个歌单，对歌单内歌曲进行选取。」
+    //
+    // 为什么不做成一个「全库多选框」：库里几千首，平铺出来根本没法挑，
+    // 而且丢掉了「按文件夹找歌」这个用户本来就熟悉的路径。
+
+    private var pickerDialog: AlertDialog? = null
+    private var pickerAdapter: SongPickerAdapter? = null
+    private var pickerTarget = ""
+    private val pickerStack = mutableListOf<TreeNode>()
+    /** 已勾选的歌曲 uri。 */
+    private val pickerChecked = mutableSetOf<String>()
+    /** 文件夹多选模式下已勾选的文件夹 path。 */
+    private val pickerFolderChecked = mutableSetOf<String>()
+    private var pickerFolderMode = false
+    private var pickerRoots: List<TreeNode> = emptyList()
+
+    /** 打开选歌器，把歌加进当前自建歌单。 */
+    private fun showPickSongsForPlaylist() {
+        val name = txtPlaylistTitle.text.toString()
+        if (!playlistIsCustom) {
+            toast(getString(R.string.playlist_readonly))
+            return
+        }
+        val lib = library
+        if (lib == null || lib.playlists.isEmpty()) {
+            toast(getString(R.string.playlist_pick_no_library))
+            return
+        }
+        pickerTarget = name
+        pickerStack.clear()
+        pickerFolderChecked.clear()
+        pickerFolderMode = false
+        // 用**真实扫描到的歌单**建树。不能用 playlistList()：它首项是虚拟的「全部歌曲」，
+        // 那项自己就含全库歌曲，混进来会出现「全部歌曲」+各个文件夹的重复入口。
+        pickerRoots = LibraryTree.build(lib.playlists, sortMode = LibraryTree.SORT_NAME)
+        // 已在该歌单里的预勾上 —— 取消勾选即从歌单移除
+        pickerChecked.clear()
+        pickerChecked.addAll(CustomPlaylistStore.uris(this, name))
+
+        val view = layoutInflater.inflate(R.layout.dialog_song_picker, null)
+        val ad = SongPickerAdapter(
+            onClick = { pos -> onPickerClick(pos) },
+            onLongClick = { pos -> onPickerLongClick(pos) }
+        )
+        ad.applyUiSize(prefs.getInt(KEY_UI_SIZE, 15))
+        val rv = view.findViewById<RecyclerView>(R.id.recyclerPicker)
+        rv.layoutManager = LinearLayoutManager(this)
+        rv.adapter = ad
+        pickerAdapter = ad
+
+        view.findViewById<Button>(R.id.btnPickerCancel).setOnClickListener {
+            pickerDialog?.dismiss()
+        }
+        view.findViewById<Button>(R.id.btnPickerDone).setOnClickListener { commitPicker() }
+        view.findViewById<Button>(R.id.btnPickerAll).setOnClickListener { selectAllInPicker() }
+        // 点路径 = 回上一级（这个界面是全屏的，没有系统返回键可用）
+        view.findViewById<TextView>(R.id.txtPickerPath).setOnClickListener {
+            if (pickerFolderMode) {
+                pickerFolderMode = false
+                pickerFolderChecked.clear()
+            } else if (pickerStack.isNotEmpty()) {
+                pickerStack.removeAt(pickerStack.size - 1)
+            }
+            refreshPicker()
+        }
+
+        pickerDialog = AccentDialogBuilder(this).setView(view).create()
+        pickerDialog?.setOnShowListener {
+            // setOnShowListener 只能挂一个：这里会覆盖 AccentDialogBuilder.create()
+            // 里那个负责给按钮上主题色的监听，所以下面要补调一次 tintDialogButtons。
+            pickerDialog?.window?.setLayout(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            pickerDialog?.let { tintDialogButtons(it) }
+        }
+        pickerDialog?.show()
+        refreshPicker()
+    }
+
+    /** 按当前路径与勾选状态重建选歌器列表。 */
+    private fun refreshPicker() {
+        val d = pickerDialog ?: return
+        val ad = pickerAdapter ?: return
+        val cur = pickerStack.lastOrNull()
+        val items = mutableListOf<PickerItem>()
+        if (cur == null) {
+            pickerRoots.forEach {
+                items.add(PickerItem.Folder(it, it.path in pickerFolderChecked))
+            }
+        } else {
+            // 本层歌曲在前（进文件夹就能直接挑），子文件夹在后
+            cur.playlist?.songs?.forEach {
+                items.add(PickerItem.Track(it, it.uri.toString() in pickerChecked))
+            }
+            cur.children.forEach {
+                items.add(PickerItem.Folder(it, it.path in pickerFolderChecked))
+            }
+        }
+        ad.setFolderSelectMode(pickerFolderMode)
+        ad.submit(items)
+
+        d.findViewById<TextView>(R.id.txtPickerTitle)?.text =
+            getString(R.string.picker_title, pickerTarget)
+        d.findViewById<TextView>(R.id.txtPickerPath)?.text = if (pickerFolderMode) {
+            getString(R.string.picker_folder_mode, pickerFolderChecked.size)
+        } else {
+            val p = if (pickerStack.isEmpty()) {
+                getString(R.string.root_dir)
+            } else {
+                "‹ " + pickerStack.joinToString(" > ") { it.name }
+            }
+            p + "  ·  " + getString(R.string.picker_selected, pickerChecked.size)
+        }
+        // 没有子项时给一句说明，避免一片空白
+        d.findViewById<TextView>(R.id.txtPickerPath)?.let {
+            it.contentDescription = if (items.isEmpty()) getString(R.string.picker_empty) else ""
+        }
+    }
+
+    private fun onPickerClick(pos: Int) {
+        val item = pickerAdapter?.itemAt(pos) ?: return
+        when (item) {
+            is PickerItem.Folder -> {
+                if (pickerFolderMode) {
+                    // 文件夹多选态：点 = 勾选/取消，不进入
+                    if (!pickerFolderChecked.remove(item.node.path)) {
+                        pickerFolderChecked.add(item.node.path)
+                    }
+                } else {
+                    pickerStack.add(item.node)
+                }
+            }
+            is PickerItem.Track -> {
+                val u = item.song.uri.toString()
+                if (!pickerChecked.remove(u)) pickerChecked.add(u)
+            }
+        }
+        refreshPicker()
+    }
+
+    private fun onPickerLongClick(pos: Int) {
+        val item = pickerAdapter?.itemAt(pos) ?: return
+        if (item is PickerItem.Folder) {
+            // 长按文件夹 = 进入「文件夹多选」，并顺手勾上这一个
+            pickerFolderMode = true
+            pickerFolderChecked.add(item.node.path)
+            refreshPicker()
+        }
+    }
+
+    /** 全选：文件夹多选态全选当前层文件夹；浏览态全选当前层（含子树）的歌曲。 */
+    private fun selectAllInPicker() {
+        val cur = pickerStack.lastOrNull()
+        if (pickerFolderMode) {
+            val folders = if (cur == null) pickerRoots else cur.children
+            val allOn = folders.isNotEmpty() && folders.all { it.path in pickerFolderChecked }
+            if (allOn) folders.forEach { pickerFolderChecked.remove(it.path) }
+            else folders.forEach { pickerFolderChecked.add(it.path) }
+        } else {
+            val songs = if (cur == null) {
+                pickerRoots.flatMap { collectSongs(it) }
+            } else {
+                collectSongs(cur)
+            }
+            val uris = songs.map { it.uri.toString() }
+            if (uris.isNotEmpty() && uris.all { it in pickerChecked }) {
+                pickerChecked.removeAll(uris.toSet())
+            } else {
+                pickerChecked.addAll(uris)
+            }
+        }
+        refreshPicker()
+    }
+
+    /** 收集某个节点及其所有子孙的歌曲。 */
+    private fun collectSongs(node: TreeNode): List<Song> {
+        val out = mutableListOf<Song>()
+        fun walk(n: TreeNode) {
+            n.playlist?.songs?.let { out.addAll(it) }
+            n.children.forEach { walk(it) }
+        }
+        walk(node)
+        return out
+    }
+
+    private fun findNode(roots: List<TreeNode>, path: String): TreeNode? {
+        for (n in roots) {
+            if (n.path == path) return n
+            findNode(n.children, path)?.let { return it }
+        }
+        return null
+    }
+
+    /** 确定：把勾选结果同步进歌单（增量增删，各落盘一次）。 */
+    private fun commitPicker() {
+        val name = pickerTarget
+        // 文件夹多选态：勾中的文件夹（含子文件夹）里的歌全部并入
+        if (pickerFolderMode) {
+            for (p in pickerFolderChecked.toList()) {
+                findNode(pickerRoots, p)?.let { n ->
+                    collectSongs(n).forEach { pickerChecked.add(it.uri.toString()) }
+                }
+            }
+        }
+        val cur = CustomPlaylistStore.uris(this, name).toHashSet()
+        val toAdd = pickerChecked.filter { it !in cur }
+        val toRemove = cur.filter { it !in pickerChecked }
+        if (toAdd.isNotEmpty()) CustomPlaylistStore.addAll(this, name, toAdd)
+        if (toRemove.isNotEmpty()) CustomPlaylistStore.removeAll(this, name, toRemove)
+        pickerDialog?.dismiss()
+        openCustomPlaylist(name)
+        toast(getString(R.string.picker_added, name, CustomPlaylistStore.uris(this, name).size))
     }
 
     /**
@@ -3293,24 +3539,38 @@ class MainActivity : AppCompatActivity() {
      * @param skipFirst 首项是否为「虚拟固定项」——歌单网格首项恒为「全部歌曲」，
      *        它不是歌单，不该参与分桶，但它的存在会让真实歌单的下标整体 +1。
      */
-    private fun refreshAlphaIndex(names: List<String>, skipFirst: Boolean) {
+    private fun refreshAlphaIndex(
+        names: List<String>,
+        skipFirst: Boolean,
+        forceRecycler: RecyclerView? = null
+    ) {
         val bar = findViewById<AlphaIndexBar>(R.id.alphaIndexBar)
         val bubble = findViewById<TextView>(R.id.alphaBubble)
-        val rv = if (segArtistsShown()) recyclerArtists else recyclerPlaylists
+        // 树形模式下强制用 recyclerPlaylists（此时歌手列表不可见，不能按 seg 判断）
+        val rv = forceRecycler
+            ?: if (segArtistsShown()) recyclerArtists else recyclerPlaylists
         bubble.visibility = View.GONE
-        // 3.0.4：开关默认关（弱志：默认加上观感不好）；树形目录是层级结构，导航无意义
-        if (!prefs.getBoolean(KEY_ALPHA_INDEX, false) || isTreeMode()) {
+        // 3.0.4：开关默认关（弱志：默认加上观感不好）。
+        // 3.0.6：树形目录不再整体禁用 —— 弱志 2026-11-04：「树形歌单按名称排序也可以加上字母导航」。
+        // 树形是层级浏览，但**当前这一层**若按名称排，字母表对它是有效的（跳到该字母的节点）。
+        // 由 refreshTree() 传当前层节点名驱动；是否显示仍由下面的「按名称排序」门控决定。
+        if (!prefs.getBoolean(KEY_ALPHA_INDEX, false)) {
             bar.visibility = View.GONE
             applyAlphaPadding(rv, false)
             return
         }
-        // 3.0.5：歌单网格只在「默认顺序」下显示字母导航（弱志实测：随机排序时它还在，
-        // 而随机顺序里字母位置毫无规律，点 Z 跳过去看到的是别的名字 → 自相矛盾）。
-        // 与拖拽排序同一套判断：其它排序是算出来的，字母表与之对不上，直接隐藏。
+        // 3.0.6：歌单网格 / 树形目录**只在「按名称排序」下**显示字母导航。
+        //
+        // 弱志 2026-11-04：「明明有按名称排序，没必要给默认排序加字母导航，应该给按名称排序加才对」。
+        // 这是对的 —— 四种排序里只有「按名称」是真的字母序：
+        //   默认顺序 = 用户拖过的顺序（拖过就不是名字序了）
+        //   按最近播放 = 按时间
+        //   随机 = 随机
+        // 后三者挂字母条都是「点 Z 跳过去看到别的名字」，自相矛盾（3.0.5 已在随机下隐藏，现补齐）。
         // 歌手列表按名字排，始终有效，不做限制。
         if (!segArtistsShown()) {
             val sortMode = prefs.getString(KEY_PLAYLIST_SORT, SORT_DEFAULT) ?: SORT_DEFAULT
-            if (sortMode != SORT_DEFAULT) {
+            if (sortMode != SORT_NAME) {
                 bar.visibility = View.GONE
                 applyAlphaPadding(rv, false)
                 return
@@ -4983,8 +5243,8 @@ class MainActivity : AppCompatActivity() {
      */
     private fun openCustomPlaylist(name: String) {
         val songs = resolveUris(CustomPlaylistStore.uris(this, name))
-        // 空歌单进去是一片白，用户不知道下一步做什么 —— 给一句指引
-        if (songs.isEmpty()) toast(getString(R.string.playlist_songs_empty))
+        // 3.0.6：不再弹 toast —— 空态块（playlistEmptyBox）会常驻显示「为什么空 + 怎么加歌」，
+        // 且自带「添加歌曲」按钮；再闪一下 toast 是重复信息。
         bindPlaylist(Playlist(name, songs), isCustom = true)
         if (page != Page.PLAYLIST) playlistSourcePage = page
         showPage(Page.PLAYLIST)
@@ -6848,9 +7108,11 @@ class MainActivity : AppCompatActivity() {
         // 进入某文件夹时，如果它自己也有歌（即同时有音声和子文件夹），
         // 把「本文件夹的歌曲」作为第一行再列子文件夹 —— 以前单击进来只列子文件夹、
         // 这层的音声看不到，只能长按目录才能打开（用户反馈：点进去只见子文件夹）。
+        // 3.0.6：只有「默认顺序」才应用用户拖过的顺序 —— 其它排序（名称/最近/随机）
+        // 是算出来的，混进拖拽记录就变成两套规则打架
+        val byUserOrder = treeSortMode() == LibraryTree.SORT_DEFAULT
         val nodes: List<TreeNode> = if (treeStack.isEmpty()) {
-            // 3.0.6：应用用户拖动过的顺序（没拖过 → 原样返回，仍按名称排）
-            TreeOrderStore.apply(this, "", treeRoots)
+            if (byUserOrder) TreeOrderStore.apply(this, "", treeRoots) else treeRoots
         } else {
             val cur = treeStack.last()
             val own = cur.playlist?.let { pl ->
@@ -6861,8 +7123,12 @@ class MainActivity : AppCompatActivity() {
                     playlist = pl
                 )
             }
-            // 3.0.6：子文件夹也按用户顺序排；「本文件夹的歌曲」是虚拟行，恒在最前
-            val kids = TreeOrderStore.apply(this, cur.path, cur.children)
+            // 「本文件夹的歌曲」是虚拟行，恒在最前
+            val kids = if (byUserOrder) {
+                TreeOrderStore.apply(this, cur.path, cur.children)
+            } else {
+                cur.children
+            }
             if (own != null) listOf(own) + kids else kids
         }
         // 3.0.6：树形模式下的把手显隐与可拖项
@@ -6874,6 +7140,14 @@ class MainActivity : AppCompatActivity() {
             n != null && (treeStack.isEmpty() || n.path != ownPath)
         }
         treeAdapter.submit(nodes)
+        // 3.0.6：树形当前层也能用字母导航（弱志：按名称排序时树形也该有）。
+        // 虚拟行「本文件夹的歌曲」不是真实节点，跳过它（skipFirst），否则会被当成 B 桶。
+        val ownRowExists = treeStack.isNotEmpty() && treeStack.last().playlist != null
+        refreshAlphaIndex(
+            nodes.map { it.name },
+            skipFirst = ownRowExists,
+            forceRecycler = recyclerPlaylists
+        )
         // 3.0.1：回到这一层时还原滚动位置（submit 后 RecyclerView 必然回到顶部）。
         // 没有记录 = 第一次进入这一层 → 从头看。
         val memo = treeScrollMemo[treeStack.size]
@@ -6897,13 +7171,28 @@ class MainActivity : AppCompatActivity() {
     private var treeDragAttached = false
 
     /**
+     * 树形视图当前的排序方式（3.0.6）。
+     *
+     * 复用音乐库页那个排序下拉的同一个 prefs 键 —— 用户在网格里选了「随机」，
+     * 切到树形也该是随机；两个视图各记一套会让下拉看起来"没生效"。
+     *
+     * 默认取 [LibraryTree.SORT_DEFAULT]（与网格完全一致）：
+     * 不能默认成「按名称」，否则没设置过的用户 [treeDragEnabled] 恒为 false，
+     * 树形把手会全部消失 —— 而「默认顺序」下没拖过的层本来就按名称兜底。
+     */
+    private fun treeSortMode(): String =
+        prefs.getString(KEY_PLAYLIST_SORT, LibraryTree.SORT_DEFAULT) ?: LibraryTree.SORT_DEFAULT
+
+    /**
      * 树形目录能否拖动（3.0.6）。
      *
      * 与网格共用同一个用户开关（[KEY_PLAYLIST_DRAG]）——「歌单能不能拖」对用户是一个整体印象。
-     * 但**不看** [KEY_PLAYLIST_SORT]：树形一直是按名称排的固定心智模型（见 [LibraryTree]），
-     * 不存在「随机 / 按最近」那套。
+     * 另外**只在「默认顺序」下开放**（3.0.6 起树形也能排序了，理由与网格完全一致：
+     * 按名称/最近/随机是算出来的顺序，拖完下次刷新就被重排覆盖，用户会以为"拖了没用"）。
      */
-    private fun treeDragEnabled(): Boolean = prefs.getBoolean(KEY_PLAYLIST_DRAG, true)
+    private fun treeDragEnabled(): Boolean =
+        prefs.getBoolean(KEY_PLAYLIST_DRAG, true) &&
+            treeSortMode() == LibraryTree.SORT_DEFAULT
 
     /** 当前树层的父路径（根层为空串）——保存顺序时的分组键。 */
     private fun currentTreeParentPath(): String = treeStack.lastOrNull()?.path ?: ""
@@ -7140,7 +7429,13 @@ class MainActivity : AppCompatActivity() {
             if (recyclerPlaylists.adapter !== treeAdapter) {
                 recyclerPlaylists.adapter = treeAdapter
             }
-            treeRoots = LibraryTree.build(list)
+            // 3.0.6：树形视图跟随音乐库页的排序下拉（此前写死按名称，选什么都像是没生效）
+            treeRoots = LibraryTree.build(
+                list,
+                sortMode = treeSortMode(),
+                recent = RecentPlaylist.load(this),
+                seed = randomSeed
+            )
             treeStack.clear()
             treeScrollMemo.clear() // 3.0.1：层级已重置，位置记忆跟着清（免得下次进树回到旧位置）
             // 3.0.6：树形也支持拖拽（粉丝诉求）。与网格版同一套手势约定。

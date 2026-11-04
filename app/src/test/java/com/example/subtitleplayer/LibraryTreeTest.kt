@@ -95,4 +95,85 @@ class LibraryTreeTest {
         assertEquals(2, dirA.totalSongs)    // 自身 1 + 子 1
         assertEquals(true, dirA.playlist != null) // 自身有歌
     }
+
+    // ---------- 3.0.6：树形跟随排序下拉 ----------
+    //
+    // 弱志反馈「树形歌单的默认排序、最近播放、名称排序是失效的」——
+    // 根因是 build() 结尾**无条件**按名称重排（2.13 的旧设计），
+    // 无论下拉选什么都被覆盖。以下用例钉住四种模式的差异。
+
+    private fun fourRoots() = listOf(
+        playlist("C", listOf("c.mp3")),
+        playlist("A", listOf("a.mp3")),
+        playlist("D", listOf("d.mp3")),
+        playlist("B", listOf("b.mp3"))
+    )
+
+    @Test
+    fun `默认顺序下同级仍按名称排`() {
+        val roots = LibraryTree.build(fourRoots(), sortMode = LibraryTree.SORT_DEFAULT)
+        assertEquals(listOf("A", "B", "C", "D"), roots.map { it.name })
+    }
+
+    @Test
+    fun `按名称排序与默认顺序一致`() {
+        val roots = LibraryTree.build(fourRoots(), sortMode = LibraryTree.SORT_NAME)
+        assertEquals(listOf("A", "B", "C", "D"), roots.map { it.name })
+    }
+
+    @Test
+    fun `按最近播放时最近听过的排最前`() {
+        val recent = mapOf("C" to 300L, "A" to 100L)
+        val roots = LibraryTree.build(
+            fourRoots(),
+            sortMode = LibraryTree.SORT_RECENT,
+            recent = recent
+        )
+        // C(300) > A(100) > 无记录的 B、D（时间戳 0，稳定保序 → B 在 D 前）
+        assertEquals(listOf("C", "A", "B", "D"), roots.map { it.name })
+    }
+
+    @Test
+    fun `按最近播放时目录取子树里最新的那条`() {
+        // A 自己没听过，但 A/B 里的歌听过 → A 不该被压到无记录组里
+        val roots = LibraryTree.build(
+            listOf(
+                playlist("A/B", listOf("b.mp3")),
+                playlist("Z", listOf("z.mp3"))
+            ),
+            sortMode = LibraryTree.SORT_RECENT,
+            recent = mapOf("A/B" to 500L)
+        )
+        assertEquals(listOf("A", "Z"), roots.map { it.name })
+        assertEquals(500L, roots[0].bestRecent(mapOf("A/B" to 500L)))
+    }
+
+    @Test
+    fun `随机排序同一 seed 结果稳定`() {
+        val a = LibraryTree.build(fourRoots(), sortMode = LibraryTree.SORT_RANDOM, seed = 42L)
+        val b = LibraryTree.build(fourRoots(), sortMode = LibraryTree.SORT_RANDOM, seed = 42L)
+        assertEquals(a.map { it.path }, b.map { it.path })
+        // 且确实不是名称顺序（否则等于没生效）；128 次里至少有一次不同才是真随机
+        val nameOrder = listOf("A", "B", "C", "D")
+        val differs = (1L..128L).any { s ->
+            LibraryTree.build(fourRoots(), sortMode = LibraryTree.SORT_RANDOM, seed = s)
+                .map { it.name } != nameOrder
+        }
+        assertEquals(true, differs)
+    }
+
+    @Test
+    fun `排序只作用于同级不影响层级结构`() {
+        val roots = LibraryTree.build(
+            listOf(
+                playlist("X/c", listOf("1.mp3")),
+                playlist("X/a", listOf("2.mp3")),
+                playlist("Y", listOf("3.mp3"))
+            ),
+            sortMode = LibraryTree.SORT_NAME
+        )
+        // 顶层是纯目录 X 在前；X 的子节点按名称排
+        assertEquals(listOf("X", "Y"), roots.map { it.name })
+        assertEquals(listOf("a", "c"), roots[0].children.map { it.name })
+    }
 }
