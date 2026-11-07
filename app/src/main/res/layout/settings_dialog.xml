@@ -578,6 +578,68 @@
                 style="@style/SettingsHint"
                 android:text="@string/cover_fit_hint" />
 
+            <!-- 3.0.6：歌曲排序（B 站粉丝要求：正序倒序 / 修改时间 / 收录时间） -->
+            <View style="@style/SettingsDivider" />
+
+            <TextView
+                style="@style/SettingsLabel"
+                android:text="@string/song_sort" />
+
+            <RadioGroup
+                android:id="@+id/rgSongSort"
+                style="@style/SettingsSegment">
+
+                <RadioButton
+                    android:id="@+id/rbSongSortNone"
+                    style="@style/SettingsSegItem"
+                    android:tag="0"
+                    android:text="@string/song_sort_none" />
+
+                <RadioButton
+                    android:id="@+id/rbSongSortName"
+                    style="@style/SettingsSegItem"
+                    android:tag="1"
+                    android:text="@string/song_sort_name" />
+            </RadioGroup>
+
+            <RadioGroup
+                android:id="@+id/rgSongSort2"
+                style="@style/SettingsSegment">
+
+                <RadioButton
+                    android:id="@+id/rbSongSortModified"
+                    style="@style/SettingsSegItem"
+                    android:tag="2"
+                    android:text="@string/song_sort_modified" />
+
+                <RadioButton
+                    android:id="@+id/rbSongSortAdded"
+                    style="@style/SettingsSegItem"
+                    android:tag="3"
+                    android:text="@string/song_sort_added" />
+            </RadioGroup>
+
+            <TextView
+                style="@style/SettingsHint"
+                android:text="@string/song_sort_hint" />
+
+            <CheckBox
+                android:id="@+id/chkSongSortDesc"
+                style="@style/SettingsSwitch"
+                android:text="@string/song_sort_desc" />
+
+            <!-- 3.0.6：封面上的歌曲数徽标可关（B 站粉丝：「封面那里显示几首音乐的开关，可以不用显示」） -->
+            <View style="@style/SettingsDivider" />
+
+            <CheckBox
+                android:id="@+id/chkCoverCount"
+                style="@style/SettingsSwitch"
+                android:text="@string/cover_count_badge" />
+
+            <TextView
+                style="@style/SettingsHint"
+                android:text="@string/cover_count_badge_hint" />
+
             <LinearLayout style="@style/SettingsBtnRow">
 
                 <Button

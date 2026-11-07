@@ -94,4 +94,46 @@ class PlaylistSorterTest {
         assertEquals(listOf("A"), names(PlaylistSorter.shuffledStable(pl("A"), 7L)))
         assertEquals(emptyList<String>(), names(PlaylistSorter.shuffledStable(emptyList(), 7L)))
     }
+
+    // ---------- 3.0.6：按文件修改时间（弱志：「歌单也应该支持上」）----------
+
+    private fun song(name: String, modified: Long) = Song(
+        title = name,
+        uri = android.net.Uri.parse("content://p/doc/" + name),
+        folder = "F",
+        fileStem = name,
+        lastModified = modified
+    )
+
+    private fun playlistWith(name: String, vararg modifieds: Long) =
+        Playlist(name, modifieds.mapIndexed { i, m -> song("$name-$i", m) })
+
+    @Test
+    fun `按修改时间 取歌单内最新那首 新的在前`() {
+        // A 里最新 100，B 里最新 900，C 里最新 500 → B, C, A
+        val input = listOf(
+            playlistWith("A", 100L, 50L),
+            playlistWith("B", 900L, 10L),
+            playlistWith("C", 500L)
+        )
+        assertEquals(listOf("B", "C", "A"), names(PlaylistSorter.byModified(input)))
+    }
+
+    @Test
+    fun `按修改时间 取不到时间的歌单排最后`() {
+        val input = listOf(
+            playlistWith("未知"),
+            playlistWith("旧", 100L),
+            playlistWith("新", 900L)
+        )
+        // 空歌单 maxOfOrNull == null → 0，应垫底
+        assertEquals(listOf("新", "旧", "未知"), names(PlaylistSorter.byModified(input)))
+    }
+
+    @Test
+    fun `按修改时间 全都没有时间时保持输入顺序`() {
+        // 稳定排序：全部为 0 时不打乱原顺序（否则每次刷新顺序都可能变）
+        val input = listOf(playlistWith("C"), playlistWith("A"), playlistWith("B"))
+        assertEquals(listOf("C", "A", "B"), names(PlaylistSorter.byModified(input)))
+    }
 }

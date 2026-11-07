@@ -1,5 +1,6 @@
 package com.example.subtitleplayer
 
+import android.net.Uri
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -40,6 +41,20 @@ class FolderTreeAdapter(
         if (coverFullImage == fullImage) return
         coverFullImage = fullImage
         notifyDataSetChanged()
+    }
+
+    /**
+     * 这个节点该显示哪张文件夹图（3.0.6）。
+     *
+     * 先看本文件夹挑出的封面；自己没有就看子树 —— 常见情况是**根目录里放了一张图**，
+     * 各个子文件夹里没有，这时子文件夹行也该显示那张。
+     */
+    private fun coverUriFor(node: TreeNode): Uri? {
+        CoverLoader.folderCoverOf(node.path)?.let { return it }
+        for (c in node.children) {
+            coverUriFor(c)?.let { return it }
+        }
+        return null
     }
 
 
@@ -106,9 +121,14 @@ class FolderTreeAdapter(
 
         val isDir = node.isDir
         if (isDir) {
-            // 目录：文件夹图标 + "›" 进入箭头
+            // 目录：封面（若有）+ "›" 进入箭头
             // 3.0.2.1：与发现页 / 歌单网格一致 —— 无封面时铺低饱和渐变（按路径稳定选色，
             // 滚动 / Holder 复用都不跳色），不再是白底 + 文件夹图标（弱志反馈树形目录没有随机色）
+            //
+            // 3.0.6：**这里以前从不加载封面**，永远只画一个文件夹图标 ——
+            // 粉丝「文件夹里有图也显示不出来」的根因就在这（不是扫描没识别到，
+            // 而是树形的目录行压根没去取）。现在先铺渐变+图标当占位，
+            // 取到文件夹封面就覆盖上去。
             holder.cover.setBackground(
                 PlaylistGradient.drawable(holder.itemView.context, node.path, 20f)
             )
@@ -116,6 +136,13 @@ class FolderTreeAdapter(
             holder.arrow.visibility = View.VISIBLE
             holder.arrow.text = "›"
             holder.count.visibility = View.INVISIBLE
+            coverUriFor(node)?.let { imgUri ->
+                CoverLoader.loadFolderCover(holder.itemView.context, imgUri, 120) { bmp ->
+                    if (bmp != null && holder.bindingAdapterPosition == position) {
+                        holder.cover.setImageBitmap(bmp)
+                    }
+                }
+            }
         } else {
             // 歌单：封面（自定义/首曲）+ 歌曲数
             holder.arrow.visibility = View.INVISIBLE

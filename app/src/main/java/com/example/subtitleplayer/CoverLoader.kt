@@ -20,6 +20,65 @@ object CoverLoader {
     private val pool = Executors.newFixedThreadPool(2)
 
     /**
+     * 文件夹封面表（3.0.6）：歌单名（相对路径）→ 该文件夹里挑出的图片 uri。
+     *
+     * 由 [MainActivity] 在曲库变化时通过 [setFolderCovers] 下发。
+     * 做成「可下发的表」而不是给 [load] 加参数：`load` 有 7 处调用点
+     * （歌曲列表、网格、树形、搜索、选歌器、播放页、通知栏），
+     * 逐个加参数既容易漏、也会让每处都要先查一遍曲库。
+     */
+    @Volatile
+    private var folderCovers: Map<String, Uri> = emptyMap()
+
+    /** 每次下发封面表后最多记录 24 个不同事件，避免列表滚动刷满运行日志。 */
+    private val coverLogKeys = mutableSetOf<String>()
+
+    private fun logCoverOnce(key: String, message: String) {
+        synchronized(coverLogKeys) {
+            if (coverLogKeys.size < 24 && coverLogKeys.add(key)) {
+                PlaybackLog.log("cover: $message")
+            }
+        }
+    }
+
+    /** 下发文件夹封面表（3.0.6）。曲库变化/扫描完成后调用。 */
+    fun setFolderCovers(map: Map<String, Uri>) {
+        folderCovers = map
+        synchronized(coverLogKeys) { coverLogKeys.clear() }
+        PlaybackLog.log("cover: setFolderCovers size=${map.size} sample=${map.keys.take(6)}")
+    }
+
+    /** 查某个文件夹挑出的封面图（没有则 null）。树形目录行直接用它（3.0.6）。 */
+    fun folderCoverOf(folder: String): Uri? = folderCovers[folder].also {
+        logCoverOnce("tree:$folder", "tree folder=$folder found=${it != null}")
+    }
+
+    /**
+     * 加载文件夹封面（3.0.6）。
+     *
+     * 树形目录的**目录行**以前硬写一个文件夹图标，压根不加载封面 ——
+     * 粉丝反馈「文件夹里有图也显示不出来」，根因就在这里（不是扫描没识别）。
+     */
+    fun loadFolderCover(
+        context: Context,
+        uri: Uri,
+        targetSize: Int,
+        callback: (Bitmap?) -> Unit
+    ) {
+        val cacheKey = "foldercov:" + uri.toString() + "#" + targetSize
+        cacheGet(cacheKey)?.let {
+            callback(it)
+            return
+        }
+        val appContext = context.applicationContext
+        pool.execute {
+            val bmp = decodeContentScaled(appContext, uri, targetSize)
+            if (bmp != null) cachePutCounted(cacheKey, bmp)
+            mainHandler.post { callback(bmp) }
+        }
+    }
+
+    /**
      * 封面缓存：按「解码后字节数」限量的 LRU（2.12.1）。
      * 此前是无上限 HashMap——封面背景要铺满整屏，必须加载高清封面（否则发糊），
      * 大图累积几十张就会 OOM，所以给缓存一个硬上限。
@@ -134,6 +193,14 @@ object CoverLoader {
                 }
                     // 专辑封面（文件夹 cover.jpg）兜底
                     ?: albumArtFallback(appContext, uri, targetSize)
+                        // 3.0.6：文件夹里的图片当封面（不限制文件名/格式）
+                        ?: folder?.let { f ->
+                            val imageUri = folderCovers[f]
+                            logCoverOnce("song:$f", "song folder=$f found=${imageUri != null}")
+                            imageUri?.let { imgUri ->
+                                decodeContentScaled(appContext, imgUri, targetSize)
+                            }
+                        }
                         // 歌单自定义封面兜底：文件夹设置了封面，里面歌曲同样显示
                         ?: folder?.let { f ->
                             CoverManager.playlistCover(appContext, f)
@@ -263,6 +330,45 @@ object CoverLoader {
     /** 清除缓存（设置/清除封面后调用；按前缀清除该 uri 的所有尺寸变体）。 */
     fun invalidate(cacheKey: String) {
         synchronized(cache) { cache.removeByPrefix(cacheKey) }
+    }
+
+    /**
+     * 按内容 uri 解码图片（3.0.6）：文件夹封面来自 SAF 的 document uri，
+     * 不是文件路径，`BitmapFactory.decodeFile` 读不了，必须走 ContentResolver。
+     */
+    private fun decodeContentScaled(context: Context, uri: Uri, target: Int): Bitmap? {
+        return try {
+            // 先只读头拿尺寸，再按需降采样解码 —— 直接全解码一张手机照片可能几千万像素
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            val probe = context.contentResolver.openInputStream(uri)
+            if (probe == null) {
+                logCoverOnce("decode:$uri", "decode uri=$uri result=no_stream")
+                return null
+            }
+            probe.use {
+                // inJustDecodeBounds=true 时返回 null 是正常行为；成功与否应看 outWidth/outHeight。
+                BitmapFactory.decodeStream(it, null, bounds)
+            }
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+                logCoverOnce("decode:$uri", "decode uri=$uri result=invalid_bounds")
+                return null
+            }
+            var sample = 1
+            while (bounds.outWidth / (sample * 2) >= target &&
+                bounds.outHeight / (sample * 2) >= target
+            ) {
+                sample *= 2
+            }
+            val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+            val bitmap = context.contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, opts)
+            }
+            logCoverOnce("decode:$uri", "decode uri=$uri bounds=${bounds.outWidth}x${bounds.outHeight} result=${if (bitmap != null) "ok" else "empty_bitmap"}")
+            bitmap
+        } catch (e: Exception) {
+            logCoverOnce("decode:$uri", "decode uri=$uri error=${e.javaClass.simpleName}")
+            null
+        }
     }
 
     private fun decodeScaled(data: ByteArray, target: Int): Bitmap? {

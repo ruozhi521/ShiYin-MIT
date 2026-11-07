@@ -38,6 +38,8 @@ object LibraryCache {
                         .put("artist", s.artist)
                         .put("fileStem", s.fileStem)
                         .put("size", s.size)
+                        // 3.0.6：修改时间要随缓存持久化，否则重启后「按修改时间排序」全变 0 失效
+                        .put("lastModified", s.lastModified)
                 )
             }
             val lyrics = JSONArray()
@@ -52,6 +54,12 @@ object LibraryCache {
             val root = JSONObject()
                 .put("songs", songs)
                 .put("lyrics", lyrics)
+            // 3.0.6：文件夹封面也要缓存（否则重启后文件夹封面丢，只剩内嵌封面）
+            if (lib.folderCovers.isNotEmpty()) {
+                val covers = JSONObject()
+                for ((k, v) in lib.folderCovers) covers.put(k, v.toString())
+                root.put("folderCovers", covers)
+            }
             File(context.filesDir, FILE_NAME).writeText(root.toString())
         } catch (e: Exception) {
             // 缓存失败不影响主流程
@@ -78,7 +86,9 @@ object LibraryCache {
                         o.optString("artist", ""),
                         o.optString("fileStem", ""),
                         // 旧缓存无 size 字段 → 0：单曲封面 key 退回纯文件名（与旧版兼容）
-                        o.optLong("size", 0L)
+                        o.optLong("size", 0L),
+                        // 旧缓存无 lastModified → 0：按修改时间排序时排最后，不乱序
+                        o.optLong("lastModified", 0L)
                     )
                 )
             }
@@ -106,10 +116,22 @@ object LibraryCache {
                 Playlist(name, list.sortedBy { it.title })
             }.sortedBy { it.name }
 
+            // 3.0.6：文件夹封面（可选字段，旧缓存没有 → 空表）
+            val covers = mutableMapOf<String, android.net.Uri>()
+            root.optJSONObject("folderCovers")?.let { o ->
+                val keys = o.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    val v = o.optString(k, "")
+                    if (v.isNotBlank()) covers[k] = Uri.parse(v)
+                }
+            }
+
             MusicLibrary(
                 playlists = playlists,
                 allSongs = songs.sortedBy { it.title },
-                lyrics = lyrics
+                lyrics = lyrics,
+                folderCovers = covers
             )
         } catch (e: Exception) {
             null

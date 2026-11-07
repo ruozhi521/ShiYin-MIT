@@ -340,12 +340,13 @@
     <string name="title_from_filename_hint">忽略标签标题，重新扫描后生效</string>
     <string name="tab_video">视频</string>
     <string name="videos_empty">这个导航页还没有视频文件\n把含视频的文件夹添加进音乐库即可</string>
-    <string name="about_version">版本 3.0.5</string>
+    <string name="about_version">版本 3.0.6</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>
     <string name="no_folder">请先选择一个音乐文件夹（会自动识别里面的音频和歌词）</string>
     <string name="scanning">正在扫描，请稍候…</string>
+    <string name="scan_wait_current">正在扫描中，稍候会自动再扫一次</string>
     <string name="no_audio">这个文件夹里没找到音频文件，换个文件夹试试</string>
     <string name="all_songs">全部歌曲</string>
     <string name="root_folder">根目录</string>
@@ -382,6 +383,8 @@
     <string name="sort_name">按名称</string>
     <string name="sort_recent">按最近播放</string>
     <string name="sort_random">随机顺序</string>
+    <!-- 3.0.6：弱志「只有歌曲支持修改时间排序，歌单也应该支持上」 -->
+    <string name="sort_modified">按修改时间</string>
     <string name="sort_recent_empty">还没有播放记录，先听几首吧</string>
     <string name="lyrics_full">歌词</string>
     <string name="lyric_btn">词</string>
@@ -484,6 +487,20 @@
     <string name="cover_fit_crop">裁满</string>
     <string name="cover_fit_full">完整</string>
     <string name="cover_fit_hint">「裁满」铺满方框、边缘会被裁掉；「完整」整张图缩放显示、不裁切（空出的地方是渐变底色）。封面不是正方形时差别最明显。</string>
+    <!-- 3.0.6：歌曲排序（B 站粉丝：「添加更多排序，正序倒序，添加到媒体库时间，修改时间等」） -->
+    <string name="song_sort">歌曲排序</string>
+    <string name="song_sort_none">不排序</string>
+    <string name="song_sort_name">标题</string>
+    <string name="song_sort_modified">修改时间</string>
+    <string name="song_sort_added">收录时间</string>
+    <string name="song_sort_hint">作用于歌单内的歌曲列表。「修改时间」按文件最后修改时间排（刚下载的通常最前）；「收录时间」按首次扫描到这首歌的时间排 —— 复制进来的老歌也能按「什么时候进的库」排。两者都是新→旧。时间读不到的排最后。</string>
+    <string name="song_sort_desc">倒序（新 → 旧 / Z → A）</string>
+    <string name="song_sort_short">排序</string>
+    <string name="song_sort_desc_on">倒序：开（新 → 旧）</string>
+    <string name="song_sort_desc_off">倒序：关（旧 → 新）</string>
+    <string name="sort_applied">已改为「%1$s」</string>
+    <string name="cover_count_badge">封面上显示歌曲数</string>
+    <string name="cover_count_badge_hint">关掉后歌单卡片封面右下角的「N 首」徽标不再显示，封面更干净。</string>
     <string name="settings_group_library_title">媒体库</string>
     <string name="settings_group_library_desc">扫描文件夹、歌名来源、列表布局、封面显示</string>
     <string name="settings_group_lyrics_title">歌词显示</string>

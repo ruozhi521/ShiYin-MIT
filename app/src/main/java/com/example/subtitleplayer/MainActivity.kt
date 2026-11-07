@@ -344,6 +344,19 @@ class MainActivity : AppCompatActivity() {
     private var scanning = false
 
     /**
+     * 扫描进行中时，用户又点了「重新扫描」（3.0.6）。
+     *
+     * 弱志反馈：「刚重启时点击设置中的重新扫描，无反应，需等待一会儿后点击才生效」。
+     * 根因：App 启动时 `loadCachedLibrary()` 之后会立刻起一次**静默重扫**
+     * （用于发现新加的文件），那时 `scanning = true`；
+     * 用户此时点「重新扫描」会被方法开头的 `if (scanning) return` **静默吞掉** ——
+     * 既没有提示、也没有排队，看起来就是"按钮坏了"。
+     *
+     * 现在：手动触发被挡下时记一个标记，等当前扫描收尾后自动补跑一次。
+     */
+    private var pendingManualRescan = false
+
+    /**
      * ASR 逐窗实时翻译：已提交到第几行（2.13 增量翻译游标）。
      * 只翻译行号 ≥ 此值的「新增行」，杜绝累计全文反复重发。
      */
@@ -364,6 +377,15 @@ class MainActivity : AppCompatActivity() {
     private var randomSeed = System.currentTimeMillis()
 
     private var currentSongs: List<Song> = emptyList()
+
+    /**
+     * 设置面板里当前选中的排序下标（3.0.6）。
+     *
+     * 排序在 UI 上横跨**两个** RadioGroup（4 个选项放一行太挤），
+     * 只有单选组内部互斥、跨组不互斥，所以用一个字段记住「真正选的是第几个」，
+     * 保存时读它，而不是分别读两个组的 checkedRadioButtonId。
+     */
+    private var currentSongSort = 0
     private var lyricLines: List<SubtitleLine> = emptyList()
     private var durationMs = 0
     private var currentLyricHighlight = -1
@@ -433,7 +455,7 @@ class MainActivity : AppCompatActivity() {
             // 切歌后倍速按钮回到 1x（Service 已重置播放速度）
             btnSpeed.text = "1x"
             val cachedTrans = song?.let { translationCache[it.uri.toString()] } ?: emptyMap()
-            lyricAdapter.setTranslations(cachedTrans)
+            applyTranslations(cachedTrans)
             maybeAutoTranslate(song, lines)
             imgCd.setImageResource(R.drawable.ic_music_tinted)
             currentCoverKey = song?.uri?.toString()
@@ -993,8 +1015,11 @@ class MainActivity : AppCompatActivity() {
         imgCd = findViewById(R.id.imgCd)
         imgCd.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             // 使用封面容器实际尺寸（全部为 px），避免 dp/px 混算和小屏溢出。
+            // 3.0.6：去掉原来的 dp(320f) 硬上限 —— 粉丝反馈「移除导航栏后能把封面显示面积
+            // 顺便扩大就更好了」，而播放页已经隐藏底部导航，纵向上多出来的空间本该给封面。
+            // 改为按容器短边取值（本来就不会溢出容器），只保留一个防超大屏的宽松上限。
             val coverArea = imgCd.parent as View
-            val side = minOf(dp(320f), coverArea.width, coverArea.height).coerceAtLeast(0)
+            val side = minOf(dp(460f), coverArea.width, coverArea.height).coerceAtLeast(0)
             val params = imgCd.layoutParams
             if (side > 0 && (params.width != side || params.height != side)) {
                 params.width = side
@@ -1251,6 +1276,9 @@ class MainActivity : AppCompatActivity() {
 
         // ---- 列表页返回 ----
         findViewById<Button>(R.id.btnBackLib).setOnClickListener { showPage(Page.LIBRARY) }
+        // 3.0.6：歌单页顶栏的排序入口（粉丝：排序藏在设置里「交互不合理、反直觉」）
+        findViewById<Button>(R.id.btnPlaylistSortSongs)
+            .setOnClickListener { showPlaylistSortDialog() }
         // 3.0.6：歌单页「添加歌曲」入口（顶栏 + 空态里各一个）。
         // 起因：空歌单里没有任何歌可长按，而加歌只能靠长按单曲 → 死路。
         findViewById<Button>(R.id.btnPlaylistAdd)
@@ -1963,11 +1991,18 @@ class MainActivity : AppCompatActivity() {
                 v.visibility = View.GONE
             }
         }
-        // 视频页全屏：隐藏底部导航
-        if (p == Page.VIDEO) {
+        // 底部导航：视频页 / 播放页 / 歌词页都隐藏（它们各自是全屏内容）。
+        //
+        // ⚠️ 3.0.6 修：原先写的是「视频页隐藏；否则若不是播放页/歌词页才显示」——
+        // 播放页落进了**两个分支都不走**的缝里，于是它保持上一页的状态：
+        // 从音乐库点进播放页，底部导航还在（粉丝反馈「播放页有导航栏有点占地方」）。
+        // 现在改成显式三档：全屏页隐藏、其它页显示，不留缝。
+        val hideNav = p == Page.VIDEO || p == Page.PLAYER || p == Page.LYRICS
+        if (hideNav) {
             if (bottomNav.visibility != View.GONE) bottomNav.visibility = View.GONE
-        } else if (p != Page.PLAYER && p != Page.LYRICS) {
-            if (bottomNav.visibility != View.VISIBLE) bottomNav.visibility = View.VISIBLE
+        } else if (bottomNav.visibility != View.VISIBLE) {
+            bottomNav.visibility = View.VISIBLE
+            bottomNav.alpha = 1f
         }
         // 底部迷你条显隐（与 onSongChanged 共用同一个判定，避免两处副本走样）
         updateMiniPlayerVisibility()
@@ -2281,7 +2316,14 @@ class MainActivity : AppCompatActivity() {
      *               让「已导入文件夹新增的文件」不用手动重新扫描就能出现（1.31）
      */
     private fun scanLibrary(silent: Boolean = false) {
-        if (scanning) return
+        if (scanning) {
+            // 3.0.6：手动请求不能静默丢弃 —— 排队，等当前扫描收尾后自动补跑
+            if (!silent) {
+                pendingManualRescan = true
+                toast(getString(R.string.scan_wait_current))
+            }
+            return
+        }
         scanning = true
         if (!silent) toast(getString(R.string.scanning))
         // 3.0.4：非静默扫描时显示进度（大库要扫几分钟，此前只有一句 toast，粉丝以为卡死）
@@ -2459,7 +2501,9 @@ class MainActivity : AppCompatActivity() {
         // 硬删会引入 bug：同一文件夹里同名不同格式（a1.mp3 与 a1.flac）共用同一个 key，
         // 删掉会让**没被隐藏的那首**一起丢歌词。
         // 保留也无害：被隐藏的歌已不在 allSongs 里、不会被播放，这些 key 只是占一点内存。
-        return MusicLibrary(playlists, songs, full.lyrics)
+        // 3.0.6：文件夹封面同理原样带上 —— 不带上，只要用户隐藏过任何内容，
+        // 整库的文件夹封面就全没了（applyHidden 每次都会重建 MusicLibrary）。
+        return MusicLibrary(playlists, songs, full.lyrics, full.folderCovers)
     }
 
     /**
@@ -2472,6 +2516,9 @@ class MainActivity : AppCompatActivity() {
         // 否则恢复时还得重扫，且清缓存会真的丢数据）
         if (lib != null && lib.allSongs.isNotEmpty()) {
             LibraryCache.save(applicationContext, lib)
+            // 3.0.6：记下每首歌「首次被收录」的时间（已记录的不动）。
+            // 放在扫描收尾统一写一次，而不是每首歌写一次盘。
+            AddedTimeStore.markSeen(applicationContext, lib.allSongs.map { it.uri.toString() })
         }
         when {
             lib == null -> if (!silent) toast(getString(R.string.choose_folder_again))
@@ -2504,6 +2551,12 @@ class MainActivity : AppCompatActivity() {
                 val spd = playbackService?.currentSpeed() ?: 1f
                 btnSpeed.text = if (spd == 1f) "1x" else "${spd}x"
             }
+        }
+        // 3.0.6：用户在这次扫描期间点过「重新扫描」→ 现在补跑一次（不能静默丢弃）
+        if (pendingManualRescan) {
+            pendingManualRescan = false
+            // 用 post 让当前这轮收尾彻底走完再起下一轮，避免又撞上 scanning 判定
+            window.decorView.post { scanLibrary() }
         }
     }
 
@@ -2551,6 +2604,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onLibraryReady() {
+        // 3.0.6：把「文件夹里的图片」当封面的表下发给 CoverLoader。
+        // 它是个可下发的全局表（不为 load() 加参数 —— 那有 7 处调用点，逐个加容易漏）。
+        CoverLoader.setFolderCovers(library?.folderCovers ?: emptyMap())
         applyLibLayout()
         updateLibrarySubtitle()
         loadDiscover()
@@ -2613,6 +2669,8 @@ class MainActivity : AppCompatActivity() {
             SORT_NAME -> PlaylistSorter.byName(rest)
             SORT_RECENT -> PlaylistSorter.byRecent(rest, RecentPlaylist.load(this))
             SORT_RANDOM -> PlaylistSorter.shuffledStable(rest, randomSeed)
+            // 3.0.6：按文件修改时间 —— 取歌单里最新那首歌的时间，刚下新歌的文件夹浮到前面
+            SORT_MODIFIED -> PlaylistSorter.byModified(rest)
             // 3.0：默认顺序 = 用户拖拽过的顺序（没拖过时 apply 原样返回，与 3.0 之前一致）
             else -> PlaylistOrderStore.apply(this, rest)
         }
@@ -2670,34 +2728,88 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** 歌单排序弹窗（点库页「歌单」右侧的下拉箭头触发）。 */
+    /**
+     * 排序弹窗（3.0.6 扩展）。
+     *
+     * 弱志反馈：「我在下箭头页面没有找到改最近修改的排序，后面才发现在设置里，
+     * 交互不合理、反直觉」—— 原来这里只管**歌单列表**的排序，
+     * 而「歌曲」的排序（修改时间/收录时间）藏在设置里，同一个「排序」概念被拆成两处。
+     *
+     * 现在合成一个弹窗：
+     * 1. 歌单排序（默认顺序 / 按名称 / 按最近播放 / 随机）
+     * 2. 歌曲排序（不排序 / 标题 / 修改时间 / 收录时间）+ 倒序开关
+     * 两段各自独立，选完立即生效。
+     */
     private fun showPlaylistSortDialog() {
-        val labels = arrayOf(
+        val plValues = arrayOf(SORT_DEFAULT, SORT_NAME, SORT_RECENT, SORT_MODIFIED, SORT_RANDOM)
+        val plLabels = arrayOf(
             getString(R.string.sort_default),
             getString(R.string.sort_name),
             getString(R.string.sort_recent),
+            getString(R.string.sort_modified),
             getString(R.string.sort_random)
         )
-        val values = arrayOf(SORT_DEFAULT, SORT_NAME, SORT_RECENT, SORT_RANDOM)
-        val cur = prefs.getString(KEY_PLAYLIST_SORT, SORT_DEFAULT) ?: SORT_DEFAULT
-        val idx = values.indexOf(cur).coerceAtLeast(0)
+        val songLabels = arrayOf(
+            getString(R.string.song_sort_none),
+            getString(R.string.song_sort_name),
+            getString(R.string.song_sort_modified),
+            getString(R.string.song_sort_added)
+        )
+        val curPl = prefs.getString(KEY_PLAYLIST_SORT, SORT_DEFAULT) ?: SORT_DEFAULT
+        val curSong = songSortMode()
+        // 带 ✓ 标记当前值：这个弹窗已经不能靠单选圈的勾选状态表达了
+        // （两组互不相关的单选混在一起，setSingleChoiceItems 只允许一个勾）。
+        fun mark(on: Boolean, s: String) = if (on) "✓  $s" else "     $s"
+        val labels = mutableListOf<String>()
+        labels.add(getString(R.string.playlist_sort))
+        labels.addAll(plLabels.mapIndexed { i, s -> mark(plValues[i] == curPl, s) })
+        labels.add(getString(R.string.song_sort))
+        labels.addAll(songLabels.mapIndexed { i, s -> mark(SongSorter.ALL[i] == curSong, s) })
+        labels.add(
+            mark(
+                songSortDesc(),
+                getString(
+                    if (songSortDesc()) R.string.song_sort_desc_on else R.string.song_sort_desc_off
+                )
+            )
+        )
+
         AccentDialogBuilder(this)
             .setTitle(R.string.playlist_sort)
-            .setSingleChoiceItems(labels, idx) { d, which ->
-                val chosen = values[which]
-                // 从没播放记录时选「按最近播放」没意义：提示并保持原样
-                if (chosen == SORT_RECENT && RecentPlaylist.load(this).isEmpty()) {
-                    d.dismiss()
-                    toast(getString(R.string.sort_recent_empty))
-                    return@setSingleChoiceItems
-                }
-                prefs.edit().putString(KEY_PLAYLIST_SORT, chosen).apply()
-                if (chosen == SORT_RANDOM) {
-                    // 每次主动选「随机」都换一批顺序（同一次会话内保持稳定）
-                    randomSeed = System.currentTimeMillis()
-                }
-                applyLibLayout()
+            .setItems(labels.toTypedArray()) { d, which ->
                 d.dismiss()
+                when (which) {
+                    0, 6 -> return@setItems   // 分组标题，不可点
+                    in 1..5 -> {
+                        val chosen = plValues[which - 1]
+                        if (chosen == SORT_RECENT && RecentPlaylist.load(this).isEmpty()) {
+                            toast(getString(R.string.sort_recent_empty))
+                            return@setItems
+                        }
+                        prefs.edit().putString(KEY_PLAYLIST_SORT, chosen).apply()
+                        if (chosen == SORT_RANDOM) randomSeed = System.currentTimeMillis()
+                        applyLibLayout()
+                        toast(getString(R.string.sort_applied, plLabels[which - 1]))
+                    }
+                    in 7..10 -> {
+                        prefs.edit().putString(KEY_SONG_SORT, SongSorter.ALL[which - 7]).apply()
+                        refreshCurrentPlaylistSongs()
+                        toast(getString(R.string.sort_applied, songLabels[which - 7]))
+                    }
+                    11 -> {
+                        val now = !songSortDesc()
+                        prefs.edit().putBoolean(KEY_SONG_SORT_DESC, now).apply()
+                        refreshCurrentPlaylistSongs()
+                        toast(
+                            getString(
+                                if (now) R.string.song_sort_desc_on else R.string.song_sort_desc_off
+                            )
+                        )
+                    }
+                    else -> return@setItems
+                }
             }
+            .setNegativeButton(R.string.close, null)
             .show()
     }
 
@@ -2864,7 +2976,7 @@ class MainActivity : AppCompatActivity() {
         playlistIsCustom = isCustom
         txtPlaylistTitle.text = playlist.name
         dragEnabled = true
-        currentSongs = applyPlaylistOrder(playlist.songs, playlist.name)
+        currentSongs = applySongSort(applyPlaylistOrder(playlist.songs, playlist.name))
         songAdapter.submit(currentSongs)
         updatePlaylistEmpty()
     }
@@ -3380,19 +3492,71 @@ class MainActivity : AppCompatActivity() {
             updateImmersiveLyric()
             return
         }
-        val newText = if (lyricIndex >= 0 && lyricIndex < lyricLines.size) {
-            lyricLines[lyricIndex].text
+        val newText: CharSequence = if (lyricIndex >= 0 && lyricIndex < lyricLines.size) {
+            buildNowLyricText(lyricIndex)
         } else if (lyricLines.isNotEmpty() && lyricLines[0].startMs < 0) {
             // 静态歌词（无时间戳）：显示第一句，引导去全屏歌词页
-            lyricLines[0].text
+            buildNowLyricText(0)
         } else {
             getString(R.string.no_lyric_now)
         }
-        if (txtNowLyric.text.toString() != newText) {
+        if (txtNowLyric.text?.toString() != newText.toString()) {
             txtNowLyric.text = newText
             txtNowLyric.alpha = 0f
             txtNowLyric.animate().alpha(1f).setDuration(220).start()
         }
+    }
+
+    /**
+     * 当前歌的歌词译文（行号 → 译文）；没翻译过返回空表（3.0.6）。
+     *
+     * 译文缓存按「provider → uri → 行号」三层存，这里取当前 provider + 当前歌那一层。
+     */
+    private fun currentTranslations(): Map<Int, String> {
+        val uri = lastSong?.uri?.toString() ?: return emptyMap()
+        return translationCache[uri] ?: emptyMap()
+    }
+
+    /**
+     * 播放页中间那行：原文 + 译文两行（3.0.6）。
+     *
+     * 粉丝（B 站）：「中间的歌词显示，歌词识别功能+翻译后也只会显示日语，也看不懂
+     * 感觉着实鸡肋啊，加个开关或者显示翻译后的歌词就好了」。
+     *
+     * 根因不是缺开关 —— 译文一直只给了**歌词页**的 LyricAdapter，
+     * 播放页这行和沉浸歌词压根没查过 [translationCache]。这里补上。
+     *
+     * 有译文就显示（不必再要一个开关）：翻译本身已经是用户主动点的动作，
+     * 翻完了却看不到等于白点。
+     */
+    private fun buildNowLyricText(idx: Int): CharSequence {
+        val original = lyricLines.getOrNull(idx)?.text ?: return ""
+        val trans = currentTranslations()[idx]
+        if (trans.isNullOrBlank()) return original
+        val sb = SpannableStringBuilder(original)
+        sb.append("\n")
+        val start = sb.length
+        sb.append(trans)
+        sb.setSpan(
+            ForegroundColorSpan(getColor(R.color.text_hint)),
+            start, sb.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+        sb.setSpan(
+            RelativeSizeSpan(0.78f),
+            start, sb.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+        return sb
+    }
+
+    /**
+     * 译文变化后刷新所有显示译文的位置（3.0.6）。
+     *
+     * 三个地方共用同一份译文：歌词页列表、播放页中间行、沉浸歌词。
+     * 以前只刷第一个，所以粉丝看到的永远是「翻译好了但还是日语」。
+     */
+    private fun applyTranslations(map: Map<Int, String>) {
+        lyricAdapter.setTranslations(map)
+        updateNowLyric(currentLyricHighlight)
     }
 
     private fun updateCdAnimation(playing: Boolean) {
@@ -3645,6 +3809,55 @@ class MainActivity : AppCompatActivity() {
     /** 封面是否完整显示（3.0.5）：false = 裁满（默认），true = fitCenter 不裁切。 */
     private fun coverFullImage(): Boolean = prefs.getBoolean(KEY_COVER_FIT, false)
 
+    /** 歌曲排序方式（3.0.6）。返回值见 [SongSorter]。 */
+    private fun songSortMode(): String =
+        prefs.getString(KEY_SONG_SORT, SongSorter.NONE) ?: SongSorter.NONE
+
+    /** 歌曲排序是否倒序（3.0.6）。 */
+    private fun songSortDesc(): Boolean = prefs.getBoolean(KEY_SONG_SORT_DESC, false)
+
+    /**
+     * 对歌曲列表应用用户选择的排序（3.0.6）。
+     *
+     * 只作用在**展示层**，不改任何持久化数据：
+     * - 文件夹歌单的拖拽顺序（`playlist_order_*`）仍是原始依据，排序只是换个看法；
+     * - 想让拖拽顺序生效，把排序设成「不排序」即可。
+     */
+    private fun applySongSort(songs: List<Song>): List<Song> {
+        val mode = songSortMode()
+        if (mode == SongSorter.NONE) return songs
+        return SongSorter.sort(songs, mode, songSortDesc(), AddedTimeStore.load(this))
+    }
+
+    /**
+     * 把「封面上显示歌曲数」开关下发到两处歌单网格（3.0.6）。
+     *
+     * 音乐库页的网格与「歌单」tab 的网格共用同一套偏好 —— 用户对这个的印象是一个整体。
+     */
+    private fun applyCoverCountBadge() {
+        val on = prefs.getBoolean(KEY_COVER_COUNT, true)
+        if (::gridAdapter.isInitialized) gridAdapter.setShowCount(on)
+        if (::playlistsPageAdapter.isInitialized) playlistsPageAdapter.setShowCount(on)
+    }
+
+    /**
+     * 设置里改了排序后，当前正开着的歌单立刻重排（3.0.6）。
+     *
+     * 不重绑的话，用户点完「确定」回到歌单页发现顺序没变，会以为设置没生效
+     * （下次进歌单才变 —— 这种"要退出去再进来"的体验很劝退）。
+     */
+    private fun refreshCurrentPlaylistSongs() {
+        if (page != Page.PLAYLIST) return
+        val name = txtPlaylistTitle.text.toString()
+        if (name.isEmpty()) return
+        if (playlistIsCustom) {
+            bindPlaylist(Playlist(name, resolveUris(CustomPlaylistStore.uris(this, name))), isCustom = true)
+        } else {
+            val pl = library?.playlists?.firstOrNull { it.name == name } ?: return
+            bindPlaylist(pl, isCustom = false)
+        }
+    }
+
     /** 顶部标题栏档位：0 完整（默认）/ 1 精简 / 2 极简。 */
     private fun libHeaderStyle(): Int = prefs.getInt(KEY_LIB_HEADER, 0).coerceIn(0, 2)
 
@@ -3755,9 +3968,32 @@ class MainActivity : AppCompatActivity() {
                     android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                 )
             }
+            // 3.0.6：译文单独一行、小一号、用提示色 —— 粉丝反馈沉浸里也只看得到日语
+            val tr = currentTranslations()[i]
+            if (!tr.isNullOrBlank()) {
+                sb.append("\n")
+                val ts = sb.length
+                sb.append(tr)
+                sb.setSpan(
+                    ForegroundColorSpan(transColor()), ts, sb.length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                sb.setSpan(
+                    RelativeSizeSpan(if (i == idx) 0.82f else 0.78f), ts, sb.length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+            }
         }
         txtImmersiveLyric.text = sb
     }
+
+    /** 译文颜色（3.0.6）：封面背景开启时用提亮色，否则用提示色。 */
+    private fun transColor(): Int =
+        if (coverBgEnabled() && currentCoverBmp != null) {
+            getColor(R.color.cover_text_hint_on_photo)
+        } else {
+            getColor(R.color.text_hint)
+        }
 
     /** 视频页全屏：隐藏系统状态栏/导航栏，画面区域最大化（1.31 收窄视频四周留白）。 */
     private fun enterVideoImmersive() {
@@ -3866,6 +4102,35 @@ class MainActivity : AppCompatActivity() {
         chkAlphaIndex.isChecked = prefs.getBoolean(KEY_ALPHA_INDEX, false)
         val rgCoverFit = view.findViewById<RadioGroup>(R.id.rgCoverFit)
         checkByTag(rgCoverFit, if (coverFullImage()) 1 else 0)
+        // 3.0.6：歌曲排序（两组单选拼成一个语义上的 4 选 1）
+        val rgSongSort = view.findViewById<RadioGroup>(R.id.rgSongSort)
+        val rgSongSort2 = view.findViewById<RadioGroup>(R.id.rgSongSort2)
+        val sortNow = songSortMode()
+        val sortIdx = SongSorter.ALL.indexOf(sortNow).coerceAtLeast(0)
+        checkByTag(rgSongSort, sortIdx)
+        checkByTag(rgSongSort2, sortIdx)
+        val chkSongSortDesc = view.findViewById<CheckBox>(R.id.chkSongSortDesc)
+        chkSongSortDesc.isChecked = prefs.getBoolean(KEY_SONG_SORT_DESC, false)
+        // 两组互斥：点了其中一组，另一组跟着换（否则会同时高亮两个）
+        rgSongSort.setOnCheckedChangeListener { _, id ->
+            val i = view.findViewById<android.widget.RadioButton>(id)
+                ?.tag?.toString()?.toIntOrNull()
+            if (i != null) {
+                checkByTag(rgSongSort2, i)
+                currentSongSort = i
+            }
+        }
+        rgSongSort2.setOnCheckedChangeListener { _, id ->
+            val i = view.findViewById<android.widget.RadioButton>(id)
+                ?.tag?.toString()?.toIntOrNull()
+            if (i != null) {
+                checkByTag(rgSongSort, i)
+                currentSongSort = i
+            }
+        }
+        currentSongSort = sortIdx
+        val chkCoverCount = view.findViewById<CheckBox>(R.id.chkCoverCount)
+        chkCoverCount.isChecked = prefs.getBoolean(KEY_COVER_COUNT, true)
         val rgSeekStep = view.findViewById<RadioGroup>(R.id.rgSeekStep)
         checkByTag(rgSeekStep, prefs.getInt(KEY_SEEK_STEP, 10))
         // 2.15：返回键级数（0 逐级 / 1 直跳）
@@ -3957,12 +4222,17 @@ class MainActivity : AppCompatActivity() {
                     .putBoolean(KEY_LIB_SEG_ROW, chkLibSegRow.isChecked)
                     .putBoolean(KEY_ALPHA_INDEX, chkAlphaIndex.isChecked)
                     .putBoolean(KEY_COVER_FIT, tagOf(rgCoverFit) == 1)
+                    .putString(KEY_SONG_SORT, SongSorter.ALL[currentSongSort.coerceIn(0, 3)])
+                    .putBoolean(KEY_SONG_SORT_DESC, chkSongSortDesc.isChecked)
+                    .putBoolean(KEY_COVER_COUNT, chkCoverCount.isChecked)
                     .putInt(KEY_SEEK_STEP, tagOf(rgSeekStep))
                     .putInt(KEY_BACK_STEP, tagOf(rgBackStep))
                     .putInt(KEY_VIDEO_TAP_ZONE, tagOf(rgVideoTapZone))
                     .apply()
                 applyAppearance()
+                applyCoverCountBadge()
                 applyLibLayout()
+                refreshCurrentPlaylistSongs()
                 applyLibraryHeader()
                 applyLibrarySegRow()
                 refreshAlphaIndex(playlistList().map { it.name }, skipFirst = true)
@@ -5967,7 +6237,7 @@ class MainActivity : AppCompatActivity() {
                 // 只有请求发起时的歌仍是当前歌，才刷新界面状态，避免旧歌数据串进新歌（1.30）
                 if (lastSong?.uri?.toString() == reqKey) {
                     transFailedLines = toTranslate.filter { it.first !in result.translations }
-                    lyricAdapter.setTranslations(translationCache[reqKey] ?: emptyMap())
+                    applyTranslations(translationCache[reqKey] ?: emptyMap())
                     playbackService?.reloadLyricTranslations()
                     when {
                         cancelled -> toast(
@@ -6020,7 +6290,7 @@ class MainActivity : AppCompatActivity() {
                 translationCache.remove(uriKey)
                 saveTranslationCaches()
                 transFailedLines = emptyList()
-                lyricAdapter.setTranslations(emptyMap())
+                applyTranslations(emptyMap())
                 playbackService?.reloadLyricTranslations()
                 toast(getString(R.string.trans_deleted))
             }
@@ -6814,7 +7084,7 @@ class MainActivity : AppCompatActivity() {
                 cache.putAll(result.translations)
                 saveTranslationCaches()
                 if (lastSong?.uri?.toString() == uriKey) {
-                    lyricAdapter.setTranslations(translationCache[uriKey] ?: emptyMap())
+                    applyTranslations(translationCache[uriKey] ?: emptyMap())
                     playbackService?.reloadLyricTranslations()
                 }
                 val failed = toTranslate.size - result.translations.size
@@ -6916,9 +7186,12 @@ class MainActivity : AppCompatActivity() {
         val playlists = all.groupBy { it.folder }
             .map { Playlist(it.key, it.value.sortedBy { s -> s.title }) }
             .sortedBy { it.name }
-        val newFull = MusicLibrary(playlists, all, lyrics)
+        // 3.0.6：文件夹封面表原样保留（这里只换这个文件夹的歌，封面不该跟着丢）
+        val newFull = MusicLibrary(playlists, all, lyrics, lib.folderCovers)
         // 缓存写完整库；显示用过滤后的库
         LibraryCache.save(applicationContext, newFull)
+        // 3.0.6：增量扫描同样补记收录时间（新加进来的歌才算「刚收录」）
+        AddedTimeStore.markSeen(applicationContext, newFull.allSongs.map { it.uri.toString() })
         fullLibrary = newFull
         val shown = applyHidden(newFull)
         library = shown
@@ -7533,6 +7806,8 @@ class MainActivity : AppCompatActivity() {
         updateDiscoverPrimaryTextSize()
         // 3.0.5：封面显示方式（裁满 / 完整）下发到所有列表
         applyCoverFitEverywhere()
+        // 3.0.6：封面上的「N 首」徽标显隐
+        applyCoverCountBadge()
     }
 
     /**
@@ -7633,6 +7908,18 @@ class MainActivity : AppCompatActivity() {
          */
         private const val KEY_COVER_FIT = "cover_full_image"
         /**
+         * 歌曲列表排序方式（3.0.6）。
+         *
+         * 粉丝（B 站）：「添加更多排序，正序倒序，添加到媒体库时间，修改时间等」、
+         * 「可以增加一个按文件修改时间排序吗，因为每次下新的都要找一会」。
+         * 值见 [SongSorter]；默认 [SongSorter.NONE]（保持扫描顺序，老用户观感不变）。
+         */
+        private const val KEY_SONG_SORT = "song_sort_mode"
+        /** 歌曲排序是否倒序（3.0.6，默认 false = 正序）。 */
+        private const val KEY_SONG_SORT_DESC = "song_sort_desc"
+        /** 封面右下角是否显示「N 首」徽标（3.0.6，默认 true）。 */
+        private const val KEY_COVER_COUNT = "cover_count_badge"
+        /**
          * 歌单是否可拖动排序（3.0.4，默认开）。
          *
          * 粉丝反馈「我本身有整理归纳文件夹的习惯，这个功能完全用不到而且很容易误触，
@@ -7703,6 +7990,14 @@ class MainActivity : AppCompatActivity() {
         private const val SORT_NAME = "name"
         private const val SORT_RECENT = "recent"
         private const val SORT_RANDOM = "random"
+        /**
+         * 按文件修改时间（3.0.6）。
+         *
+         * 弱志：「我目前只有歌曲支持修改时间排序，我觉得歌单也应该支持上」。
+         * 取歌单里**最新**那首歌的修改时间 —— 刚下载新歌的文件夹会自动浮到前面。
+         * 与 [LibraryTree] 里的同名常量值必须一致（树形排序复用同一个 prefs 键）。
+         */
+        private const val SORT_MODIFIED = "modified"
         /**
          * 切歌后「新首帧」的等待宽限期（2.13）。
          * 旧播放器的余帧会在这个时间内继续触发 onSurfaceTextureUpdated，

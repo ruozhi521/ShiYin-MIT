@@ -32,6 +32,21 @@ class TreeNode(
         }
         return best
     }
+
+    /**
+     * 本子树里最新的文件修改时间（取不到时为 0）（3.0.6）。
+     *
+     * 与 [bestRecent] 同一个道理：「按修改时间」排序时，纯目录节点若只读自己的
+     * [playlist] 就会恒为 0、全被压到底部，看起来像「排序没生效」。
+     */
+    internal fun bestModified(): Long {
+        var best = playlist?.songs?.maxOfOrNull { it.lastModified } ?: 0L
+        for (c in children) {
+            val v = c.bestModified()
+            if (v > best) best = v
+        }
+        return best
+    }
 }
 
 object LibraryTree {
@@ -46,6 +61,8 @@ object LibraryTree {
     const val SORT_NAME = "name"
     const val SORT_RECENT = "recent"
     const val SORT_RANDOM = "random"
+    /** 按文件修改时间（3.0.6）：取子树里最新的那首歌，新的在前。值须与 Activity 的 SORT_MODIFIED 一致。 */
+    const val SORT_MODIFIED = "modified"
 
     /**
      * 从扁平歌单列表构建文件夹树（歌单名 = 相对路径，如 A/B/周杰伦）。
@@ -120,6 +137,15 @@ object LibraryTree {
                         list[i] = list[j]
                         list[j] = t
                     }
+                }
+
+                SORT_MODIFIED -> {
+                    // 3.0.6：按文件修改时间，新的在前。目录取子树里最新的那条
+                    // （否则纯目录恒为 0、全被压到底部，看着像"排序没生效"）。
+                    val score = list.associateWith { it.bestModified() }
+                    list.sortWith(
+                        compareByDescending<TreeNode> { score[it] ?: 0L }.then(byName)
+                    )
                 }
 
                 else -> {

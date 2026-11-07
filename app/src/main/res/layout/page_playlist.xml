@@ -33,6 +33,16 @@
             android:textSize="18sp"
             android:textStyle="bold" />
 
+        <!-- 3.0.6：歌曲排序入口（粉丝：「下箭头页面里没找到改最近修改的排序，后面才发现在设置里，
+             交互不合理、反直觉」）—— 直接放在歌单页顶栏，进歌单就能改 -->
+        <Button
+            android:id="@+id/btnPlaylistSortSongs"
+            style="@style/BtnStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="52dp"
+            android:text="@string/song_sort_short" />
+
         <!-- 3.0.6：单曲添加的便捷入口（空歌单时也在空态里有同一个按钮） -->
         <Button
             android:id="@+id/btnPlaylistAdd"

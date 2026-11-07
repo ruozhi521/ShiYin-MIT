@@ -54,6 +54,21 @@ class LibraryScanner(
     )
     private val lyricExts = setOf("lrc", "vtt", "txt", "srt")
 
+    /**
+     * 3.0.6：可作封面的图片扩展名。
+     *
+     * 粉丝（B 站）：「识别文件夹内的图片为软件内封面图片，**不要限制图片格式**，
+     * 比如必须 cover.jpg 等」。本地 ASMR 音声的封面常叫 `封面.png`、`folder.jpg`、
+     * `ジャケット.jpg`，甚至直接是一串数字——只要文件夹里有图就很有可能就是封面。
+     */
+    private val imageExts = setOf("jpg", "jpeg", "png", "webp", "bmp", "gif", "heic", "heif")
+
+    /**
+     * 每个文件夹里收集到的图片候选（3.0.6）：folder -> [(文件名小写, uri)]。
+     * 扫描结束后由 [pickFolderCovers] 每个文件夹挑一张。
+     */
+    private val coverCandidates = mutableMapOf<String, MutableList<Pair<String, Uri>>>()
+
     fun scan(treeUri: Uri): MusicLibrary {
         val rootId = DocumentsContract.getTreeDocumentId(treeUri)
         val folderSongs = mutableMapOf<String, MutableList<Song>>()
@@ -68,7 +83,9 @@ class LibraryScanner(
         return MusicLibrary(
             playlists = playlists,
             allSongs = all.sortedBy { it.title },
-            lyrics = lyrics
+            lyrics = lyrics,
+            // 3.0.6：文件夹里的图片当封面（不限制文件名/格式）
+            folderCovers = pickFolderCovers(folderSongs.keys)
         )
     }
 
@@ -95,13 +112,20 @@ class LibraryScanner(
      * 这样调用方可以把它当成「给 scanAll 多传一个根」来合并。
      */
     fun scanOneRoot(root: Uri): RootScan {
+        // scanAll 会复用同一个 scanner；相对路径候选必须按根隔离，不能带入上一个根的图片。
+        coverCandidates.clear()
         val songs = mutableListOf<Song>()
         val lyrics = mutableMapOf<String, LyricRef>()
+        val folderSongs = mutableMapOf<String, MutableList<Song>>()
         scanDir(
             root, DocumentsContract.getTreeDocumentId(root), null,
-            mutableMapOf(), lyrics, songs, useFileNameTitle()
+            folderSongs, lyrics, songs, useFileNameTitle()
         )
-        return RootScan(rootDisplayName(root), songs, lyrics)
+        return RootScan(
+            rootDisplayName(root), songs, lyrics,
+            // 3.0.6：多根合并时封面也要跟着走
+            pickFolderCovers(folderSongs.keys)
+        )
     }
 
     /**
@@ -141,7 +165,9 @@ class LibraryScanner(
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,
             DocumentsContract.Document.COLUMN_DISPLAY_NAME,
             DocumentsContract.Document.COLUMN_MIME_TYPE,
-            DocumentsContract.Document.COLUMN_SIZE
+            DocumentsContract.Document.COLUMN_SIZE,
+            // 3.0.6：文件修改时间，供「按修改时间排序」（粉丝：下载新歌后找起来麻烦）
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED
         )
         val subDirs = mutableListOf<Pair<String, String>>()
         val songsHere = mutableListOf<Song>()
@@ -157,6 +183,8 @@ class LibraryScanner(
                     val mime = c.getString(2) ?: ""
                     // 单曲封面稳定 key 需要文件大小（2.11）；部分 provider 不给 → 0，退回纯文件名 key
                     val size = c.getLong(3)
+                    // 3.0.6：文件修改时间（部分 provider 不给 → 0，排序时排到最后）
+                    val modified = runCatching { c.getLong(4) }.getOrDefault(0L)
                     when {
                         mime == DocumentsContract.Document.MIME_TYPE_DIR -> {
                             subDirs.add(id to name)
@@ -189,7 +217,8 @@ class LibraryScanner(
                                         artist = tagArtist?.takeIf { it.isNotBlank() }
                                             ?: folder.substringAfterLast('/'),
                                         fileStem = stemOf(name),
-                                        size = size
+                                        size = size,
+                                        lastModified = modified
                                     )
                                 )
                             }
@@ -204,6 +233,13 @@ class LibraryScanner(
                             if (doubleStem != stem) {
                                 lyrics["$folder/${lower(doubleStem)}"] = ref
                             }
+                        }
+                        // 3.0.6：文件夹里的图片 → 列为封面候选（不限制文件名与格式）
+                        isImage(mime, name) -> {
+                            val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
+                            val folder = folderPath ?: DEFAULT_FOLDER
+                            coverCandidates.getOrPut(folder) { mutableListOf() }
+                                .add(name.lowercase() to uri)
                         }
                     }
                 }
@@ -348,6 +384,80 @@ class LibraryScanner(
 
     private fun isLyric(name: String): Boolean = extOf(name) in lyricExts
 
+    /** 3.0.6：是否图片（按 mime 或扩展名，任一命中即可 —— 部分 provider 的 mime 是空的）。 */
+    private fun isImage(mime: String, name: String): Boolean {
+        if (mime.startsWith("image/")) return true
+        return extOf(name) in imageExts
+    }
+
+    /**
+     * 每个文件夹挑一张封面（3.0.6）。
+     *
+     * 挑选优先级（**不限定文件名**，只是猜得更准）：
+     * 1. 名字里带 cover / folder / front / 封面 / ジャケット / 表紙
+     * 2. 否则取**面积最大**的那张？—— 做不到：扫描时只拿得到文件名，拿不到尺寸。
+     *    退而求其次：按名称排序取第一张，稳定且可预期。
+     *
+     * 保留有歌曲的目录及其祖先目录的图片；无关的纯图片目录不参与。
+     */
+    private fun pickFolderCovers(foldersWithSongs: Set<String>): Map<String, Uri> {
+        PlaybackLog.log("cover: scan folders=$scannedFolders candidates=${coverCandidates.values.sumOf { it.size }} imageFolders=${coverCandidates.size} songFolders=${foldersWithSongs.size}")
+        if (coverCandidates.isEmpty()) return emptyMap()
+        val libraryFolders = mutableSetOf<String>()
+        for (folder in foldersWithSongs) {
+            var current: String? = folder
+            while (current != null && libraryFolders.add(current)) {
+                current = parentFolderOf(current)
+            }
+        }
+        val hints = arrayOf(
+            "cover", "folder", "front", "album", "jacket",
+            "封面", "ジャケット", "表紙", "収録"
+        )
+        val out = HashMap<String, Uri>()
+        for ((folder, candidates) in coverCandidates) {
+            if (folder !in libraryFolders) continue
+            if (candidates.isEmpty()) continue
+            val best = candidates.minWithOrNull(
+                compareBy<Pair<String, Uri>> { (name) ->
+                    // 带封面关键词的优先（0 比 1 靠前）
+                    if (hints.any { name.contains(it) }) 0 else 1
+                }.thenBy { it.first }
+            ) ?: continue
+            out[folder] = best.second
+        }
+        // 3.0.6：**向下继承** —— 最常见的情形是「根目录放一张图，各子文件夹都没有」，
+        // 那种图通常就是整张碟的封面。不继承的话，只有根目录那层有封面，
+        // 用户点进子文件夹又全变回文件夹图标，看起来就像「封面识别没生效」。
+        // 只补空缺，不覆盖子文件夹自己的图。
+        for (folder in foldersWithSongs) {
+            if (out.containsKey(folder)) continue
+            var parent = parentFolderOf(folder)
+            while (parent != null) {
+                val inherited = out[parent]
+                if (inherited != null) {
+                    out[folder] = inherited
+                    break
+                }
+                parent = parentFolderOf(parent)
+            }
+        }
+        PlaybackLog.log("cover: picked=${out.size} sample=${out.keys.take(6)}")
+        return out
+    }
+
+    /**
+     * 文件夹的父路径（3.0.6）。
+     *
+     * 根层音频/图片的 folder 是 [DEFAULT_FOLDER]（「根目录」），所以：
+     * `A/B` → `A`，`A` → 「根目录」，顶层 → null（到头了）。
+     */
+    private fun parentFolderOf(folder: String): String? {
+        if (folder.isEmpty() || folder == DEFAULT_FOLDER) return null
+        val i = folder.lastIndexOf('/')
+        return if (i > 0) folder.substring(0, i) else DEFAULT_FOLDER
+    }
+
     private fun extOf(name: String): String {
         val i = name.lastIndexOf('.')
         return if (i >= 0) name.substring(i + 1).lowercase(Locale.getDefault()) else ""
@@ -386,6 +496,7 @@ class LibraryScanner(
             // 按最终名合并（同一相对路径跨根重命名结果一致，缓存进 renamed）
             val folderSongs = mutableMapOf<String, MutableList<Song>>()
             val lyrics = mutableMapOf<String, LyricRef>()
+            val folderCovers = mutableMapOf<String, Uri>()
             val all = mutableListOf<Song>()
             val seenSongs = HashSet<String>()
             for (scan in scans) {
@@ -395,6 +506,10 @@ class LibraryScanner(
                 for ((k, ref) in scan.lyrics) {
                     // 歌词 key 格式恒为「相对路径/stem」（scanDir 注册），拆开重拼最终前缀
                     lyrics["${finalName(k.substringBeforeLast('/'))}/${k.substringAfterLast('/')}"] = ref
+                }
+                // 3.0.6：封面跟着歌单一起改名（否则多根时封面按相对路径查不到）
+                for ((rel, uri) in scan.folderCovers) {
+                    folderCovers[finalName(rel)] = uri
                 }
                 for (song in scan.songs) {
                     if (!seenSongs.add(song.uri.toString())) continue
@@ -409,7 +524,8 @@ class LibraryScanner(
             return MusicLibrary(
                 playlists = playlists,
                 allSongs = all.sortedBy { it.title },
-                lyrics = lyrics
+                lyrics = lyrics,
+                folderCovers = folderCovers
             )
         }
 
@@ -436,13 +552,17 @@ class LibraryScanner(
             }
             val lyrics = HashMap<String, LyricRef>(old.lyrics)
             lyrics.putAll(fresh.lyrics)
+            // 3.0.6：封面也合并（旧库的保留，新根的补上）
+            val folderCovers = HashMap<String, Uri>(old.folderCovers)
+            folderCovers.putAll(fresh.folderCovers)
             val playlists = all.groupBy { it.folder }
                 .map { (name, list) -> Playlist(name, list.sortedBy { it.title }) }
                 .sortedBy { it.name }
             return MusicLibrary(
                 playlists = playlists,
                 allSongs = all.sortedBy { it.title },
-                lyrics = lyrics
+                lyrics = lyrics,
+                folderCovers = folderCovers
             )
         }
 

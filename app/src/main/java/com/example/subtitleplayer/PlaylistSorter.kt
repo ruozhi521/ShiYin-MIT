@@ -43,6 +43,22 @@ object PlaylistSorter {
     }
 
     /**
+     * 按文件修改时间排序（3.0.6）：取歌单里**最新**那首歌的修改时间，新的在前。
+     *
+     * 弱志：「我目前只有歌曲支持修改时间排序，我觉得歌单也应该支持上」——
+     * 歌单本身没有「修改时间」这个概念，能代表它新旧的就是里面最新的那首歌。
+     * 所以刚下载新歌的那个文件夹会自动浮到前面，正好对上「每次下新的都要找一会」。
+     *
+     * 时间取不到的（旧缓存没有 lastModified = 0）排最后；全部为 0 时顺序不变
+     * （Kotlin 的 sortedWith 是稳定排序）。
+     */
+    fun byModified(lists: List<Playlist>): List<Playlist> {
+        return lists.sortedWith(
+            compareByDescending<Playlist> { pl -> pl.songs.maxOfOrNull { it.lastModified } ?: 0L }
+        )
+    }
+
+    /**
      * 稳定随机：同一 seed 得到同一顺序。
      * 不能直接用 shuffled()——它每次调用都换顺序，列表重绘时会「跳动」。
      */

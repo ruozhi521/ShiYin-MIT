@@ -143,6 +143,20 @@ class PlaylistGridAdapter(
     }
 
     /**
+     * 封面右下角的「N 首」徽标是否显示（3.0.6）。
+     *
+     * 粉丝（B 站）：「封面那里显示几首音乐的开关，可以不用显示」——
+     * 有些歌单名字已经很长，徽标压在封面上显得碎。默认显示（保持原观感）。
+     */
+    private var showCount = true
+
+    fun setShowCount(on: Boolean) {
+        if (showCount == on) return
+        showCount = on
+        notifyDataSetChanged()
+    }
+
+    /**
      * 拖拽排序：移动指定项并刷新。
      * @return 移动后的新列表——调用方必须用它同步自己的数据源
      * （与 [SongAdapter.move] 同一约定：不返回新列表的话，页面外的列表仍是旧顺序，
@@ -189,6 +203,8 @@ class PlaylistGridAdapter(
         }
         holder.name.text = playlist.name
         holder.name.setTextSize(uiSizeSp)
+        // 3.0.6：「N 首」徽标可按设置隐藏（粉丝：封面那里不用显示几首）
+        holder.count.visibility = if (showCount) View.VISIBLE else View.GONE
         holder.count.text = holder.itemView.context
             .getString(R.string.songs_count, playlist.displayCount ?: playlist.songs.size)
         // 3.0：先用该歌单的素雅渐变铺底（概念图里没有封面的歌单就是一块渐变，不是图标）。
