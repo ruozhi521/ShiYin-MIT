@@ -185,6 +185,12 @@
     <string name="channel_flip_toast_off">已关闭左右声道反转</string>
     <string name="channel_flip_show_button">显示声道反转按钮</string>
     <string name="channel_flip_show_button_hint">在播放页工具行最右侧显示「左右声道反转」按钮；关闭则不显示（下拉通知栏的按钮始终可用）</string>
+    <!-- 3.0.7：播放页工具行自定义（弱志：要像导航栏那样可勾选、可排序，不是一个总开关） -->
+    <string name="tool_play_mode">播放模式</string>
+    <string name="tool_lyrics">全屏歌词</string>
+    <string name="tool_channel_flip">声道反转</string>
+    <string name="player_tools_title">播放页工具</string>
+    <string name="player_tools_hint">勾选决定播放页工具行显示哪些按钮，勾上后可用 ↑ ↓ 调整左右顺序。「视频」只在当前歌曲本身是视频时才出现。</string>
     <string name="saved">已保存</string>
     <string name="eq_pick_preset">选择预设</string>
     <string name="trans_base_hint">接口地址（默认 https://api.deepseek.com/v1）</string>
@@ -340,7 +346,7 @@
     <string name="title_from_filename_hint">忽略标签标题，重新扫描后生效</string>
     <string name="tab_video">视频</string>
     <string name="videos_empty">这个导航页还没有视频文件\n把含视频的文件夹添加进音乐库即可</string>
-    <string name="about_version">版本 3.0.6</string>
+    <string name="about_version">版本 3.0.7.1</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>

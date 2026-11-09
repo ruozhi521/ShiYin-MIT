@@ -29,8 +29,8 @@ android {
         applicationId "com.example.subtitleplayer"
         minSdk 26
         targetSdk 34
-        versionCode 39
-        versionName "3.0.6"
+        versionCode 41
+        versionName "3.0.7.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 

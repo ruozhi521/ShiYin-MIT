@@ -431,8 +431,10 @@ class MainActivity : AppCompatActivity() {
             txtMiniTitle.text = song?.title ?: ""
             updateFavoriteButton(song)
             hasSong = song != null
-            findViewById<ImageButton>(R.id.btnVideo).visibility =
-                if (isVideoFile(song?.uri)) View.VISIBLE else View.GONE
+            // 3.0.7：视频按钮的显隐现在由「工具行自定义」决定，
+            // 这里只更新它**该不该对当前歌显示**，不再直接改 visibility ——
+            // 直接改会覆盖用户在面板里的配置（把隐藏的按钮又显示出来）。
+            updateVideoToolVisibility()
             // 切歌：隐藏上一个视频的残留帧，等新视频首帧再显示（2.13）
             awaitVideoFirstFrame()
             // 切歌：重置 ASR 逐窗翻译游标（新歌的行号从 0 重新计数，2.13）
@@ -736,16 +738,28 @@ class MainActivity : AppCompatActivity() {
                 if (n > 0 && SpeechRecManager.isModelReady(this)) showAsrDialog()
             }
         }
-    private val coverPicker =
-        registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-            val target = pendingCoverTarget
-            pendingCoverTarget = null
-            val targetSong = pendingCoverSong
-            pendingCoverSong = null
-            val batch = pendingBatchSongs
-            pendingBatchSongs = null
-            android.util.Log.d("ShiYinCover", "coverPicker uri=$uri target=$target batch=${batch?.size}")
-            if (uri == null || (target == null && batch == null)) {
+    /**
+     * 封面选择（3.0.7 改）。
+     *
+     * ⚠️ 原先用 [ActivityResultContracts.GetContent]，它发的是 `ACTION_GET_CONTENT` ——
+     * Android 13+ 上系统会把它**接管成 PhotoPicker**，部分 ROM（小米澎湃 OS）还会
+     * 拦成「只能安全访问」，导致根本选不到图（粉丝 2026-11-09 反馈）。
+     *
+     * 改用 [ActivityResultContracts.OpenDocument]（`ACTION_OPEN_DOCUMENT`），
+     * 走的是系统「文件」选择器，不经过 PhotoPicker，因此不受那层策略限制。
+     * 代价是**必须传 mime 数组**（GetContent 传的是单个字符串）。
+     */
+    private val coverPicker = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        val target = pendingCoverTarget
+        pendingCoverTarget = null
+        val targetSong = pendingCoverSong
+        pendingCoverSong = null
+        val batch = pendingBatchSongs
+        pendingBatchSongs = null
+        android.util.Log.d("ShiYinCover", "coverPicker uri=$uri target=$target batch=${batch?.size}")
+        if (uri == null || (target == null && batch == null)) {
                 return@registerForActivityResult
             }
             // 批量模式：对勾选歌曲逐一写单曲封面
@@ -789,10 +803,16 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-    /** 背景图选择（复制到内部存储）。 */
-    private val bgPicker =
-        registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-            if (uri == null) return@registerForActivityResult
+    /**
+     * 背景图选择（复制到内部存储）。
+     *
+     * 3.0.7：与 [coverPicker] 同因改用 OpenDocument —— GetContent 在 Android 13+
+     * 会被系统换成 PhotoPicker，小米澎湃下还可能被拦成「安全访问」。
+     */
+    private val bgPicker = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@registerForActivityResult
             if (BgManager.setBg(this, uri)) {
                 applyPageBackground()
                 // 封面背景开启时提示优先级，否则用户会以为背景图没生效
@@ -1205,14 +1225,25 @@ class MainActivity : AppCompatActivity() {
         // 粉丝反馈的「返回偏向返回主界面，而不是返回上一级」）
         findViewById<Button>(R.id.btnBackSongs).setOnClickListener { backFromPlayerPage() }
         findViewById<Button>(R.id.btnLyrics).setOnClickListener { showPage(Page.LYRICS, 1) }
-        findViewById<ImageButton>(R.id.btnQueue).setOnClickListener { showQueueDialog() }
-        findViewById<ImageButton>(R.id.btnLyricsIcon).setOnClickListener { showPage(Page.LYRICS, 1) }
-        // 3.0.3：左右声道反转（按钮显隐由「设置 → 主题」控制）
-        findViewById<ImageButton>(R.id.btnChannelFlip).setOnClickListener {
+        playerToolView(TOOL_QUEUE)?.setOnClickListener { showQueueDialog() }
+        playerToolView(TOOL_LYRICS)?.setOnClickListener { showPage(Page.LYRICS, 1) }
+        // 3.0.3：左右声道反转（显隐由「设置 → 主题 → 播放页工具」控制）
+        playerToolView(TOOL_CHANNEL_FLIP)?.setOnClickListener {
             playbackService?.toggleChannelFlipSafe()
         }
-        applyChannelFlipButton()
-        findViewById<ImageButton>(R.id.btnPlayMode).setOnClickListener {
+        // 3.0.7：桌面歌词开关（粉丝：希望能直接在播放页点，不用翻设置）
+        playerToolView(TOOL_DESKTOP_LYRICS)?.setOnClickListener {
+            val on = !prefs.getBoolean(KEY_DESKTOP_ON, false)
+            // setDesktopLyrics 自己会写 prefs、并在无悬浮窗权限时给出引导
+            playbackService?.setDesktopLyrics(on)
+            // 没有服务（尚未播放）时也能记账，下次起播由服务读取
+            if (playbackService == null) {
+                prefs.edit().putBoolean(KEY_DESKTOP_ON, on).apply()
+            }
+            applyDesktopLyricsButton()
+        }
+        applyPlayerTools()
+        playerToolView(TOOL_PLAY_MODE)?.setOnClickListener {
             val mode = playbackService?.cyclePlayMode() ?: 0
             updatePlayModeButton(mode)
             toast(
@@ -1249,7 +1280,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<ImageButton>(R.id.btnNext).setOnClickListener {
             playbackService?.playNext()
         }
-        findViewById<ImageButton>(R.id.btnTimer).setOnClickListener {
+        playerToolView(TOOL_TIMER)?.setOnClickListener {
             showSleepDialog()
         }
         // ---- 快进退 / 倍速（1.25）----
@@ -1896,7 +1927,9 @@ class MainActivity : AppCompatActivity() {
         val iconTint = android.content.res.ColorStateList.valueOf(primary)
         for (id in listOf(R.id.btnPrev, R.id.btnNext, R.id.btnTimer, R.id.btnPlayMode,
             R.id.btnQueue, R.id.btnLyricsIcon, R.id.btnVideo, R.id.btnChannelFlip)) {
-            findViewById<ImageButton>(id).imageTintList = iconTint
+            // 3.0.7.1：这几项里除了前后切换，其余都能被用户在工具行面板里隐藏，
+            // 隐藏后就不在视图树里了 —— 必须容忍 null，否则换主题/换背景即崩。
+            findViewById<ImageButton>(id)?.imageTintList = iconTint
         }
         for (id in listOf(R.id.btnSeekBack, R.id.btnSpeed, R.id.btnSeekForward)) {
             findViewById<TextView>(id).setTextColor(hint)
@@ -1923,7 +1956,7 @@ class MainActivity : AppCompatActivity() {
                 arrayOf(getString(R.string.bg_set), getString(R.string.bg_clear))
             ) { _, which ->
                 when (which) {
-                    0 -> bgPicker.launch("image/*")
+                    0 -> bgPicker.launch(arrayOf("image/*"))
                     1 -> {
                         BgManager.clearBg(this)
                         applyPageBackground()
@@ -2109,7 +2142,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updatePlayModeButton(mode: Int) {
-        val btn = findViewById<ImageButton>(R.id.btnPlayMode)
+        // 3.0.7.1：播放模式按钮允许被用户在工具行面板里隐藏，
+        // 隐藏后 findViewById 拿不到 —— 这里必须容忍 null，否则切歌即崩。
+        val btn = playerToolView(TOOL_PLAY_MODE) ?: return
         val (icon, label) = when (mode) {
             MediaPlaybackService.MODE_SHUFFLE -> R.drawable.ic_shuffle to R.string.play_mode_shuffle
             MediaPlaybackService.MODE_REPEAT_ONE -> R.drawable.ic_repeat_one to R.string.play_mode_repeat_one
@@ -3904,14 +3939,242 @@ class MainActivity : AppCompatActivity() {
         pageView.requestLayout()
     }
 
+    /**
+     * 声道反转按钮的**选中态**（3.0.3 / 3.0.7 改）。
+     *
+     * 显隐不再由这里决定 —— 3.0.7 起工具行的「有哪些、什么顺序」统一由
+     * [applyPlayerTools] 按用户自定义配置重建，这里只负责上色。
+     */
     private fun applyChannelFlipButton() {
-        val btn = findViewById<ImageButton>(R.id.btnChannelFlip) ?: return
-        val show = prefs.getBoolean(KEY_SHOW_CHANNEL_FLIP, false)
-        btn.visibility = if (show) View.VISIBLE else View.GONE
+        val btn = playerToolView(TOOL_CHANNEL_FLIP) ?: return
         val on = prefs.getBoolean(MediaPlaybackService.KEY_CHANNEL_FLIP, false)
         btn.imageTintList = android.content.res.ColorStateList.valueOf(
             if (on) ThemeManager.accent(this) else getColor(R.color.text_normal)
         )
+    }
+
+    /** 桌面歌词按钮的选中态（3.0.7）。 */
+    private fun applyDesktopLyricsButton() {
+        val btn = playerToolView(TOOL_DESKTOP_LYRICS) ?: return
+        val on = prefs.getBoolean(KEY_DESKTOP_ON, false)
+        btn.imageTintList = android.content.res.ColorStateList.valueOf(
+            if (on) ThemeManager.accent(this) else getColor(R.color.text_normal)
+        )
+    }
+
+    // ---------- 播放页工具行自定义（3.0.7）----------
+    //
+    // 弱志 2026-11-09：「播放页图标这条，我记得之前更新声道反转的时候跟你说过
+    // 做成导航栏那种的，但是你只是做成了个开关」—— 那次只给了声道反转一个总开关，
+    // 不是他要求的「像导航栏一样可自定义」。这里按 [showNavDialog] 同一套模式补上：
+    // 勾选有哪些、上下调整顺序，配置存 prefs。
+
+    /**
+     * 工具项视图缓存（3.0.7.1）。
+     *
+     * 重建工具行靠「全部移除 + 按序 addView」，但按钮一旦被移出视图树，
+     * findViewById 就再也找不到它了。所以首次（还在树里时）必须抓下来长期持有。
+     */
+    private val playerToolViews = mutableMapOf<String, ImageButton>()
+
+    /**
+     * 取工具按钮（3.0.7.1）。
+     *
+     * 一律走缓存：按钮被移出视图树后 findViewById 就失效了，而工具行
+     * 自定义面板允许用户把任意一项取消勾选（也就是彻底移出树）。
+     * 走缓存才能保证「用户隐藏了某个按钮」时，切换播放模式、切歌等
+     * 后续刷新逻辑不会因为拿到 null 而崩溃。
+     */
+    private fun playerToolView(tool: String): ImageButton? {
+        playerToolViews[tool]?.let { return it }
+        val v = findViewById<ImageButton>(playerToolViewId(tool)) ?: return null
+        playerToolViews[tool] = v
+        return v
+    }
+
+    /** 工具项 id（存 prefs 用，顺序即显示顺序）。 */
+    private val playerToolIds = listOf(
+        TOOL_TIMER, TOOL_PLAY_MODE, TOOL_QUEUE, TOOL_LYRICS,
+        TOOL_VIDEO, TOOL_CHANNEL_FLIP, TOOL_DESKTOP_LYRICS
+    )
+
+    private fun playerToolViewId(tool: String): Int = when (tool) {
+        TOOL_TIMER -> R.id.btnTimer
+        TOOL_PLAY_MODE -> R.id.btnPlayMode
+        TOOL_QUEUE -> R.id.btnQueue
+        TOOL_LYRICS -> R.id.btnLyricsIcon
+        TOOL_VIDEO -> R.id.btnVideo
+        TOOL_CHANNEL_FLIP -> R.id.btnChannelFlip
+        else -> R.id.btnDesktopLyrics
+    }
+
+    private fun playerToolLabel(tool: String): Int = when (tool) {
+        TOOL_TIMER -> R.string.timer
+        TOOL_PLAY_MODE -> R.string.tool_play_mode
+        TOOL_QUEUE -> R.string.queue
+        TOOL_LYRICS -> R.string.tool_lyrics
+        TOOL_VIDEO -> R.string.video_btn
+        TOOL_CHANNEL_FLIP -> R.string.tool_channel_flip
+        else -> R.string.desktop_lyrics_label
+    }
+
+    /**
+     * 当前工具行配置（有序）。
+     *
+     * 未设置过（老用户）时：保留 3.0.7 之前的表现 —— 定时/播放模式/队列/歌词四个常显，
+     * 声道反转沿用旧开关 [KEY_SHOW_CHANNEL_FLIP]，视频按钮仍在、但只对视频文件显示。
+     * **桌面歌词默认不显示**（新增项，不能突然挤进老用户的工具行）。
+     */
+    private fun playerToolOrder(): MutableList<String> {
+        val saved = prefs.getString(KEY_PLAYER_TOOLS, null)
+        if (saved != null) {
+            return saved.split(",").filter { it in playerToolIds }.toMutableList()
+        }
+        val def = mutableListOf(TOOL_TIMER, TOOL_PLAY_MODE, TOOL_QUEUE, TOOL_LYRICS, TOOL_VIDEO)
+        if (prefs.getBoolean(KEY_SHOW_CHANNEL_FLIP, false)) def.add(TOOL_CHANNEL_FLIP)
+        return def
+    }
+
+    private fun savePlayerTools(order: List<String>) {
+        prefs.edit().putString(KEY_PLAYER_TOOLS, order.joinToString(",")).apply()
+        // 老开关同步一次：面板里取消勾选声道反转后，旧键也该跟着关，
+        // 否则下次（未保存过配置的机型）还会按旧键显示出来。
+        prefs.edit()
+            .putBoolean(KEY_SHOW_CHANNEL_FLIP, order.contains(TOOL_CHANNEL_FLIP))
+            .apply()
+    }
+
+    /**
+     * 按配置重建工具行（3.0.7）。
+     *
+     * 做法与导航栏一致：**全部移除再按顺序加回**。
+     * 直接改 visibility 做不到「换顺序」，而 LinearLayout 里的子 View 顺序就是显示顺序。
+     *
+     * ⚠️ 用 [android.widget.LinearLayout.LayoutParams] 显式给 `weight=1`：
+     * 这是 `PlayerTool` 样式的核心（`layout_width=0dp` + `weight=1` 才能均分整行），
+     * 重新 addView 时若用默认 params 会全部挤在左边。
+     */
+    private fun applyPlayerTools() {
+        val row = findViewById<android.widget.LinearLayout>(R.id.playerControlsExtra) ?: return
+        val order = playerToolOrder()
+        // ⚠️ 必须先抓视图、再清空（3.0.7 真机「点一下立马闪退」的根因）。
+        // 顺序反过来就是死局：removeAllViews 之后这些按钮已经不在视图树里，
+        // findViewById 全部返回 null —— 一个按钮都加不回去，onCreate 随后
+        // 去查 btnPlayMode 也拿到 null，直接 NPE 崩在启动。
+        if (playerToolViews.isEmpty()) {
+            for (tool in playerToolIds) {
+                findViewById<ImageButton>(playerToolViewId(tool))?.let { playerToolViews[tool] = it }
+            }
+        }
+        row.removeAllViews()
+        for (tool in order) {
+            val v = playerToolViews[tool] ?: continue
+            (v.parent as? android.view.ViewGroup)?.removeView(v)
+            row.addView(
+                v,
+                android.widget.LinearLayout.LayoutParams(0, dp(48f), 1f)
+            )
+            // 视频按钮的顺序由用户定，但「是否对当前歌显示」仍由文件类型决定
+            v.visibility = if (tool == TOOL_VIDEO) {
+                if (isVideoFile(lastSong?.uri)) View.VISIBLE else View.GONE
+            } else {
+                View.VISIBLE
+            }
+        }
+        applyChannelFlipButton()
+        applyDesktopLyricsButton()
+    }
+
+    /**
+     * 只刷新视频按钮的显隐（3.0.7）。
+     *
+     * 为什么要单独一个函数：切歌时要知道「这首歌是不是视频」，
+     * 但这个判断**不能**直接写 visibility —— 用户可能压根没把视频按钮加进工具行。
+     * 所以先看配置里有没有，再看文件类型。
+     */
+    private fun updateVideoToolVisibility() {
+        // 3.0.7.1：同样要容忍「用户把视频按钮从工具行里去掉」的情况
+        val btn = playerToolView(TOOL_VIDEO) ?: return
+        val wanted = playerToolOrder().contains(TOOL_VIDEO)
+        btn.visibility = if (wanted && isVideoFile(lastSong?.uri)) View.VISIBLE else View.GONE
+    }
+
+    /**
+     * 工具行自定义面板（3.0.7）。交互与「导航栏」弹窗完全一致：
+     * 每项一行，右侧开关控制显隐，勾上后可用 ↑↓ 调整顺序。
+     */
+    private fun showPlayerToolsDialog() {
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(dp(20f), dp(10f), dp(20f), dp(10f))
+        }
+        val order = playerToolOrder()
+
+        fun render() {
+            box.removeAllViews()
+            playerToolIds.forEach { tool ->
+                val visible = order.contains(tool)
+                val row = android.widget.LinearLayout(this@MainActivity).apply {
+                    orientation = android.widget.LinearLayout.HORIZONTAL
+                    gravity = android.view.Gravity.CENTER_VERTICAL
+                }
+                row.addView(android.widget.TextView(this@MainActivity).apply {
+                    text = getString(playerToolLabel(tool))
+                    textSize = 15f
+                    setTextColor(getColor(if (visible) R.color.text_primary else R.color.text_hint))
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                    )
+                })
+                if (visible) {
+                    val idx = order.indexOf(tool)
+                    if (idx > 0) {
+                        row.addView(android.widget.Button(this@MainActivity).apply {
+                            text = getString(R.string.nav_move_up)
+                            setOnClickListener {
+                                val j = order.indexOf(tool)
+                                order.removeAt(j); order.add(j - 1, tool)
+                                savePlayerTools(order); applyPlayerTools(); render()
+                            }
+                        })
+                    }
+                    if (idx < order.size - 1) {
+                        row.addView(android.widget.Button(this@MainActivity).apply {
+                            text = getString(R.string.nav_move_down)
+                            setOnClickListener {
+                                val j = order.indexOf(tool)
+                                order.removeAt(j); order.add(j + 1, tool)
+                                savePlayerTools(order); applyPlayerTools(); render()
+                            }
+                        })
+                    }
+                }
+                row.addView(android.widget.Switch(this@MainActivity).apply {
+                    isChecked = visible
+                    setOnCheckedChangeListener { _, checked ->
+                        if (checked && !order.contains(tool)) {
+                            order.add(tool)
+                        } else if (!checked && order.contains(tool)) {
+                            order.remove(tool)
+                        }
+                        savePlayerTools(order); applyPlayerTools(); render()
+                    }
+                })
+                box.addView(row)
+            }
+            box.addView(android.widget.TextView(this@MainActivity).apply {
+                text = getString(R.string.player_tools_hint)
+                textSize = 12f
+                setTextColor(getColor(R.color.text_hint))
+                setPadding(0, dp(10f), 0, 0)
+            })
+        }
+        render()
+        AccentDialogBuilder(this)
+            .setTitle(R.string.player_tools_title)
+            .setView(box)
+            .setNegativeButton(R.string.close, null)
+            .show()
     }
 
     /** 沉浸歌词显示几行：1（默认，只看当前）或 3（当前 + 上下各一）。 */
@@ -4557,20 +4820,23 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        // 显示声道反转按钮（3.0.3）：默认关闭，避免播放页工具行臃肿（弱志要求做成自定义开关）
-        box.addView(android.widget.Switch(this).apply {
-            isChecked = prefs.getBoolean(KEY_SHOW_CHANNEL_FLIP, false)
-            text = getString(R.string.channel_flip_show_button)
+        // 播放页工具行自定义（3.0.7）
+        //
+        // 弱志 2026-11-09：「播放页图标这条，我记得之前更新声道反转的时候跟你说过
+        // 做成导航栏那种的，但是你只是做成了个开关」。
+        // 这里原先是「显示声道反转按钮」一个 Switch —— 只解决了一个按钮，
+        // 而他要的是像导航栏那样整体可勾选、可排序。改成入口按钮。
+        box.addView(android.widget.Button(this).apply {
+            text = getString(R.string.player_tools_title)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setTextColor(getColor(R.color.accent))
             textSize = 16f
-            setTextColor(getColor(R.color.text_primary))
-            setPadding(0, dp(14f), 0, dp(4f))
-            setOnCheckedChangeListener { _, checked ->
-                prefs.edit().putBoolean(KEY_SHOW_CHANNEL_FLIP, checked).apply()
-                applyChannelFlipButton()
-            }
+            gravity = android.view.Gravity.START or android.view.Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12f), 0, dp(4f))
+            setOnClickListener { showPlayerToolsDialog() }
         })
         box.addView(android.widget.TextView(this).apply {
-            text = getString(R.string.channel_flip_show_button_hint)
+            text = getString(R.string.player_tools_hint)
             textSize = 12f
             setTextColor(getColor(R.color.text_hint))
             setPadding(0, 0, 0, dp(6f))
@@ -5028,7 +5294,7 @@ class MainActivity : AppCompatActivity() {
                 when (which) {
                     0 -> {
                         pendingCoverTarget = "pl:$name"
-                        coverPicker.launch("image/*")
+                        coverPicker.launch(arrayOf("image/*"))
                     }
                     1 -> {
                         CoverManager.clearPlaylistCover(this, name)
@@ -5071,7 +5337,7 @@ class MainActivity : AppCompatActivity() {
                 when (which) {
                     idxCoverSet -> {
                         pendingCoverTarget = "pl:${pl?.name}"
-                        coverPicker.launch("image/*")
+                        coverPicker.launch(arrayOf("image/*"))
                     }
                     idxCoverClear -> {
                         val n = pl?.name ?: return@setItems
@@ -5164,7 +5430,7 @@ class MainActivity : AppCompatActivity() {
                     toast(getString(R.string.batch_cover_empty))
                 } else {
                     pendingBatchSongs = checked
-                    coverPicker.launch("image/*")
+                    coverPicker.launch(arrayOf("image/*"))
                 }
                 d.dismiss()
             }
@@ -5213,7 +5479,7 @@ class MainActivity : AppCompatActivity() {
                     2 -> {
                         pendingCoverTarget = "song:${song.uri}"
                         pendingCoverSong = song
-                        coverPicker.launch("image/*")
+                        coverPicker.launch(arrayOf("image/*"))
                     }
                     3 -> {
                         CoverManager.clearSongCover(this, song.uri.toString(), song.size)
@@ -5582,7 +5848,7 @@ class MainActivity : AppCompatActivity() {
                     // 所以直接用现有的设置封面流程即可
                     2 -> {
                         pendingCoverTarget = "pl:$name"
-                        coverPicker.launch("image/*")
+                        coverPicker.launch(arrayOf("image/*"))
                     }
                     3 -> {
                         CoverManager.clearPlaylistCover(this, name)
@@ -7895,8 +8161,17 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_IMMERSION_ENABLED = "immersion_enabled"
         /** 沉浸歌词显示几行（1 = 只看当前行，3 = 当前 + 上下各一，3.0.3）。 */
         private const val KEY_IMMERSION_LINES = "immersion_lines"
-        /** 是否在播放页显示「左右声道反转」按钮（3.0.3，默认不显示以免工具行臃肿）。 */
+        /** 是否在播放页显示「左右声道反转」按钮（3.0.3；3.0.7 起由工具行自定义接管，仅作迁移兼容）。 */
         private const val KEY_SHOW_CHANNEL_FLIP = "show_channel_flip"
+        /** 播放页工具行配置：逗号分隔的 tool id，顺序即显示顺序（3.0.7）。 */
+        private const val KEY_PLAYER_TOOLS = "player_tools"
+        const val TOOL_TIMER = "timer"
+        const val TOOL_PLAY_MODE = "playmode"
+        const val TOOL_QUEUE = "queue"
+        const val TOOL_LYRICS = "lyrics"
+        const val TOOL_VIDEO = "video"
+        const val TOOL_CHANNEL_FLIP = "channel_flip"
+        const val TOOL_DESKTOP_LYRICS = "desktop_lyrics"
         /** 音乐库顶部标题栏密度（3.0.4）：0 完整 / 1 精简 / 2 极简。 */
         private const val KEY_LIB_HEADER = "lib_header_style"
         /**
