@@ -4061,8 +4061,15 @@ class MainActivity : AppCompatActivity() {
         // 顺序反过来就是死局：removeAllViews 之后这些按钮已经不在视图树里，
         // findViewById 全部返回 null —— 一个按钮都加不回去，onCreate 随后
         // 去查 btnPlayMode 也拿到 null，直接 NPE 崩在启动。
-        if (playerToolViews.isEmpty()) {
-            for (tool in playerToolIds) {
+        //
+        // ⚠️ 3.0.7.2：这里**不能**用 `playerToolViews.isEmpty()` 当守卫。
+        // onCreate 里先给队列/歌词/声道反转/桌面歌词绑监听时，[playerToolView]
+        // 已经预热了一部分缓存；轮到本函数时缓存非空、守卫直接跳过，于是
+        // 「定时」「播放模式」「视频」这三项永远抓不到 —— 被 removeAllViews
+        // 摘掉后再也加不回来，界面上就是「面板里勾着、工具行上没有」
+        // （粉丝 2026-11-10 反馈「定时播放没了」）。改为逐项补缺。
+        for (tool in playerToolIds) {
+            if (playerToolViews[tool] == null) {
                 findViewById<ImageButton>(playerToolViewId(tool))?.let { playerToolViews[tool] = it }
             }
         }
