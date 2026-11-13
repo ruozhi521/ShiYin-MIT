@@ -1269,9 +1269,9 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnTranslate).setOnClickListener {
             translateCurrentLyric()
         }
-        // 长按翻译按钮：删除当前歌曲的翻译（1.30）
+        // 长按翻译按钮：导出歌词 / 删除翻译（3.0.8 起改成菜单，原先直接删除）
         findViewById<Button>(R.id.btnTranslate).setOnLongClickListener {
-            deleteCurrentTranslation()
+            showTranslationMenu()
             true
         }
         findViewById<ImageButton>(R.id.btnPrev).setOnClickListener {
@@ -3813,11 +3813,27 @@ class MainActivity : AppCompatActivity() {
         applyAlphaPadding(rv, true)
     }
 
-    /** 索引条可见时给列表右侧留出空间，否则字母会压在卡片上。 */
+    /**
+     * 索引条可见时的处理（3.0.8 改）。
+     *
+     * ⚠️ 3.0.8 之前这里会 `setPadding(..., paddingEnd = 22dp)` 给字母条腾地方，
+     * 结果粉丝反馈「开启首字母导航会把网格图标往左边挤，看着不太美观」——
+     * 列表可用宽度一变，GridLayoutManager 重新均分，卡片变窄；
+     * 而 [GridSpacingDecoration] 把间距全留在卡片之间（最后一列右侧为 0），
+     * 于是整个网格缩到左边，右边空出一条 padding。
+     *
+     * 现在改成**不动列表布局**：字母条是浮层，[AlphaIndexBar] 自带半透明底，
+     * 压在卡片上也看得清 —— 这也是微信通讯录 / salt player 的做法。
+     * 网格位置与卡片尺寸完全不受字母条影响。
+     */
     private fun applyAlphaPadding(rv: RecyclerView, indexed: Boolean) {
-        val end = if (indexed) dp(22f) else 0
-        if (rv.paddingEnd != end) {
-            rv.setPadding(rv.paddingLeft, rv.paddingTop, end, rv.paddingBottom)
+        // 3.0.8 起字母条是浮层，**不再改动列表布局**，所以这里只做一件事：
+        // 清理历史残留。3.0.8 之前装过的用户，列表上可能还留着旧版加的
+        // 22dp paddingEnd —— 不清掉的话网格始终偏左（开着索引条时也要清，
+        // 因为现在已经不需要为字母条腾位置了）。
+        if (rv.paddingEnd != 0) {
+            rv.setPadding(rv.paddingLeft, rv.paddingTop, 0, rv.paddingBottom)
+            applyPlaylistGridDensity()
         }
     }
 
@@ -6544,6 +6560,80 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    /**
+     * 长按「翻译」按钮弹出的菜单（3.0.8）。
+     *
+     * 以前长按是**直接**删译文 —— 一个危险操作藏在长按里，误触就没了。
+     * 现在改成菜单：导出歌词（双语/只译文/只原文）+ 删除。
+     *
+     * 粉丝（B 站「月夜伴花落」）：「翻译出来的文本可以导出来吗，现在的好像
+     * 导出来的只有日文 lrc 歌词文件」——以前译文只活在缓存里，从不落盘。
+     */
+    private fun showTranslationMenu() {
+        val song = lastSong
+        if (song == null) {
+            toast(getString(R.string.trans_none))
+            return
+        }
+        val hasTrans = !translationCache[song.uri.toString()].isNullOrEmpty()
+        val labels = mutableListOf<String>()
+        val actions = mutableListOf<() -> Unit>()
+        // 没有译文时只给「只导原文」，导译文/双语出来是空的
+        if (hasTrans) {
+            labels.add(getString(R.string.trans_export_bilingual))
+            actions.add { exportLyric(LyricExportRules.Mode.BILINGUAL) }
+            labels.add(getString(R.string.trans_export_only))
+            actions.add { exportLyric(LyricExportRules.Mode.TRANSLATION_ONLY) }
+        }
+        labels.add(getString(R.string.trans_export_original))
+        actions.add { exportLyric(LyricExportRules.Mode.ORIGINAL) }
+        if (hasTrans) {
+            labels.add(getString(R.string.delete))
+            actions.add { deleteCurrentTranslation() }
+        }
+        AccentDialogBuilder(this)
+            .setTitle(R.string.trans_menu_title)
+            .setItems(labels.toTypedArray()) { _, which ->
+                actions.getOrNull(which)?.invoke()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /**
+     * 把当前歌词（按 [mode]）导出到音频同目录（3.0.8）。
+     *
+     * 复用 [SpeechRecManager.saveLrcNextToAudio] 那套落盘通道 —— 它已经处理好了
+     * SAF 目录查找、同名复用（不会产生 `lrc(1)/(2)` 垃圾）、无权限时退回应用内目录。
+     * 文件名按模式加后缀：`歌名.双语.lrc` / `歌名.译文.lrc` / `歌名.lrc`，
+     * 这样导双语不会把原来那份原文 lrc 覆盖掉。
+     */
+    private fun exportLyric(mode: LyricExportRules.Mode) {
+        val song = lastSong ?: return
+        val trans = translationCache[song.uri.toString()] ?: emptyMap()
+        if (lyricLines.isEmpty()) {
+            toast(getString(R.string.lyric_no_time))
+            return
+        }
+        if (!LyricExportRules.hasContent(lyricLines, trans, mode)) {
+            toast(getString(R.string.trans_none))
+            return
+        }
+        val content = LyricExportRules.build(lyricLines, trans, mode)
+        val where = SpeechRecManager.saveLrcNextToAudio(
+            this,
+            song.uri,
+            savedTreeUris(),
+            content,
+            LyricExportRules.fileNameSuffix(mode)
+        )
+        if (where != null) {
+            toast(getString(R.string.trans_export_done, where))
+        } else {
+            toast(getString(R.string.trans_export_failed))
+        }
+    }
+
     /** 删除当前歌曲已保存的翻译（长按翻译按钮触发，1.30）。 */
     private fun deleteCurrentTranslation() {
         val song = lastSong ?: return
@@ -7939,6 +8029,9 @@ class MainActivity : AppCompatActivity() {
      * 所以自己存引用）；封面高度也要跟着列宽缩，否则卡片会被拉成竖长条。
      */
     private fun applyPlaylistGridDensity() {
+        // 3.0.8：本函数现在也会被 applyAlphaPadding 调用，而后者可能在
+        // onCreate 早期（gridAdapter 还没建）触发 —— 直接读 lateinit 会崩。
+        if (!::gridAdapter.isInitialized) return
         val cols = playlistColumns()
         // 列多时卡片窄，间距适当收紧（2 列仍用原来的 24dp）
         val spacingPx = dp(
@@ -7957,11 +8050,20 @@ class MainActivity : AppCompatActivity() {
             recyclerPlaylistsPage.addItemDecoration(it)
         }
         // 封面高度 = 单列卡片宽度（页面左右各 20dp padding）→ 保持方形
-        val usable = resources.displayMetrics.widthPixels - dp(40f) - spacingPx * (cols - 1)
-        val coverPx = (usable / cols).coerceAtLeast(dp(56f))
-        gridAdapter.setCoverHeightPx(coverPx)
+        //
+        // 3.0.8：字母条改成浮层后不再占用列表宽度（paddingEnd 恒为 0）。
+        // 仍要减掉 paddingEnd，是为了兼容 3.0.8 之前装过的用户 —— 他们的列表上
+        // 可能还残留着旧版加的 22dp paddingEnd，不减掉卡片会被拉成竖长条。
+        // 残留由 [applyAlphaPadding] 在下次刷新时清掉。
+        val navW = recyclerPlaylists.paddingEnd
+        val usableLib = resources.displayMetrics.widthPixels - dp(40f) - navW -
+            spacingPx * (cols - 1)
+        gridAdapter.setCoverHeightPx((usableLib / cols).coerceAtLeast(dp(56f)))
+        // 歌单页没有索引条，不扣
+        val usablePage = resources.displayMetrics.widthPixels - dp(40f) -
+            spacingPx * (cols - 1)
         if (::playlistsPageAdapter.isInitialized) {
-            playlistsPageAdapter.setCoverHeightPx(coverPx)
+            playlistsPageAdapter.setCoverHeightPx((usablePage / cols).coerceAtLeast(dp(56f)))
         }
     }
 

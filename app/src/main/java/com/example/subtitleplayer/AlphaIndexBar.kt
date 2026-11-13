@@ -69,6 +69,10 @@ class AlphaIndexBar @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         if (letters.isEmpty()) return
+        // 3.0.8：字母条现在是**浮在列表上**的（不再给列表留 padding，
+        // 否则网格会被挤窄、整体左偏 —— 粉丝反馈）。所以自己画一层
+        // 半透明胶囊底，压在封面上也看得清。
+        drawBackdrop(canvas)
         val itemH = itemHeightPx()
         for (i in letters.indices) {
             val cy = itemH * i + itemH / 2f
@@ -86,6 +90,22 @@ class AlphaIndexBar @JvmOverloads constructor(
     }
 
     private fun itemHeightPx(): Float = itemHeightDp * density
+
+    /**
+     * 字母条背后的半透明胶囊（3.0.8）。
+     *
+     * 为什么需要：3.0.8 起字母条改成**浮在列表上**（不再给列表留 padding，
+     * 否则网格会被挤窄左偏）。压在封面图上时若没有底色，字母会与图片糊在一起。
+     * 用圆角矩形铺满整个控件，四周留 1dp 内缩，视觉上就是一根细胶囊。
+     */
+    private fun drawBackdrop(canvas: Canvas) {
+        bgPaint.color = 0x33000000
+        val r = width / 2f
+        canvas.drawRoundRect(
+            1f, 1f, width - 1f, height - 1f,
+            r, r, bgPaint
+        )
+    }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (letters.isEmpty()) return false

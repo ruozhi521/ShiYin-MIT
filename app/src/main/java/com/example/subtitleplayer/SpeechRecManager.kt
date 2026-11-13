@@ -968,11 +968,19 @@ object SpeechRecManager {
 
     private data class LrcTarget(val safUri: Uri?, val file: File?, val desc: String)
 
-    private fun internalLrcTarget(context: Context, audioUri: Uri): LrcTarget {
+    private fun internalLrcTarget(
+        context: Context,
+        audioUri: Uri,
+        nameSuffix: String = ""
+    ): LrcTarget {
         val stem = (audioUri.lastPathSegment ?: "lyrics")
             .substringAfterLast('/').substringBeforeLast('.')
         val dir = File(context.filesDir, "asr_lrc").apply { mkdirs() }
-        return LrcTarget(null, File(dir, "$stem.lrc"), "应用内 asr_lrc/$stem.lrc")
+        return LrcTarget(
+            null,
+            File(dir, "$stem$nameSuffix.lrc"),
+            "应用内 asr_lrc/$stem$nameSuffix.lrc"
+        )
     }
 
     /**
@@ -1014,7 +1022,19 @@ object SpeechRecManager {
     }
 
     /** 识别开始前创建 lrc 目标：SAF 同目录优先（自动入歌词库），兜底应用私有目录。 */
-    private fun createLrcTarget(context: Context, audioUri: Uri, treeUris: List<Uri>): LrcTarget {
+    /**
+     * 决定歌词写到哪（3.0.8 起支持自定义文件名后缀）。
+     *
+     * @param nameSuffix 文件名后缀，默认空 → `歌名.lrc`；导出译文时传 `".双语"` → `歌名.双语.lrc`。
+     *   复用同一套 SAF 目录查找/复用逻辑，避免两处实现走样（粉丝反馈的 `lrc(1)/(2)` 重复建文件
+     *   问题就是「另写一套」导致的）。
+     */
+    private fun createLrcTarget(
+        context: Context,
+        audioUri: Uri,
+        treeUris: List<Uri>,
+        nameSuffix: String = ""
+    ): LrcTarget {
         val docId = try {
             DocumentsContract.getDocumentId(audioUri)
         } catch (e: Exception) {
@@ -1032,7 +1052,7 @@ object SpeechRecManager {
                         docId.substringBeforeLast('/')
                     } else treeDocId
                     val parentUri = DocumentsContract.buildDocumentUriUsingTree(tree, parentDocId)
-                    val lrcName = "$stem.lrc"
+                    val lrcName = "$stem$nameSuffix.lrc"
                     // 2.14：先查同名是否已存在——存在就复用（覆写），绝不新建带序号的副本。
                     // 这是「重复点生成歌词产生 lrc(1)/(2)/(3)」的直接修复点。
                     val existing = findChildByName(context, tree, parentDocId, lrcName)
@@ -1069,7 +1089,7 @@ object SpeechRecManager {
         } else {
             PlaybackLog.log("asr lrc target: non-document uri -> internal")
         }
-        val fb = internalLrcTarget(context, audioUri)
+        val fb = internalLrcTarget(context, audioUri, nameSuffix)
         PlaybackLog.log("asr lrc target fallback -> ${fb.desc}")
         return fb
     }
@@ -1113,9 +1133,10 @@ object SpeechRecManager {
         context: Context,
         audioUri: Uri,
         treeUris: List<Uri>,
-        content: String
+        content: String,
+        nameSuffix: String = ""
     ): String? {
-        val target = createLrcTarget(context, audioUri, treeUris)
+        val target = createLrcTarget(context, audioUri, treeUris, nameSuffix)
         return if (writeLrc(context, target, content)) target.desc else null
     }
 

@@ -260,6 +260,14 @@
     <string name="trans_delete_confirm">删除这首歌的全部翻译？删除后可重新翻译</string>
     <string name="trans_deleted">已删除本歌翻译</string>
     <string name="trans_none">这首歌还没有保存过翻译</string>
+    <!-- 3.0.8：译文导出（粉丝：翻译出来的文本能导出吗，现在只有日文 lrc） -->
+    <string name="trans_export">导出歌词</string>
+    <string name="trans_export_bilingual">双语（原文 + 译文）</string>
+    <string name="trans_export_only">只导译文</string>
+    <string name="trans_export_original">只导原文</string>
+    <string name="trans_export_done">已导出：%1$s</string>
+    <string name="trans_export_failed">导出失败，请确认音乐文件夹的写入权限</string>
+    <string name="trans_menu_title">翻译</string>
     <string name="trans_busy">正在翻译中，请稍后再试</string>
     <!-- 3.0 修复：翻译中途取消（此前取消按钮只管识别，对翻译无效） -->
     <string name="trans_cancelling">正在取消翻译…</string>
@@ -346,7 +354,7 @@
     <string name="title_from_filename_hint">忽略标签标题，重新扫描后生效</string>
     <string name="tab_video">视频</string>
     <string name="videos_empty">这个导航页还没有视频文件\n把含视频的文件夹添加进音乐库即可</string>
-    <string name="about_version">版本 3.0.7.2</string>
+    <string name="about_version">版本 3.0.8</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>

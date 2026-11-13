@@ -114,6 +114,18 @@ class MediaPlaybackService : Service() {
     private var durationMs = 0
     private var speed = 1f
     /**
+     * 3.0.8：进行中的精确 seek 目标（-1 = 没有 seek 在进行）。
+     *
+     * 为什么需要：`seekTo` 是**异步**的，调用返回时引擎还在旧位置。而进度轮询
+     * 每 300ms 读一次位置去算当前歌词行 —— 若 seek 尚未落定，读到的是旧位置，
+     * 刚点高的那一行会被立刻弹回原来的行。粉丝说的「定位不准」里，有一半是这个
+     * 视觉现象（另一半是落点精度，见 [SeekPrecisionRules]）。
+     * 做法：seek 期间把**对外报告的位置**锁定成目标值，引擎真的到位后再交还。
+     */
+    private var seekLockTargetMs = -1
+    /** 发起 seek 的时刻（elapsedRealtime），用于兜底超时。 */
+    private var seekLockAtMs = 0L
+    /**
      * 播放失败过的歌（uri）。onError 自动切歌的熔断依据：
      * 整轮列表全部失败过才停止，而不是「连续失败」——部分机型
      * prepare 成功但 start 后解码报错，连续计数会被 onPrepared 之外
@@ -162,7 +174,9 @@ class MediaPlaybackService : Service() {
     private val progressRunnable = object : Runnable {
         override fun run() {
             if (isPrepared) {
-                val pos = enginePosition()
+                // 3.0.8：用 reportedPosition 而非 enginePosition —— seek 进行中
+                // 必须报目标值，否则刚点高的歌词行会被这次轮询弹回去
+                val pos = reportedPosition()
                 listener?.onProgress(pos, durationMs, lyricIndexAt(pos))
                 desktopLyrics?.updateText(lyricTextAt(pos))
                 tick++
@@ -382,11 +396,36 @@ class MediaPlaybackService : Service() {
     }
 
     /** 当前引擎的播放位置（毫秒）。 */
-    private fun enginePosition(): Int = try {
+    private fun enginePosition(): Int = engineRawPosition()
+
+    /**
+     * 引擎**真实**位置，不做任何修正。
+     *
+     * 与 [enginePosition] 分开是因为：seek 期间对外要报目标值（否则歌词高亮被弹回），
+     * 但判断「有没有跳到位」又必须看真实位置。
+     */
+    private fun engineRawPosition(): Int = try {
         if (engineShouldUseExo()) (exoPlayer?.currentPosition ?: 0L).toInt()
         else mediaPlayer?.currentPosition ?: 0
     } catch (e: Exception) {
         0
+    }
+
+    /**
+     * 当前对外报告的位置（3.0.8）。
+     *
+     * seek 进行中且引擎还没到位时返回目标值，落定/超时后返回真实位置。
+     * 规则全部在 [SeekPrecisionRules.reportPosition] 里，这里只负责取数。
+     */
+    private fun reportedPosition(): Int {
+        if (seekLockTargetMs < 0) return engineRawPosition()
+        val elapsed = android.os.SystemClock.elapsedRealtime() - seekLockAtMs
+        val reported = SeekPrecisionRules.reportPosition(
+            seekLockTargetMs, engineRawPosition(), elapsed
+        )
+        // 落定或超时：解除锁定，之后完全交还给引擎
+        if (reported != seekLockTargetMs) seekLockTargetMs = -1
+        return reported
     }
 
     /** 当前引擎的音频会话 id（均衡器挂载用；未初始化返回 null）。 */
@@ -440,19 +479,36 @@ class MediaPlaybackService : Service() {
         return next
     }
 
-    fun seekTo(ms: Int) {
+    /**
+     * 跳到指定毫秒（3.0.8 起改为**精确** seek）。
+     *
+     * ⚠️ 为什么参数要变成 `SEEK_CLOSEST`：`MediaPlayer.seekTo(int)` 等
+     * `SEEK_PREVIOUS_SYNC`，一律跳到目标**之前**的最近同步帧，不是目标位置。
+     * MP3 一帧 26ms 时误差不明显，但 VBR 文件缺 Xing 头时系统按 CBR 外推时间戳，
+     * 能偏几百毫秒 —— 粉丝反馈「只有部分音频」不准正是这个原因
+     * （他用 iQOO 自带的播放器也一样不准，说明是引擎行为，不是歌词文件）。
+     *
+     * @param ms 目标毫秒
+     * @param precise true = 精确到最近帧（点歌词跳转用）；false = 旧的同步帧语义
+     */
+    fun seekTo(ms: Int, precise: Boolean = true) {
         if (!isPrepared) return
+        val target = ms.coerceIn(0, if (durationMs > 0) durationMs else Int.MAX_VALUE)
         try {
             if (engineShouldUseExo()) {
-                exoPlayer?.seekTo(ms.coerceIn(0, durationMs).toLong())
+                exoPlayer?.seekTo(target.toLong())
             } else {
                 val mp = mediaPlayer ?: return
-                mp.seekTo(ms.coerceIn(0, durationMs))
+                mp.seekTo(target.toLong(), SeekPrecisionRules.mediaPlayerMode(precise))
             }
+            // 锁定对外报告的位置：seek 是异步的，若不锁，300ms 后的进度轮询
+            // 会读到旧位置，把刚点高的歌词行弹回去（见 SeekPrecisionRules 注释）
+            seekLockTargetMs = target
+            seekLockAtMs = android.os.SystemClock.elapsedRealtime()
             // 刷新会话 position，通知进度与播放器同步（否则暂停时 seek 后通知停在旧位置）
             updateMediaSession(isPlaying())
         } catch (e: Exception) {
-            // ignore
+            seekLockTargetMs = -1
         }
     }
 
@@ -516,7 +572,7 @@ class MediaPlaybackService : Service() {
 
     fun currentSpeed(): Float = speed
 
-    fun currentPosition(): Int = enginePosition()
+    fun currentPosition(): Int = reportedPosition()
 
     fun currentDuration(): Int = durationMs
 
@@ -669,7 +725,8 @@ class MediaPlaybackService : Service() {
     fun pushState() {
         listener?.onSongChanged(currentSong(), lyricLines, lyricName)
         if (isPrepared) {
-            val pos = enginePosition()
+            // 3.0.8：与进度轮询保持一致，seek 期间也报目标值
+            val pos = reportedPosition()
             listener?.onProgress(pos, durationMs, lyricIndexAt(pos))
         }
         listener?.onPlayStateChanged(isPlaying())
@@ -1294,7 +1351,7 @@ class MediaPlaybackService : Service() {
         } catch (e: Exception) {
             emptyMap()
         }
-        desktopLyrics?.updateText(lyricTextAt(enginePosition()))
+        desktopLyrics?.updateText(lyricTextAt(reportedPosition()))
     }
 
     /**
@@ -1307,7 +1364,7 @@ class MediaPlaybackService : Service() {
         loadLyric(song)
         listener?.onSongChanged(song, lyricLines, lyricName)
         lyriconBridge.syncSong(song, lyricLines, lyricTrans, durationMs)
-        desktopLyrics?.updateText(lyricTextAt(enginePosition()))
+        desktopLyrics?.updateText(lyricTextAt(reportedPosition()))
     }
 
     // ---------- 桌面歌词 ----------
@@ -1339,7 +1396,7 @@ class MediaPlaybackService : Service() {
             }
             val overlay = desktopLyrics ?: DesktopLyricsOverlay(this).also { desktopLyrics = it }
             overlay.show()
-            overlay.updateText(lyricTextAt(enginePosition()))
+            overlay.updateText(lyricTextAt(reportedPosition()))
             sp.edit().putBoolean(KEY_DESKTOP_ON, true).apply()
         } else {
             desktopLyrics?.hide()
@@ -1548,7 +1605,7 @@ class MediaPlaybackService : Service() {
                     PlaybackState.ACTION_SKIP_TO_PREVIOUS or
                     PlaybackState.ACTION_SEEK_TO
             )
-            .setState(state, enginePosition().toLong(), if (playing) 1f else 0f)
+            .setState(state, reportedPosition().toLong(), if (playing) 1f else 0f)
             .build()
         mediaSession?.setPlaybackState(ps)
 
