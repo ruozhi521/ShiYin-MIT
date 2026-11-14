@@ -832,8 +832,9 @@ class MainActivity : AppCompatActivity() {
         // 3.0.1：运行日志实时落盘 —— 闪退后重开时内存缓冲已清空，只有落盘才留得住崩溃前的最后几条
         // （粉丝反馈：崩过一次后重开，导出的日志里完全没有崩溃前的内容，查不到崩在哪一步）
         PlaybackLog.attach(applicationContext)
-        // 3.1：安装汉字→拼音转换器。排序与首字母索引都依赖它，必须在使用前装好。
-        NameOrder.installIcuPinyin()
+        // 3.1：拼音转换器改为**懒初始化**（见 NameOrder.pinyinProvider）。
+        // 这里不再主动安装 —— 上一版在 onCreate 主线程初始化 ICU 转写规则，
+        // 是「启动变慢」的直接原因之一，而大部分启动场景根本用不到拼音。
         val pendingCrash = CrashCatcher.takeCrashLog(this)
         // 在 Activity 创建前应用保存的深色模式（进程级设置，不调用会回系统默认导致深色失效）
         applyDarkMode(prefs.getBoolean(KEY_DARK, false))

@@ -180,6 +180,81 @@ class NameOrderTest {
         assertEquals("abc", NameOrder.sortKey("ABC", boom))
     }
 
+    /**
+     * ⚠️ 性能回归测试：**纯英文 / 假名 / 数字不调用拼音转换**。
+     *
+     * 背景（实机反馈）：3.1 首版把每个歌名都送进 ICU 转写，
+     * `Transliterator.transliterate()` 比字符比较慢约三个数量级，
+     * 几千首歌在主线程转写几千次 —— 用户实测「启动速度慢了很多」。
+     *
+     * 音乐库里大量是纯英文歌名、日文假名歌名（日文歌尤其多），
+     * 它们根本没有汉字可转，转了也是原样返回。
+     *
+     * 用计数转换器来钉死这条：只要哪天有人把 isHan 守卫删掉，这里立刻失败。
+     */
+    @Test
+    fun nonHanNames_neverCallPinyinConverter() {
+        var calls = 0
+        val counting: (String) -> String = { s ->
+            calls++
+            s
+        }
+        // 纯英文、纯假名、纯数字、符号 —— 一个汉字都没有
+        NameOrder.sortKey("Shape of You", counting)
+        NameOrder.sortKey("シルエット", counting)
+        NameOrder.sortKey("12345", counting)
+        NameOrder.sortKey("★★★★", counting)
+        assertEquals("非汉字歌名不应触发拼音转换（否则启动会明显变慢）", 0, calls)
+
+        // 含汉字才允许调用
+        NameOrder.sortKey("周杰伦", counting)
+        assertEquals("含汉字时应该调用转换器", 1, calls)
+    }
+
+    /** 混合串（汉字 + 英文）也必须转换：只要有一个汉字就要转，否则排序键会错。 */
+    @Test
+    fun mixedHanAndLatin_stillCallsConverter() {
+        var calls = 0
+        val counting: (String) -> String = { s ->
+            calls++
+            s
+        }
+        NameOrder.sortKey("周杰伦 Jay", counting)
+        assertEquals(1, calls)
+    }
+
+    /** 排序键缓存：同一名字连续取两次，转换器只被调用一次。 */
+    @Test
+    fun keyOf_cachesRepeatedNames() {
+        var calls = 0
+        NameOrder.pinyinProvider = { s ->
+            calls++
+            s.replace("周", "zhou")
+        }
+        try {
+            NameOrder.keyOf("周杰伦")
+            NameOrder.keyOf("周杰伦")
+            NameOrder.keyOf("周杰伦")
+            assertEquals("重复歌名应命中缓存，只转一次", 1, calls)
+        } finally {
+            NameOrder.pinyinProvider = null
+        }
+    }
+
+    /** 切换拼音源必须清空缓存，否则会读到按旧源算的键。 */
+    @Test
+    fun switchingPinyinProvider_invalidatesCache() {
+        try {
+            NameOrder.pinyinProvider = { s -> s.replace("周", "aaa") }
+            val first = NameOrder.keyOf("周")
+            NameOrder.pinyinProvider = { s -> s.replace("周", "zzz") }
+            val second = NameOrder.keyOf("周")
+            assertTrue("换源后必须重新计算，实际 first=$first second=$second", first != second)
+        } finally {
+            NameOrder.pinyinProvider = null
+        }
+    }
+
     @Test
     fun stableOrderForIdenticalNames() {
         val got = NameOrder.sortByNames(listOf("b", "a", "a", "c"), fakePinyin) { it }

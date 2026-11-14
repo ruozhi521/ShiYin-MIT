@@ -42,28 +42,126 @@ import java.util.Locale
 object NameOrder {
 
     /**
-     * 全局拼音转换器。
+     * 汉字→拼音的转换器（**懒初始化**）。
      *
-     * 生产环境由 [installIcuPinyin] 注入 ICU 实现；单测里替换成固定映射。
-     * 为 null 时退化为「直接用原串」（中文按码位排，与 3.0.8 之前一致，不会崩）。
+     * ## 为什么改成懒加载
      *
-     * 为什么是全局可变：排序发生在扫描线程、UI 线程、单测三处，逐个传参会把
-     * 签名污染一路。这里只注入一次、只读使用，代价最小。
+     * 上一版在 `onCreate` 里直接调 `installIcuPinyin()`，也就是**每次启动都在主线程**
+     * 初始化 ICU：`Transliterator.getInstance("Han-Latin")` 首次要加载并编译转写规则，
+     * 这一步本身就慢。而绝大多数启动场景根本用不到拼音（没开「按名称排序」、
+     * 列表项数不到显示索引条的门槛）—— 白付一次初始化成本。
+     *
+     * 现在改成用到时才初始化：真正要排序/建索引时才会付这一次钱，
+     * 且那时通常已经在后台线程（扫描）或列表已有数据（UI 不敏感）。
+     *
+     * ## 可写性
+     *
+     * 单测要注入固定映射，所以保持 var。赋值即视为「已就绪」，
+     * 不会再触发 ICU 初始化。
      */
+    var pinyinProvider: ((String) -> String)?
+        get() {
+            ensurePinyin()
+            return provider
+        }
+        set(value) {
+            provider = value
+            pinyinReady = true
+            // ⚠️ 拼音源一变，之前缓存的排序键就全废了（那是按旧源算的）。
+            // 不清的话：单测里 install()/restore() 切换源之后，仍会读到上一条用例
+            // 留下的旧键；生产里若将来支持运行时切换（比如换语言），排序会静默错乱。
+            synchronized(keyCache) { keyCache.clear() }
+        }
+
     @Volatile
-    var pinyinProvider: ((String) -> String)? = null
+    private var provider: ((String) -> String)? = null
 
-    /** 用全局拼音源算排序键。 */
-    fun keyOf(name: String?): String = sortKey(name, pinyinProvider)
+    @Volatile
+    private var pinyinReady = false
 
-    /** 用全局拼音源取首字母（索引条用，与排序同源）。 */
-    fun letterOf(name: String?): Char = letterOf(name, pinyinProvider)
+    /** 首次访问时才创建 ICU 转写器；失败则退化为 null（原串排序），不影响可用性。 */
+    private fun ensurePinyin() {
+        if (pinyinReady) return
+        synchronized(this) {
+            if (pinyinReady) return
+            provider = createIcuPinyin()
+            pinyinReady = true
+        }
+    }
+
+    private fun createIcuPinyin(): ((String) -> String)? = try {
+        val t = android.icu.text.Transliterator.getInstance("Han-Latin")
+        // ⚠️ 必须显式声明类型并**单独赋值再返回**：直接写
+        // `{ s -> ... }` 紧跟上一行会被 Kotlin 解析成上一行的 trailing lambda
+        // （getInstance 有重载，于是报出一堆「Int 期望」的怪错）。
+        val f: (String) -> String = { s ->
+            try {
+                t.transliterate(s)
+            } catch (e: Throwable) {
+                s
+            }
+        }
+        f
+    } catch (e: Throwable) {
+        // ICU 不可用（极少见）：退化为原串排序，不影响可用性
+        PlaybackLog.log("pinyin unavailable: ${e.javaClass.simpleName}")
+        null
+    }
 
     /**
-     * 用全局拼音源排序（预计算键，每元素只转换一次）。
+     * 排序键缓存。
+     *
+     * 为什么必须有：一次 `LibraryCache.load()` 里同一批歌名会被排序**两遍**
+     * （一遍按文件夹分组内排序、一遍 allSongs 整体排序），没有缓存就是两次全量转写。
+     * 歌名重复度还很高（同名不同格式、同专辑多曲），缓存命中率不低。
+     *
+     * 容量设上限：库可能有几万首，不能无限增长。超限直接整体清空 ——
+     * 排序是批量操作，清空后重新填充比维护 LRU 链表更简单，也不会错。
      */
-    fun <T> sortedByNames(items: List<T>, nameOf: (T) -> String?): List<T> =
-        sortByNames(items, pinyinProvider, nameOf)
+    private val keyCache = HashMap<String, String>(512)
+    private const val KEY_CACHE_MAX = 4096
+
+    /**
+     * 带缓存的排序键。UI 线程（索引条）与后台线程（扫描/读缓存）都会调用，
+     * 所以加锁 —— 排序本身是纯函数，锁粒度放在缓存读写上即可。
+     */
+    fun keyOf(name: String?): String {
+        val src = name?.trim().orEmpty()
+        if (src.isEmpty()) return ""
+        synchronized(keyCache) {
+            keyCache[src]?.let { return it }
+        }
+        val v = sortKey(src, pinyinProvider)
+        synchronized(keyCache) {
+            if (keyCache.size > KEY_CACHE_MAX) keyCache.clear()
+            keyCache[src] = v
+        }
+        return v
+    }
+
+    /** 用全局拼音源取首字母（索引条用，与排序同源）。走缓存，避免每次刷新重转全部名字。 */
+    fun letterOf(name: String?): Char {
+        val key = keyOf(name)
+        val first = key.firstOrNull() ?: return AlphaIndexRules.OTHER
+        val upper = first.uppercaseChar()
+        return if (upper in 'A'..'Z') upper else AlphaIndexRules.OTHER
+    }
+
+    /**
+     * 用全局拼音源排序（走缓存，每首歌名只转一次、跨多次排序复用）。
+     *
+     * ⚠️ 实现里用 [keyOf] 而不是 [sortKey]：后者是纯函数、没有缓存，
+     * 而 `LibraryCache.load()` 会把同一批歌名连排两遍（分组内 + allSongs），
+     * 走纯函数等于全量转写两遍 —— 启动变慢的主因之一就在这里。
+     */
+    fun <T> sortedByNames(items: List<T>, nameOf: (T) -> String?): List<T> {
+        if (items.size <= 1) return items
+        val keyed = items.map { it to keyOf(nameOf(it)) }
+        return keyed.sortedWith(Comparator { p1, p2 ->
+            val c = naturalCompare(p1.second, p2.second)
+            if (c != 0) c else (nameOf(p1.first) ?: "").compareTo(nameOf(p2.first) ?: "")
+        }).map { it.first }
+    }
 
     /**
      * 用全局拼音源构造比较器。**每次比较都会重算两侧的键**，
@@ -76,29 +174,6 @@ object NameOrder {
     }
 
     /**
-     * 安装 Android ICU 的汉字→拼音转换器。仅在进程启动时调用一次。
-     *
-     * 用 `Han-Latin` 转写器：把汉字转成带声调的拉丁串（"周杰伦" → "Zhōu Jié Lún"），
-     * 声调符号会在 [sortKey] 里被 lowercase 保留但同音字之间不影响分组，
-     * 对排序与首字母分桶都足够。
-     */
-    fun installIcuPinyin() {
-        try {
-            val t = android.icu.text.Transliterator.getInstance("Han-Latin")
-            pinyinProvider = { s ->
-                try {
-                    t.transliterate(s)
-                } catch (e: Throwable) {
-                    s
-                }
-            }
-        } catch (e: Throwable) {
-            // ICU 不可用（极少见）：保持 null，退化为原串排序，不影响可用性
-            pinyinProvider = null
-        }
-    }
-
-    /**
      * 生成排序键：汉字转拼音、统一小写。
      *
      * @param toPinyin 汉字→拼音的转换（如「周杰伦」→"Zhou Jie Lun"）。
@@ -108,7 +183,14 @@ object NameOrder {
     fun sortKey(name: String?, toPinyin: ((String) -> String)?): String {
         val src = name?.trim().orEmpty()
         if (src.isEmpty()) return ""
-        val converted = if (toPinyin != null) {
+        // ⚠️ 只在**含汉字**时才走 ICU 转写。
+        //
+        // 这一条是性能命门：`Transliterator.transliterate()` 比字符比较慢约三个数量级，
+        // 而音乐库里大量是纯英文、纯假名、纯数字的歌名（日文歌尤其多）。
+        // 不加判断的话，几千首歌的库在主线程转写几千次 —— 实机表现就是启动明显变慢。
+        // 而纯英文/假名本来没有汉字可转，转了也是原样返回，纯属浪费。
+        val hasHan = src.any { isHan(it) }
+        val converted = if (toPinyin != null && hasHan) {
             try {
                 toPinyin(src)
             } catch (e: Throwable) {
@@ -122,6 +204,20 @@ object NameOrder {
         // 不去空格的话「周杰伦」会以 "zhou jie lun" 参与比较，空格会影响
         // 「周杰伦」与「周杰」这类前缀关系的相对位置。
         return converted.lowercase(Locale.ROOT).filterNot { it.isWhitespace() }
+    }
+
+    /**
+     * 是否是汉字（含扩展 A 区与常用兼容区）。
+     *
+     * 只需要覆盖实际会出现在歌曲名里的范围，不用穷举 Unicode 全部 CJK 区段：
+     * 日文假名（3040-30FF）、拉丁、数字都不算汉字 —— 它们转写后仍是自己，
+     * 送进 ICU 纯属浪费。
+     */
+    private fun isHan(c: Char): Boolean {
+        val code = c.code
+        return (code in 0x4E00..0x9FFF) ||   // CJK 统一表意文字
+            (code in 0x3400..0x4DBF) ||       // 扩展 A
+            (code in 0xF900..0xFAFF)          // 兼容表意文字
     }
 
     /**

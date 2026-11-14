@@ -112,9 +112,25 @@ object LibraryCache {
             }
 
             val byFolder = songs.groupBy { it.folder }
+            // ⚠️ 排序单独兜底：**排序失败绝不能等于「库是空的」**。
+            //
+            // 这段以前写成 `NameOrder.sortedByNames(...)` 直接放在大 try 里，
+            // 而外层是 `catch (e: Exception) { null }` —— 只要排序里抛任何异常
+            // （ICU 转写失败、内存不足……），整个 load() 就返回 null，
+            // 界面表现就是「明明有歌却显示没有添加歌曲」。
+            //
+            // 排序只是展示顺序，失败了退回原始顺序即可，没有理由丢掉整个音乐库。
+            fun <T> sortOrKeep(items: List<T>, nameOf: (T) -> String?): List<T> =
+                try {
+                    NameOrder.sortedByNames(items, nameOf)
+                } catch (e: Throwable) {
+                    PlaybackLog.log("cache sort failed (keep original order): ${e.message}")
+                    items
+                }
+
             val playlists = byFolder.map { (name, list) ->
-                Playlist(name, NameOrder.sortedByNames(list) { it.title })
-            }.let { NameOrder.sortedByNames(it) { p -> p.name } }
+                Playlist(name, sortOrKeep(list) { it.title })
+            }.let { sortOrKeep(it) { p -> p.name } }
 
             // 3.0.6：文件夹封面（可选字段，旧缓存没有 → 空表）
             val covers = mutableMapOf<String, android.net.Uri>()
@@ -129,7 +145,7 @@ object LibraryCache {
 
             MusicLibrary(
                 playlists = playlists,
-                allSongs = NameOrder.sortedByNames(songs) { it.title },
+                allSongs = sortOrKeep(songs) { it.title },
                 lyrics = lyrics,
                 folderCovers = covers
             )
