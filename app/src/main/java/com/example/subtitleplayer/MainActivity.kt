@@ -1373,6 +1373,7 @@ class MainActivity : AppCompatActivity() {
         buildNavTabs()
         selectModule(defaultModule())
         applyAppearance()
+        applyBottomDock()
 
         // 恢复上次选择的文件夹（多文件夹 KEY_TREES；savedTreeUris 兼容旧单文件夹 KEY_TREE。
         // 注意不能直接读 KEY_TREE——addTreeUri 写入 KEY_TREES 后会清掉它，读旧 key 会漏掉全部恢复）
@@ -1414,6 +1415,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         cancelImmersion()
+        // 3.1：玻璃刷新循环持有 Handler，不放会一直重绘并泄漏 Activity
+        stopGlassRefresh()
         cdAnimator?.cancel()
         cdAnimator = null
     }
@@ -1465,7 +1468,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 setCompoundDrawablesWithIntrinsicBounds(0, icon, 0, 0)
                 compoundDrawablePadding = dp(4f)
-                background = getDrawable(android.R.drawable.list_selector_background)
+                // 3.1：原先是 android.R.drawable.list_selector_background，
+                // 它的按下态在部分 ROM 上是琥珀黄色块，按一下导航就闪黄（弱志反馈难看）。
+                // 换成跟随主题色的 ripple，见 nav_tab_ripple.xml 的说明。
+                background = getDrawable(R.drawable.nav_tab_ripple)
                 layoutParams = android.widget.LinearLayout.LayoutParams(
                     0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f
                 )
@@ -1714,14 +1720,97 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(context) {
         override fun create(): AlertDialog {
             val d = super.create()
-            d.setOnShowListener { tintDialogButtons(d) }
+            hookDialogCorners(d)
             return d
         }
 
         override fun show(): AlertDialog {
             val d = super.show()
+            // show() 内部已经走过 onCreate，面板这时才存在
+            applyDialogCorners(d)
             tintDialogButtons(d)
             return d
+        }
+    }
+
+    /**
+     * 把圆角逻辑挂到弹窗的 **onShow** 上。
+     *
+     * ## 为什么必须挂在 onShow，而不是 create/show 之后
+     *
+     * 这是连续几版都没修成的真正原因，值得写清楚：
+     *
+     * `AlertDialog.Builder.create()` 只是 `new AlertDialog(...)` + 把 builder 的
+     * 参数塞进去，**不会走 `Dialog.onCreate()`**；面板（`parentPanel`）是在
+     * `Dialog.show()` → `onCreate()` → `installContent()` 里才被 inflate 出来的。
+     *
+     * 而本工程所有弹窗的调用方式是：
+     * ```
+     * settingsDialog = AccentDialogBuilder(this)...create()
+     * settingsDialog?.show()        // 调的是 AlertDialog 实例，不是 Builder
+     * ```
+     * 也就是 **Builder 的 `show()` 重写从来没被调用过**。于是：
+     * - `create()` 里调 `applyDialogCorners()` → 面板还不存在 → `panel == null` → 静默 return；
+     * - Builder 的 `show()` 重写不执行 → 那次也没跑。
+     *
+     * 结果就是「代码明明写了，界面上什么都没变」，而且失败得毫无声息 ——
+     * 截图里那圈 AppCompat 默认的 16dp 白底直角就是证据。
+     *
+     * `setOnShowListener` 在 `onCreate()` 之后、首次绘制之前触发，正是面板
+     * 已 inflate、还没上屏的时机，改背景能立刻反映到这一帧。
+     */
+    private fun hookDialogCorners(d: AlertDialog) {
+        d.setOnShowListener {
+            applyDialogCorners(d)
+            tintDialogButtons(d)
+        }
+    }
+
+    /**
+     * 给弹窗画上圆角（3.1）。
+     *
+     * 三层保障，任一层成立就能出圆角：
+     * 1. **窗口背景**（`bg_dialog_window`）：自带 24dp 圆角 + 12dp inset。
+     *    它不依赖任何 View，只要设置成功就一定有圆角。
+     * 2. **面板背景**（`bg_dialog_panel`）：面板自身再画一层圆角底，
+     *    避免它默认的实心白盖住窗口圆角。
+     * 3. **outline 裁切**：让面板内容（标题、列表）被裁在圆角内。
+     *
+     * inset 是必需的：Dialog 窗口按面板 `wrap_content` 定尺寸，背景若不占地方，
+     * 窗口就正好等于面板大小，圆角紧贴窗口边界会被窗口自身裁掉 —— 看着还是直角。
+     */
+    private fun applyDialogCorners(d: AlertDialog) {
+        try {
+            d.window?.setBackgroundDrawable(
+                androidx.core.content.ContextCompat.getDrawable(
+                    this, R.drawable.bg_dialog_window
+                )
+            )
+        } catch (e: Throwable) {
+            PlaybackLog.log("dialog window bg failed: ${e.message}")
+        }
+
+        val panel = try {
+            d.findViewById<View>(androidx.appcompat.R.id.parentPanel)
+        } catch (e: Throwable) {
+            null
+        }
+        // 实测日志：这一行就是为了避免「静默失败」再发生一次
+        PlaybackLog.log("dialogCorner: panel=${panel != null}")
+        if (panel == null) return
+
+        try {
+            val radius = dp(24f).toFloat()
+            panel.setBackgroundResource(R.drawable.bg_dialog_panel)
+            panel.outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(v: View, outline: android.graphics.Outline) {
+                    outline.setRoundRect(0, 0, v.width, v.height, radius)
+                }
+            }
+            panel.clipToOutline = true
+        } catch (e: Throwable) {
+            // 圆角只是观感，失败绝不能影响弹窗本身可用
+            PlaybackLog.log("dialog panel corner failed: ${e.message}")
         }
     }
 
@@ -2032,10 +2121,15 @@ class MainActivity : AppCompatActivity() {
         // 现在改成显式三档：全屏页隐藏、其它页显示，不留缝。
         val hideNav = p == Page.VIDEO || p == Page.PLAYER || p == Page.LYRICS
         if (hideNav) {
-            if (bottomNav.visibility != View.GONE) bottomNav.visibility = View.GONE
+            if (bottomNav.visibility != View.GONE) {
+                bottomNav.visibility = View.GONE
+                // 3.1：导航隐藏后底部留白要收回（否则内容区白白空出一条）
+                updateDockPadding()
+            }
         } else if (bottomNav.visibility != View.VISIBLE) {
             bottomNav.visibility = View.VISIBLE
             bottomNav.alpha = 1f
+            updateDockPadding()
         }
         // 底部迷你条显隐（与 onSongChanged 共用同一个判定，避免两处副本走样）
         updateMiniPlayerVisibility()
@@ -2068,7 +2162,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateMiniPlayerVisibility() {
         if (!MiniPlayerRules.shouldShow(hasSong, page)) {
-            if (miniPlayer.visibility != View.GONE) miniPlayer.visibility = View.GONE
+            if (miniPlayer.visibility != View.GONE) {
+                miniPlayer.visibility = View.GONE
+                // 3.1：播放条消失 → 内容区底部留白要跟着变少，否则列表底部空一块
+                updateDockPadding()
+            }
         } else if (miniPlayer.visibility != View.VISIBLE) {
             miniPlayer.visibility = View.VISIBLE
             miniPlayer.alpha = 0f
@@ -2079,6 +2177,8 @@ class MainActivity : AppCompatActivity() {
                 .setDuration(250)
                 .setInterpolator(softBounce)
                 .start()
+            // 3.1：播放条出现会占住底部，必须让内容避开它
+            miniPlayer.post { updateDockPadding() }
         }
     }
 
@@ -4665,6 +4765,74 @@ class MainActivity : AppCompatActivity() {
      * 但从设置二级页点进来还要再点一次「主题」才能设置，等于三级菜单，
      * 弱志反馈「不合理」。现在直接摊进「外观与主题」页里。
      */
+    /**
+     * 玻璃参数滑块行（3.1）。
+     *
+     * 拖动过程中**只更新右上角数值**，松手才写入 prefs 并重建背景。
+     * 原因：一个 100 格的拖动若每格都写盘就是 100 次磁盘 IO，而背景重建
+     * （重新捕获 + 模糊）更贵。松手生效对观感完全够 —— 本来就是「调一下看看」的操作。
+     */
+    private fun buildDockSliderRow(
+        prefKey: String,
+        titleRes: Int,
+        hintRes: Int,
+        maxValue: Int,
+        defValue: Int,
+        unit: String
+    ): android.widget.LinearLayout {
+        val row = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+        }
+        val head = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12f), 0, 0)
+        }
+        head.addView(android.widget.TextView(this).apply {
+            text = getString(titleRes)
+            textSize = 16f
+            setTextColor(getColor(R.color.text_primary))
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+            )
+        })
+        val valueView = android.widget.TextView(this).apply {
+            text = "${prefs.getInt(prefKey, defValue)}$unit"
+            textSize = 14f
+            setTextColor(ThemeManager.accent(this@MainActivity))
+        }
+        head.addView(valueView)
+        row.addView(head)
+
+        val bar = android.widget.SeekBar(this).apply {
+            max = maxValue
+            progress = prefs.getInt(prefKey, defValue).coerceIn(0, maxValue)
+            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(
+                    sb: android.widget.SeekBar?, p: Int, fromUser: Boolean
+                ) {
+                    valueView.text = "$p$unit"
+                }
+
+                override fun onStartTrackingTouch(sb: android.widget.SeekBar?) {}
+
+                override fun onStopTrackingTouch(sb: android.widget.SeekBar?) {
+                    prefs.edit().putInt(prefKey, sb?.progress ?: 0).apply()
+                    // 重建背景：模糊强度变了必须重新捕获（旧缓存是按旧半径算的）
+                    applyGlassToDock()
+                }
+            })
+        }
+        row.addView(bar)
+        row.addView(android.widget.TextView(this).apply {
+            text = getString(hintRes)
+            textSize = 12f
+            setTextColor(getColor(R.color.text_hint))
+            setPadding(0, 0, 0, dp(6f))
+        })
+        return row
+    }
+
     private fun buildThemeSettingsBox(): android.widget.LinearLayout {
         val box = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
@@ -4721,6 +4889,66 @@ class MainActivity : AppCompatActivity() {
             setTextColor(getColor(R.color.text_hint))
             setPadding(0, 0, 0, dp(6f))
         })
+
+        // 3.1：底部悬浮（默认开）+ 玻璃质感（默认关，依赖悬浮）
+        box.addView(android.widget.Switch(this).apply {
+            isChecked = floatDockEnabled()
+            text = getString(R.string.float_dock_title)
+            textSize = 16f
+            setTextColor(getColor(R.color.text_primary))
+            setPadding(0, dp(14f), 0, dp(4f))
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(KEY_FLOAT_DOCK, checked).apply()
+                applyBottomDock()
+                // 关掉悬浮时玻璃就没有载体了，一并把界面对齐（不改用户存的值，
+                // 以便重新打开悬浮时玻璃设置还在）
+                applyGlassToDock()
+            }
+        })
+        box.addView(android.widget.TextView(this).apply {
+            text = getString(R.string.float_dock_hint)
+            textSize = 12f
+            setTextColor(getColor(R.color.text_hint))
+            setPadding(0, 0, 0, dp(6f))
+        })
+        box.addView(android.widget.Switch(this).apply {
+            isChecked = glassDockEnabled()
+            text = getString(R.string.glass_dock_title)
+            textSize = 16f
+            setTextColor(getColor(R.color.text_primary))
+            setPadding(0, dp(14f), 0, dp(4f))
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(KEY_GLASS_DOCK, checked).apply()
+                applyGlassToDock()
+            }
+        })
+        box.addView(android.widget.TextView(this).apply {
+            text = getString(R.string.glass_dock_hint)
+            textSize = 12f
+            setTextColor(getColor(R.color.text_hint))
+            setPadding(0, 0, 0, dp(6f))
+        })
+        // 3.1：玻璃的两个可调参数（弱志：预览图里就有的滑块，3.1 漏了）
+        box.addView(
+            buildDockSliderRow(
+                prefKey = KEY_GLASS_ALPHA,
+                titleRes = R.string.glass_alpha_title,
+                hintRes = R.string.glass_alpha_hint,
+                maxValue = 100,
+                defValue = 62,
+                unit = "%"
+            )
+        )
+        box.addView(
+            buildDockSliderRow(
+                prefKey = KEY_GLASS_BLUR,
+                titleRes = R.string.glass_blur_title,
+                hintRes = R.string.glass_blur_hint,
+                maxValue = 60,
+                defValue = 26,
+                unit = "px"
+            )
+        )
 
         // 非当前歌词颜色行（带当前色圆点；长按恢复默认）
         val idleRow = android.widget.LinearLayout(this).apply {
@@ -6930,7 +7158,13 @@ class MainActivity : AppCompatActivity() {
     private fun confirmDeleteAsrModel() {
         AccentDialogBuilder(this)
             .setTitle(R.string.asr_delete_model)
-            .setMessage(R.string.asr_delete_model_confirm)
+            .setMessage(
+                getString(
+                    R.string.asr_delete_model_confirm,
+                    SpeechRecManager.currentSpec(this).displayName,
+                    SpeechRecManager.currentSpec(this).sizeMb
+                )
+            )
             .setPositiveButton(R.string.ok) { _, _ ->
                 val ok = try {
                     SpeechRecManager.modelDir(this).deleteRecursively()
@@ -6949,10 +7183,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showAsrDialog() {
-        val ready = SpeechRecManager.isModelReady(this)
+        val spec = SpeechRecManager.currentSpec(this)
+        val ready = SpeechRecManager.isModelReady(this, spec)
         val builder = AccentDialogBuilder(this)
             .setTitle(R.string.asr_title)
-            .setMessage(getString(if (ready) R.string.asr_ready_msg else R.string.asr_need_model_msg))
+            .setMessage(
+                if (ready) {
+                    getString(R.string.asr_ready_msg, spec.displayName)
+                } else {
+                    getString(R.string.asr_need_model_msg, spec.displayName, spec.sizeMb)
+                }
+            )
             .setNegativeButton(R.string.close, null)
         if (ready) {
             builder.setPositiveButton(R.string.asr_pick_audio) { _, _ ->
@@ -6962,19 +7203,164 @@ class MainActivity : AppCompatActivity() {
                     toast(getString(R.string.asr_failed, e.message))
                 }
             }
-            // 3.0.1：模型可能「长度对、内容坏」（旧版下载断流留下的）—— 给一条自救路
-            builder.setNeutralButton(R.string.asr_delete_model) { _, _ ->
-                confirmDeleteAsrModel()
-            }
         } else {
-            builder.setPositiveButton(R.string.asr_download_model) { _, _ ->
+            builder.setPositiveButton(getString(R.string.asr_download_model, spec.sizeMb)) { _, _ ->
                 showAsrDownloadDialog()
             }
-            builder.setNeutralButton(R.string.asr_import_model) { _, _ ->
-                asrModelPicker.launch(arrayOf("*/*"))
+        }
+        // 3.1：语言切换 + 手动导入 + 删除模型都收进这一个菜单，
+        // 因为 AlertDialog 只有三个按钮位，正面要留给「选音频 / 下载」这个主操作。
+        builder.setNeutralButton(R.string.asr_model_choose) { _, _ -> showAsrModelMenu() }
+        builder.show()
+    }
+
+    /**
+     * 识别语言菜单（3.1）。
+     *
+     * 三项合一：切换语言、手动导入模型、删除当前语言的模型。
+     * 删除也放这里而不是弹窗按钮上 —— 它是个「模型坏了才用」的自救入口，
+     * 摆在主弹窗上容易被误点，而重下的代价是 93~165 MB。
+     */
+    private fun showAsrModelMenu() {
+        val cur = SpeechRecManager.currentSpec(this)
+        val labels = mutableListOf<String>()
+        val actions = mutableListOf<() -> Unit>()
+        for (spec in AsrModelSpecs.ALL) {
+            val downloaded = SpeechRecManager.isModelReady(this, spec)
+            val mark = if (spec.id == cur.id) "✓  " else "     "
+            val suffix = if (downloaded) "" else "（未下载）"
+            labels.add(mark + spec.displayName + suffix)
+            actions.add {
+                if (spec.id != cur.id) {
+                    prefs.edit()
+                        .putString(SpeechRecManager.KEY_ASR_MODEL_ID, spec.id)
+                        .apply()
+                    toast(getString(R.string.asr_model_switched, spec.displayName))
+                }
+                showAsrDialog()
             }
         }
-        builder.show()
+        labels.add(getString(R.string.asr_import_model))
+        actions.add { asrModelPicker.launch(arrayOf("*/*")) }
+        // 3.1：音频增强（VAD / 降噪）。放这里而不是弹窗按钮上 —— AlertDialog 只有
+        // 三个按钮位，正面已经给了「选音频 / 下载」这个主操作。
+        labels.add(getString(R.string.asr_enhance_title))
+        actions.add { showEnhanceMenu() }
+        // 只有当前语言下过模型，才给「删除」——否则删了个空目录没意义
+        if (SpeechRecManager.isModelReady(this, cur)) {
+            labels.add(getString(R.string.asr_delete_model))
+            actions.add { confirmDeleteAsrModel() }
+        }
+        AccentDialogBuilder(this)
+            .setTitle(R.string.asr_model_choose)
+            .setItems(labels.toTypedArray()) { _, which ->
+                actions.getOrNull(which)?.invoke()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /**
+     * 音频增强菜单（3.1）：VAD 与降噪。
+     *
+     * 这是「复杂场景识别不准」的正解 —— 换更大模型收益有限（还可能在大模型
+     * 上更爱幻听），而**输入端污染**才是主因：以前纯伴奏段也被硬塞给模型。
+     *
+     * 两项的默认值刻意不同：
+     * - VAD 默认**开**：跳过的本来就是识别不出东西的窗，净收益无风险。
+     * - 降噪默认**关**：对已混好的音乐，降噪可能连带削掉人声细节，交给用户试。
+     */
+    private fun showEnhanceMenu() {
+        val hasModel = AsrEnhance.hasVad(this)
+        val vadOn = prefs.getBoolean(SpeechRecManager.KEY_ASR_VAD, true)
+        val denoiseOn = prefs.getBoolean(SpeechRecManager.KEY_ASR_DENOISE, false)
+
+        val labels = mutableListOf<String>()
+        val actions = mutableListOf<() -> Unit>()
+
+        if (!hasModel) {
+            // 没模型时开开关是空转（增强会静默跳过），所以先把下载放第一位
+            labels.add(getString(R.string.asr_enhance_download))
+            actions.add { downloadEnhanceModels() }
+        } else {
+            labels.add(
+                (if (vadOn) "✓  " else "     ") + getString(R.string.asr_vad_title)
+            )
+            actions.add {
+                prefs.edit().putBoolean(SpeechRecManager.KEY_ASR_VAD, !vadOn).apply()
+                toast(
+                    getString(
+                        if (!vadOn) R.string.asr_enhance_on else R.string.asr_enhance_off,
+                        getString(R.string.asr_vad_title)
+                    )
+                )
+                showEnhanceMenu()
+            }
+            labels.add(
+                (if (denoiseOn) "✓  " else "     ") + getString(R.string.asr_denoise_title)
+            )
+            actions.add {
+                prefs.edit()
+                    .putBoolean(SpeechRecManager.KEY_ASR_DENOISE, !denoiseOn)
+                    .apply()
+                toast(
+                    getString(
+                        if (!denoiseOn) R.string.asr_enhance_on else R.string.asr_enhance_off,
+                        getString(R.string.asr_denoise_title)
+                    )
+                )
+                showEnhanceMenu()
+            }
+            labels.add(getString(R.string.asr_enhance_delete))
+            actions.add { deleteEnhanceModels() }
+        }
+
+        AccentDialogBuilder(this)
+            .setTitle(R.string.asr_enhance_title)
+            .setItems(labels.toTypedArray()) { _, which ->
+                actions.getOrNull(which)?.invoke()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** 下载增强模型（VAD 必下；降噪一并下，反正才几百 KB）。 */
+    private fun downloadEnhanceModels() {
+        val dlg = AccentDialogBuilder(this)
+            .setTitle(R.string.asr_enhance_title)
+            .setMessage(R.string.asr_enhance_downloading)
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+        AsrEnhance.download(
+            this,
+            wantVad = true,
+            wantDenoise = true,
+            onProgress = { },
+            onDone = { ok, err ->
+                runOnUiThread {
+                    if (dlg.isShowing) dlg.dismiss()
+                    if (ok) {
+                        toast(getString(R.string.asr_enhance_ready))
+                        showEnhanceMenu()
+                    } else {
+                        toast(getString(R.string.asr_enhance_failed, err ?: ""))
+                    }
+                }
+            }
+        )
+    }
+
+    private fun deleteEnhanceModels() {
+        val ok = try {
+            AsrEnhance.enhanceDir(this).deleteRecursively()
+        } catch (e: Exception) {
+            false
+        }
+        toast(
+            getString(
+                if (ok) R.string.asr_enhance_deleted else R.string.asr_delete_failed
+            )
+        )
     }
 
     /** 模型下载（后台线程 + 进度弹窗）。 */
@@ -6994,7 +7380,11 @@ class MainActivity : AppCompatActivity() {
             onProgress = { idx, pct ->
                 runOnUiThread {
                     if (!dlg.isShowing) return@runOnUiThread
-                    dlg.setMessage(getString(R.string.asr_downloading_file, idx + 1, pct))
+                    val totalFiles =
+                        SpeechRecManager.currentSpec(this@MainActivity).files.size
+                    dlg.setMessage(
+                        getString(R.string.asr_downloading_file, idx + 1, totalFiles, pct)
+                    )
                 }
             },
             onDone = { ok, err ->
@@ -8151,6 +8541,307 @@ class MainActivity : AppCompatActivity() {
         treeAdapter.notifyDataSetChanged()
     }
 
+    /**
+     * 应用底部「悬浮 / 玻璃」样式（3.1）。
+     *
+     * 布局结构已在 activity_main.xml 里改成 FrameLayout：播放条与导航都
+     * `layout_gravity="bottom"`，叠在内容上方。这个函数负责三件事：
+     *
+     * 1. **位置**：贴底模式下导航紧贴底边、播放条压在它上面；
+     *    悬浮模式下两者各留 12dp 外边距、各自圆角。
+     * 2. **圆角与投影**：悬浮时导航换成 [R.drawable.bg_nav_float]，
+     *    播放条本来就有 18dp 圆角，只补 elevation。
+     * 3. **内容避让**：给 [pageContainer] 加底部 padding，否则列表最后几项
+     *    会被浮层永久盖住（这是「悬浮」最容易漏的一步）。
+     *
+     * ⚠️ padding 必须按**实际可见**的两块高度算：歌曲没播放时播放条是 GONE，
+     * 此时只需让开导航条；若固定按两块算，列表底部会多出一大块空白。
+     */
+    private fun applyBottomDock() {
+        if (!::bottomNav.isInitialized || !::miniPlayer.isInitialized) return
+        val container = findViewById<View>(R.id.pageContainer) ?: return
+        val float = floatDockEnabled()
+
+        val navLp = bottomNav.layoutParams as? android.widget.FrameLayout.LayoutParams
+            ?: return
+        val miniLp = miniPlayer.layoutParams as? android.widget.FrameLayout.LayoutParams
+            ?: return
+
+        val side = if (float) dp(12f) else 0
+        val bottomMargin = if (float) dp(12f) else 0
+
+        // ---- 导航条 ----
+        navLp.setMargins(side, 0, side, bottomMargin)
+        bottomNav.layoutParams = navLp
+        // 3.1：阴影从 8dp 提到 14dp。8dp 在 #FAFAFC 这种浅底上几乎看不出
+        // 浮层与背景的分界（弱志：「悬浮很不明显」）。配合 bg_nav_float 的 1dp 描边，
+        // 阴影负责「浮起」、描边负责「轮廓」，两个信号都有才读得出是独立一块。
+        applyDockShadow(bottomNav, if (float) 14f else 0f)
+        // 悬浮时四角要圆：给整块加 outline 裁切，否则子项的点击波纹会溢出圆角
+        bottomNav.clipToOutline = float
+
+        // ---- 迷你播放条 ----
+        // ⚠️ 两块都是 layout_gravity=bottom，会重叠 —— 播放条必须按导航实际高度抬起来。
+        // 导航是 wrap_content，高度要等测量完才知道，所以放在 post 里设。
+        miniLp.setMargins(side, 0, side, dp(6f))
+        miniPlayer.layoutParams = miniLp
+        applyDockShadow(miniPlayer, if (float) 11f else 0f)
+        // 3.1 修：播放条也必须裁圆角。
+        //
+        // 之前只给 bottomNav 设了 clipToOutline，漏了这一块 —— 于是它内部那条
+        // **横贯全宽的 SeekBar 轨道**（贴在最顶部）把上方的 18dp 圆角整个盖住，
+        // 实机上看着就是一条方角白条（弱志反馈「mini 进度条也是方的」）。
+        // 裁切依赖 background 提供的 outline：bg_mini 是 GradientDrawable 自带，
+        // DockGlassDrawable 也实现了 getOutline，两种情况都能裁。
+        miniPlayer.clipToOutline = float
+        // 轨道本身也内缩一点：即便裁切正确，轨道端点顶到圆角切线上仍会显得「切得硬」。
+        // 12dp 让轨道两端退到圆角弧之内，看起来是「浮层里的一条轨道」而不是「被削掉的一截」。
+        findViewById<android.widget.SeekBar>(R.id.miniSeekBar)?.let { sb ->
+            val inset = if (float) dp(12f) else dp(6f)
+            sb.setPadding(inset, sb.paddingTop, inset, sb.paddingBottom)
+        }
+
+        // ---- 内容避让 ----
+        container.post {
+            // 播放条抬到导航条之上（贴底时导航是直角贴边，悬浮时还要加底部留白）
+            val navTotal = navLp.bottomMargin + bottomNav.height
+            val mp = miniPlayer.layoutParams as? android.widget.FrameLayout.LayoutParams
+            if (mp != null) {
+                mp.setMargins(side, 0, side, navTotal + dp(6f))
+                miniPlayer.layoutParams = mp
+            }
+            updateDockPadding()
+        }
+        // 背景（实心 / 玻璃）紧跟位置一起刷新，两者必须始终一致
+        applyGlassToDock()
+    }
+
+    /**
+     * 给底部浮层设置阴影（3.1）。
+     *
+     * 单独抽出来是因为两块浮层要一起改，而贴底/悬浮两种模式的阴影值不同。
+     *
+     * ⚠️ elevation 的阴影强度由系统固定（约 19% 黑），dp 值只决定**扩散半径**。
+     * 原来导航用 8dp、播放条用 6dp —— 在 #FAFAFC 这种接近纯白的底色上，
+     * 这么大的柔和阴影基本看不出边界，这就是「悬浮很不明显」的直接原因。
+     * 3.1 提到 14dp / 11dp，并配合背景里的 1dp 描边一起表达「浮起」。
+     */
+    private fun applyDockShadow(v: View, elevationDp: Float) {
+        v.elevation = dp(elevationDp).toFloat()
+    }
+
+    /**
+     * 玻璃刷新：**逐帧**驱动，而不是定时器。
+     *
+     * 上一版用 `Handler.postDelayed(250)` —— 每秒只更新 4 次。界面是 120Hz，
+     * 滑动时玻璃里的内容明显滞后，跟旁边的列表一比特别别扭（弱志反馈
+     * 「刷新率非常低」）。这是设计错误：玻璃的本质是「下层内容的实时镜像」，
+     * 它必须和页面同帧，否则越流畅的界面越显得它卡。
+     *
+     * 现在用 Choreographer 挂 VSYNC：每帧回调里先让 Drawable 更新快照，
+     * 再 invalidate 重绘。成本由 Drawable 内部按帧预算自适应跳帧兜底
+     * （`updateForFrame`），慢机器上自动隔帧更新，不会把主线程拖死。
+     */
+    private var glassRefreshing = false
+    private val glassRefreshRunnable = object : Runnable {
+        override fun run() {
+            if (!glassRefreshing) return
+            val navBg = if (::bottomNav.isInitialized) bottomNav.background else null
+            val miniBg = if (::miniPlayer.isInitialized) miniPlayer.background else null
+            var needDraw = false
+            if (navBg is DockGlassDrawable && bottomNav.isShown) {
+                // ⚠️ 只有快照真的更新了才重绘。否则每帧无条件 invalidate 两个浮层，
+                // 等于用「一直重绘」假装流畅，实际把开销转嫁给整个界面。
+                if (navBg.updateForFrame()) needDraw = true
+            }
+            if (miniBg is DockGlassDrawable && miniPlayer.visibility == View.VISIBLE) {
+                if (miniBg.updateForFrame()) needDraw = true
+            }
+            if (needDraw) {
+                if (::bottomNav.isInitialized && bottomNav.isShown) bottomNav.invalidate()
+                if (::miniPlayer.isInitialized && miniPlayer.visibility == View.VISIBLE) {
+                    miniPlayer.invalidate()
+                }
+            }
+            // 挂下一帧；停止时由 stopGlassRefresh 把标志置 false
+            if (glassRefreshing) {
+                android.view.Choreographer.getInstance().postFrameCallback { frameCallback(it) }
+            }
+        }
+    }
+
+    private fun frameCallback(frameTimeNanos: Long) {
+        if (glassRefreshing) glassRefreshRunnable.run()
+    }
+
+    private fun startGlassRefresh() {
+        if (glassRefreshing) return
+        glassRefreshing = true
+        android.view.Choreographer.getInstance().postFrameCallback { frameCallback(it) }
+    }
+
+    private fun stopGlassRefresh() {
+        glassRefreshing = false
+        // Choreographer 没有 removeFrameCallback 之外的取消手段；
+        // 回调里会检查 glassRefreshing，所以这里只要把标志置 false 即可。
+    }
+
+    /**
+     * 把「玻璃质感」应用到两块底部浮层（3.1 起为**真实背景模糊**）。
+     *
+     * ## 3.1 到 3.1 改了什么
+     *
+     * 3.1 只做了「半透明 + 描边」，理由是 `setRenderEffect(createBlurEffect)`
+     * 会把视图**自己的文字和图标**一起模糊掉 —— 那条判断没错，现在依然不用它。
+     * 但当时的结论下早了：真正可行的路是「捕获下层 → 模糊 → 当背景画」，
+     * 这不需要 RenderEffect，也就没有糊掉文字的问题。见 [DockGlassDrawable]。
+     *
+     * ## 为什么捕获源是 pageContainer 而不是整页
+     *
+     * 浮层与 pageContainer 是 FrameLayout 下的**兄弟节点**，所以 `src.draw()`
+     * 只会画页面子树，不会把浮层自己画进去（父子关系才会无限递归）。
+     * 顺序上浮层在 pageContainer 之后，绘制时已覆盖在它上面，观感就是「透过去」。
+     *
+     * ## 失败兜底
+     *
+     * 捕获可能因为页面尚未布局、视频页的 SurfaceView 等原因拿不到内容。
+     * 那种情况下 [DockGlassDrawable] 会退回一层纯白，绝不透明 —— 宁可少一层玻璃，
+     * 也不能让导航文字压在下层内容上看不清。
+     */
+    private fun applyGlassToDock() {
+        if (!::bottomNav.isInitialized || !::miniPlayer.isInitialized) return
+        val float = floatDockEnabled()
+        val glass = float && glassDockEnabled()
+
+        if (glass) {
+            // 每块各建一个 Drawable 实例：它们各自捕获自己所在的那一小块，
+            // 且边界/bounds 是实例级的，共享会互相踩。
+            bottomNav.background = DockGlassDrawable(
+                host = bottomNav,
+                source = { findViewById<View>(R.id.pageContainer) },
+                alphaPercent = { glassAlphaPercent() },
+                blurPx = { glassBlurPx() },
+                cornerDp = 20f,
+                // 底色与实心模式一致（surface）：白天近白、夜间深灰。
+                // 写死白色的话，夜间会变成一块发灰的白玻璃，跟 #101014 的页面脱节。
+                tintColor = { getColor(R.color.surface) }
+            )
+            miniPlayer.background = DockGlassDrawable(
+                host = miniPlayer,
+                source = { findViewById<View>(R.id.pageContainer) },
+                alphaPercent = { glassAlphaPercent() },
+                blurPx = { glassBlurPx() },
+                cornerDp = 18f,
+                tintColor = { getColor(R.color.surface) }
+            )
+            startGlassRefresh()
+            return
+        }
+
+        // 非玻璃：停掉刷新循环（否则会一直空转重绘），换回实心背景
+        stopGlassRefresh()
+        bottomNav.background = androidx.core.content.ContextCompat.getDrawable(
+            this,
+            if (float) R.drawable.bg_nav_float else R.color.surface
+        )
+        miniPlayer.background = androidx.core.content.ContextCompat.getDrawable(
+            this, R.drawable.bg_mini
+        )
+    }
+
+    /**
+     * 按当前可见的浮层高度给内容区留底部空间（3.1）。
+     *
+     * 单独抽出来是因为它要在多个时机重算：切歌（播放条显隐变化）、切页
+     * （视频页会隐藏导航）、样式切换。合并进 [applyBottomDock] 会漏掉这些时机。
+     *
+     * 算法按「最上面那块可见浮层的顶部」算，不做叠加 —— 播放条是**叠在**
+     * 导航之上的，两块的高度不能相加后再各自加间距（那会把留白算大一圈）。
+     */
+    private fun updateDockPadding() {
+        val container = findViewById<View>(R.id.pageContainer) ?: return
+        if (!::bottomNav.isInitialized || !::miniPlayer.isInitialized) return
+        val float = floatDockEnabled()
+
+        // 导航块占的高度 = 自身高度 + 悬浮时的底部外边距
+        val navTotal = if (bottomNav.visibility == View.VISIBLE) {
+            bottomNav.height + (if (float) dp(12f) else 0)
+        } else {
+            0
+        }
+        // 播放条坐在导航顶上，还要再加它与导航之间的 6dp 间距
+        val miniTotal = if (miniPlayer.visibility == View.VISIBLE && miniPlayer.height > 0) {
+            navTotal + miniPlayer.height + dp(6f)
+        } else {
+            navTotal
+        }
+
+        // ⚠️ 3.1 修：padding 必须加在**滚动容器**上，不能加在 pageContainer 上。
+        //
+        // 上一版加在 pageContainer（FrameLayout）上，结果适得其反：FrameLayout 的
+        // padding 会把子 View 的可用区**缩小**，内容被顶到浮层之上，浮层下面永远
+        // 只剩一块空底色 —— 正好与「悬浮下面应该有内容透出来」相反（弱志反馈）。
+        //
+        // 正确做法：给每个 RecyclerView 加 paddingBottom，并保证 clipToPadding=false。
+        // 滚动内容因此会画到浮层下方（透出来），滚到底时最后一项也能从浮层下露出来。
+        container.setPadding(
+            container.paddingLeft, container.paddingTop, container.paddingRight, 0
+        )
+        applyDockPaddingToScrollers(miniTotal)
+    }
+
+    /**
+     * 把所有滚动容器的底部 padding 设为「浮层占用高度 + 它原本的留白」。
+     *
+     * 记住原始值放在 tag 里，关掉悬浮 / 隐藏浮层时还原 —— 不能直接覆盖成 0，
+     * 否则 XML 里那些 8dp / 12dp 的小留白会永久丢失（列表贴到底边很难看）。
+     */
+    private fun applyDockPaddingToScrollers(dockHeight: Int) {
+        val scrollerIds = intArrayOf(
+            R.id.recyclerDiscover, R.id.recyclerFavorites,
+            R.id.recyclerPlaylists, R.id.recyclerArtists,
+            R.id.recyclerSongs, R.id.recyclerPlaylistsPage,
+            R.id.recyclerSearch, R.id.recyclerVideos, R.id.recyclerLyricFull
+        )
+        for (id in scrollerIds) {
+            val v = findViewById<View>(id) ?: continue
+            // 首次处理时把 XML 里的原始留白存起来（重入不会覆盖成叠加值）
+            if (v.getTag(R.id.dock_orig_pad) == null) {
+                v.setTag(R.id.dock_orig_pad, v.paddingBottom)
+            }
+            val orig = v.getTag(R.id.dock_orig_pad) as Int
+            val target = orig + dockHeight
+            if (v.paddingBottom != target) {
+                v.setPadding(v.paddingLeft, v.paddingTop, v.paddingRight, target)
+            }
+            // 内容要能画到 padding 区域里，才能「透」到浮层下方。
+            // 大多数布局已在 XML 里设为 false，这里补一道，防止某个页面漏了。
+            if (v is RecyclerView && v.clipToPadding) v.clipToPadding = false
+        }
+    }
+
+    private fun floatDockEnabled(): Boolean = prefs.getBoolean(KEY_FLOAT_DOCK, true)
+
+    private fun glassDockEnabled(): Boolean = prefs.getBoolean(KEY_GLASS_DOCK, false)
+
+    /**
+     * 玻璃的白色浓度（3.1，默认 62%）。
+     *
+     * 含义与预览图一致：数值越高越不透明、透过去的越少。
+     * 默认 62% 取自预览图 —— 再低会让导航文字压在花哨封面上难认，
+     * 再高就跟实心背景没什么区别了。
+     */
+    private fun glassAlphaPercent(): Int = prefs.getInt(KEY_GLASS_ALPHA, 62).coerceIn(0, 100)
+
+    /**
+     * 背景模糊强度（3.1，默认 26）。单位是**捕获图上的像素半径**。
+     *
+     * 因为捕获时先降采样 4 倍（见 [DockGlassDrawable.DOWNSCALE]），
+     * 26 对应到屏幕实际视觉半径约为 26px，与预览图的 `blur(26px)` 接近。
+     * 0 = 关闭模糊（只保留半透明），上限 60 —— 再高在降采样图上会出现色块。
+     */
+    private fun glassBlurPx(): Int = prefs.getInt(KEY_GLASS_BLUR, 26).coerceIn(0, 60)
+
     private fun applyAppearance() {
         val idleColor = prefs.getInt(KEY_LYRIC_IDLE_COLOR, IDLE_DEFAULT)
         val curColor = prefs.getInt(KEY_LYRIC_CUR_COLOR, CUR_DEFAULT)
@@ -8326,6 +9017,31 @@ class MainActivity : AppCompatActivity() {
          * 所以默认不显示，需要的用户自己去设置里打开。
          */
         private const val KEY_ALPHA_INDEX = "alpha_index_enabled"
+        /**
+         * 底部「悬浮」样式（3.1，**默认开**）。
+         *
+         * 弱志 2026-11-14：「悬浮效果默认开启吧，这个是净增益」——
+         * 播放条与导航脱离屏幕底边、各自成圆角块，视觉上不再是一块压死的灰条。
+         * 这是纯 layout 改动，全 Android 版本一致，无性能开销，故默认开启；
+         * 不喜欢的用户（或低端机上觉得留白太多）可在设置里关掉，退回原来的贴底样式。
+         */
+        private const val KEY_FLOAT_DOCK = "float_dock"
+        /**
+         * 底部玻璃质感（3.1，**默认关**）。
+         *
+         * 依赖悬浮：贴底模式下没有圆角块，玻璃没有意义。
+         * Android 12（API 31）以下没有系统级模糊，会退化成「半透明 + 描边」。
+         */
+        private const val KEY_GLASS_DOCK = "glass_dock"
+        /**
+         * 玻璃的白色浓度（3.1，默认 62）与背景模糊强度（3.1，默认 26）。
+         *
+         * 弱志 2026-11-14 反馈「没有找到调试液态玻璃透明度的设置」——
+         * 预览图里那两个滑块本来就该在设置里能调，3.1 漏了。
+         * 两个值都是**实时生效**的：滑块松手即重绘，不必重进页面。
+         */
+        private const val KEY_GLASS_ALPHA = "glass_alpha"
+        private const val KEY_GLASS_BLUR = "glass_blur"
         private const val MODULE_DISCOVER = "discover"
         private const val MODULE_LIBRARY = "library"
         /**

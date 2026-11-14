@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  3.1：用来在 View 上挂「原始 padding」的 tag key。
+
+  为什么需要这个 id：底部浮层要避让，就得给滚动容器加 paddingBottom，
+  但每个容器在 XML 里本来就有 8dp / 12dp 的小留白，不能直接覆盖掉 ——
+  必须记住原值，关掉悬浮时还原回去。用 setTag(R.id.dock_orig_pad, ...) 存，
+  比在代码里硬编码「原本是 8dp」可靠（万一以后有人改 XML 也不会错位）。
+-->
+<resources>
+    <item name="dock_orig_pad" type="id" />
+</resources>

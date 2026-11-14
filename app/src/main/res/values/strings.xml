@@ -170,6 +170,16 @@
     <string name="cover_bg_title">封面背景</string>
     <string name="cover_bg_hint">用当前音声封面铺满歌词页与播放页；没有封面时自动回退上面的背景图</string>
     <string name="lyricon_enabled">状态栏歌词（词幕）</string>
+    <!-- 3.1：底部悬浮 / 玻璃样式（弱志：悬浮默认开，是净增益；玻璃可选） -->
+    <string name="float_dock_title">底部悬浮</string>
+    <string name="float_dock_hint">播放条与导航改成浮起的圆角块，内容可以从下面透出来。关掉则恢复贴底样式</string>
+    <string name="glass_dock_title">玻璃质感</string>
+    <string name="glass_dock_hint">把下层页面模糊后当作浮层背景，透过去是糊的（全 Android 版本可用）</string>
+    <!-- 3.1：玻璃的两个可调参数（弱志：预览图里就该能调，3.1 漏了） -->
+    <string name="glass_alpha_title">玻璃透明度</string>
+    <string name="glass_alpha_hint">数值越高越不透明。太低时导航文字压在花哨封面上会难认</string>
+    <string name="glass_blur_title">背景模糊强度</string>
+    <string name="glass_blur_hint">模糊下层内容的程度。调到 0 只剩半透明，没有模糊</string>
     <string name="lyricon_hint">需 root + LSPosed + 词幕模块；各机型效果请以实际为准</string>
     <string name="immersion_seconds_title">沉浸模式进入时间</string>
     <string name="immersion_enabled_title">沉浸模式</string>
@@ -294,25 +304,43 @@
     <string name="playback_log_btn">导出运行日志</string>
     <string name="playback_log_hint">播放异常时点「导出运行日志」，复制日志发给作者即可</string>
     <string name="playback_log_copied">已复制运行日志，发给作者即可</string>
-    <string name="asr_entry">歌词识别（日语）</string>
+    <string name="asr_entry">歌词识别</string>
     <string name="asr_title">歌词识别</string>
-    <string name="asr_need_model_msg">首次使用需要下载日语识别模型（约 165MB，建议 Wi-Fi）。\n\n识别会生成带时间戳的 .lrc 歌词文件，保存到音频同目录，播放即可显示歌词；之后可配合「翻译设置」逐句翻译。\n模型来源（可分享）：https://hf-mirror.com/DeL-TaiseiOzaki/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01</string>
-    <string name="asr_ready_msg">模型已就绪。选择音频文件即可生成带时间戳的歌词（.lrc），识别在后台进行，处理速度约为音频时长的 1/3～1 倍，请耐心等待。</string>
-    <string name="asr_download_model">下载识别模型（约 165MB）</string>
+    <!-- 3.1：多模型（日语 / 韩语），文案带参数，跟随当前所选模型 -->
+    <string name="asr_model_choose">识别语言</string>
+    <string name="asr_need_model_msg">首次使用需要下载%1$s识别模型（约 %2$dMB，建议 Wi-Fi）。\n\n识别会生成带时间戳的 .lrc 歌词文件，保存到音频同目录，播放即可显示歌词；之后可配合「翻译设置」逐句翻译。</string>
+    <string name="asr_ready_msg">%1$s模型已就绪。选择音频文件即可生成带时间戳的歌词（.lrc），识别在后台进行，处理速度约为音频时长的 1/3～1 倍，请耐心等待。</string>
+    <string name="asr_download_model">下载识别模型（约 %1$dMB）</string>
+    <string name="asr_delete_model_confirm">删除已下载的%1$s识别模型？\n\n（约 %2$d MB，删除后需要重新下载才能生成歌词。\n如果生成歌词时总是闪退，可以先删掉重新下载一次试试。）</string>
+    <string name="asr_model_switched">已切换到%1$s识别</string>
+    <!-- 3.1：音频增强（VAD / 降噪）。粉丝「复杂场景识别不准」的正解在这里，不是换更大的模型 -->
+    <string name="asr_enhance_title">音频增强</string>
+    <string name="asr_vad_title">跳过纯音乐段（VAD）</string>
+    <string name="asr_vad_hint">识别前先判断这段有没有人声。前奏、间奏、纯伴奏会被直接跳过 —— 以前这些段会被硬塞给模型，容易冒出莫名其妙的一行</string>
+    <string name="asr_denoise_title">降噪</string>
+    <string name="asr_denoise_hint">把人声从背景噪音里提出来。对录音差、环境吵的音源有用；对已经混好的音乐可能顺带削掉人声细节，所以默认关</string>
+    <string name="asr_enhance_need_model">需要先下载增强模型（共约 3MB）</string>
+    <string name="asr_enhance_download">下载增强模型（约 3MB）</string>
+    <string name="asr_enhance_downloading">正在下载音频增强模型…</string>
+    <string name="asr_enhance_ready">增强模型下载完成</string>
+    <string name="asr_enhance_failed">增强模型下载失败：%1$s</string>
+    <string name="asr_enhance_on">已开启%1$s</string>
+    <string name="asr_enhance_off">已关闭%1$s</string>
+    <string name="asr_enhance_delete">删除增强模型</string>
+    <string name="asr_enhance_deleted">已删除增强模型</string>
     <string name="asr_pick_audio">选择音频文件</string>
     <string name="asr_need_model_first">请先下载识别模型</string>
     <string name="asr_downloading">正在准备下载…</string>
-    <string name="asr_downloading_file">正在下载第 %1$d/4 个文件（%2$d%%）</string>
+    <string name="asr_downloading_file">正在下载第 %1$d/%2$d 个文件（%3$d%%）</string>
     <string name="asr_model_ready">识别模型下载完成</string>
     <string name="asr_model_failed">模型下载失败：%1$s\n可多点几次「下载」重试，或用「手动导入模型文件」</string>
     <string name="asr_import_model">手动导入模型文件</string>
     <!-- 3.0.1：删除识别模型（模型疑似损坏时的自救入口） -->
     <string name="asr_delete_model">删除识别模型</string>
-    <string name="asr_delete_model_confirm">删除已下载的识别模型？\n\n（约 165 MB，删除后需要重新下载才能生成歌词。\n如果生成歌词时总是闪退，可以先删掉重新下载一次试试。）</string>
     <string name="asr_model_deleted">已删除识别模型</string>
     <string name="asr_delete_failed">删除失败（可到系统设置 → 应用 → 拾音 → 存储里清除数据）</string>
     <string name="asr_import_done">已导入 %1$d 个模型文件</string>
-    <string name="asr_import_none">所选文件与模型文件名不匹配（需要 encoder / decoder / joiner / tokens 四个文件，可多选一起导入）</string>
+    <string name="asr_import_none">所选文件与当前模型的文件名不匹配（日语需要 encoder / decoder / joiner / tokens，韩语还要多一个 bpe.model；可多选一起导入）</string>
     <string name="asr_running">识别中… 已处理 %1$d / %2$d 秒\n（识别耗时较长，点「取消」可中止）</string>
     <string name="asr_done">歌词已生成：%1$s\n重新扫描音乐库后即可显示</string>
     <string name="asr_done_internal">歌词已保存到应用内（%1$s）\n想保存到音乐文件夹：设置 → 更换文件夹 重新选一次同一文件夹（这次会授予写入权限），已识别好的歌词会自动搬过去</string>
@@ -338,7 +366,7 @@
     -->
     <string name="asr_stuck_btn">卡住了？手动下载</string>
     <string name="asr_stuck_title">下载卡住时的手动方案</string>
-    <string name="asr_stuck_msg">有时镜像站对 tokens.txt（4 个文件里的最后一个、体积很小）响应很慢，进度会一直停在 0%。这时手动补上它即可：\n\n1. 点「打开模型网站」\n2. 在页面的文件列表里找到并下载 tokens.txt\n3. 回到「歌词识别」→「手动导入模型文件」，选中刚下载的 tokens.txt\n\n四个文件缺哪个就补哪个，不必全部重下（导入按文件名匹配）。</string>
+    <string name="asr_stuck_msg">有时镜像站对 tokens.txt（文件清单里体积最小的那个）响应很慢，进度会一直停在 0%。这时手动补上它即可：\n\n1. 点「打开模型网站」\n2. 在页面的文件列表里找到并下载 tokens.txt\n3. 回到「歌词识别」→「手动导入模型文件」，选中刚下载的 tokens.txt\n\n清单里缺哪个就补哪个，不必全部重下（导入按文件名匹配）。</string>
     <string name="asr_stuck_open">打开模型网站</string>
     <string name="asr_stuck_copy">复制链接</string>
     <string name="asr_stuck_copied">模型网站链接已复制</string>
@@ -354,7 +382,7 @@
     <string name="title_from_filename_hint">忽略标签标题，重新扫描后生效</string>
     <string name="tab_video">视频</string>
     <string name="videos_empty">这个导航页还没有视频文件\n把含视频的文件夹添加进音乐库即可</string>
-    <string name="about_version">版本 3.0.8</string>
+    <string name="about_version">版本 3.1</string>
     <string name="about_author">作者：弱志</string>
     <string name="about_support">爱发电主页 · 点击支持我 ❤</string>
     <string name="about_thanks">感谢你的使用与支持</string>

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  3.1：底部导航「悬浮」样式背景。
+  与 miniPlayer 的 bg_mini（18dp）视觉语言一致，但导航条更宽，圆角取 20dp。
+
+  ⚠️ 3.1 之所以要加这层 1dp 细描边：
+  页面底色是 bg=#FAFAFC、浮层是 surface=#FFFFFF，两者只差 2% 亮度 ——
+  光靠 elevation 阴影在这么浅的底上几乎看不见边界，于是「悬浮」在实机上
+  看着跟贴底没区别（弱志反馈「很不明显」）。
+  描边给轮廓一条确定的边，阴影负责「浮起」，两者配合才看得出是独立的一块。
+  描边取 #12000000（7% 黑）——只在白底上勾出一条淡线，不会显脏。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="20dp" />
+    <solid android:color="@color/surface" />
+    <stroke
+        android:width="1dp"
+        android:color="@color/dock_stroke" />
+</shape>

@@ -56,4 +56,6 @@
     <color name="pl_grad8_a">#343A2C</color>
     <color name="pl_grad8_b">#434A38</color>
     <color name="pl_grad8_c">#525B45</color>
+    <!-- 3.1：夜间描边反过来用淡白——深色底上淡黑是隐形的，见 values/colors.xml -->
+    <color name="dock_stroke">#1FFFFFFF</color>
 </resources>

@@ -1,14 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!--
+  3.1：根布局由 LinearLayout 改为 FrameLayout，让底部两块（迷你播放条 / 导航）
+  可以**浮在内容上方**而不是挤压内容。
+
+  为什么必须改结构：原来三个子块垂直排列，播放条占一行空间，内容区到它就停。
+  「悬浮」要求内容能滚到它下面（透出来），只有让它脱离布局流才做得到。
+  代价是页面容器需要底部 padding 防止最后几项被遮挡 —— 由 applyBottomDock() 动态算。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg"
-    android:orientation="vertical">
+    android:background="@color/bg">
 
     <FrameLayout
+        android:id="@+id/pageContainer"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1">
+        android:layout_height="match_parent">
 
         <include layout="@layout/page_discover" />
 
@@ -96,11 +103,16 @@
 
     </FrameLayout>
 
-    <!-- 全局迷你播放条 -->
+    <!--
+      全局迷你播放条（3.1：改为浮层，脱离布局流）。
+      layout_gravity=bottom 让它叠在内容上方；离底距离由 applyBottomDock() 动态设置
+      （要叠在导航条之上，且随「悬浮/贴底」模式变化，布局里写死会两边打架）。
+    -->
     <LinearLayout
         android:id="@+id/miniPlayer"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
         android:background="@drawable/bg_mini"
         android:orientation="vertical"
         android:layout_marginStart="16dp"
@@ -161,6 +173,7 @@
         android:id="@+id/bottomNav"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
         android:background="@color/surface"
         android:orientation="horizontal"
         android:gravity="center_vertical"
@@ -168,4 +181,4 @@
         android:paddingTop="6dp"
         android:paddingBottom="10dp" />
 
-</LinearLayout>
+</FrameLayout>

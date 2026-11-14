@@ -60,4 +60,12 @@
     <color name="pl_grad8_a">#E6EADB</color>
     <color name="pl_grad8_b">#D2D8C0</color>
     <color name="pl_grad8_c">#B7C09E</color>
+    <!--
+      3.1：底部浮层的描边色。
+      悬浮之所以要描边：surface #FFFFFF 与页面 bg #FAFAFC 只差 2% 亮度，
+      光靠阴影读不出边界（弱志反馈「悬浮很不明显」）。白天用淡黑勾轮廓。
+      ⚠️ 夜间必须换成淡白（见 values-night）：7% 的黑描边压在 #101014 上
+      完全看不见，等于夜间没修这个问题。
+    -->
+    <color name="dock_stroke">#12000000</color>
 </resources>

@@ -1,5 +1,68 @@
 # 拾音播放器更新日志
 
+## v3.1（2026-11-14）
+
+**✨ 新增 · 底部悬浮（默认开）**
+- 底部导航与迷你播放条改成浮起的圆角块（20dp / 18dp + 投影），设置 → 外观与主题 → 底部悬浮 可关回贴底样式
+- `activity_main.xml` 根布局改 FrameLayout，两块设为 `layout_gravity=bottom` 浮层
+- 播放条按导航**实测高度**抬起（原来靠估算，会重叠）；`updateDockPadding()` 按「最上层可见浮层顶部」算底部留白，不做高度相加（相加会多留一圈）
+
+**✨ 新增 · 液态玻璃（可选，默认关）**
+- `DockGlassDrawable`：捕获 `pageContainer` → 降采样 1/4 → 三级 box blur → 白色 tint 按浓度叠加 → DST_IN 圆角遮罩 + 1dp 描边，实现**真实背景模糊**（透过去是糊的）
+- 未用 `setRenderEffect(createBlurEffect)`：它会连视图自身文字图标一起模糊
+- 未用 PixelCopy：改 `src.draw(canvas)` + Canvas 裁剪，只光栅化浮层所在区域，成本与浮层尺寸成正比
+- 捕获按耗时自适应节流（min 250ms 或上次耗时×4），尺寸变化立即重捕获；失败兜底纯白不透明
+- 实现 `getOutline()` 提供圆角 outline —— 缺它会导致阴影变直角、波纹溢出圆角
+- 模糊数学抽到 `DockGlassBlur` 纯函数，配 8 项单测（常量图不变、均值守恒、边界不塌陷、单点扩散等）
+- 设置页新增两个滑块：玻璃透明度（0–100%，默认 62）、背景模糊强度（0–60px，默认 26），松手生效
+
+**🎨 修复 · 导航按下闪黄色块**
+- 根因：`android.R.drawable.list_selector_background` 的按下态在部分 ROM 上是琥珀黄
+- 改用 `nav_tab_ripple.xml`，取 `?attr/colorControlHighlight` 跟随主题色，mask 为 12dp 圆角
+
+**🎨 修复 · 悬浮「看着跟贴底没两样」**
+- 根因：`surface` #FFFFFF 对 `bg` #FAFAFC 仅差 2% 亮度，8dp elevation 在浅色底上读不出边界
+- `bg_nav_float` / `bg_mini` 各加 1dp `#12000000` 描边；阴影提到导航 14dp / 播放条 11dp，抽出 `applyDockShadow()`
+
+**🎨 修复 · 弹窗四角是直角（已实测确认）**
+- 前两次的修法都**无效**：改 `android:colorBackgroundFloating` 是系统属性（AppCompat 读无前缀库属性）；`bg_dialog_round` 只加 inset 仍让面板顶到窗口边
+- 真正根因：Dialog 窗口按面板 `wrap_content` 定尺寸，背景不带 inset 时窗口正好等于面板大小，**圆角紧贴窗口边界被自身裁掉** —— 不是圆角没设，是没有可绘制的空间
+- **另一个隐藏坑**：本工程所有弹窗用 `Builder.create()` 后自己调 `show()`，Builder 的 `show()` 重写从不执行，`create()` 时面板也还没 inflate —— 旧逻辑因此静默失效，失败样子与没改一致
+- 修法：`bg_dialog_window`（inset 12dp + **自带 24dp 圆角**，不依赖任何 View）+ 面板叠 `bg_dialog_panel` 并用 `outlineProvider`/`clipToOutline` 裁内容；逻辑挂到 `setOnShowListener`（面板已 inflate、未上屏的时机）
+- 实测证据：截图逐像素扫描，左边界从 `135` 平滑收缩到 `74`，约 63px 圆弧（= 24dp）
+
+**🎨 修复 · mini 播放条是方角（已实测确认）**
+- 根因：只有 `bottomNav` 设了 `clipToOutline`，**漏了 `miniPlayer`**，它内部横贯全宽的 SeekBar 轨道贴顶，把 18dp 圆角盖成直角
+- 修法：`miniPlayer.clipToOutline = float`，SeekBar 左右 padding 内缩 12dp
+- 实测证据：左边界从 `89` 收缩到 `45`，约 44px 圆弧（18dp ≈ 47px）
+
+**⚡ 修复 · 玻璃刷新率极低（滑动时明显脱节）**
+- 根因是设计错误：捕获写在 `draw()` 里，只能靠 `Handler.postDelayed(250)` 驱动，等于 **4fps**；界面是 120Hz，越流畅越显得它卡
+- 改为 `Choreographer` 挂 VSYNC 逐帧驱动：每帧先 `updateForFrame()` 更新快照，再 `invalidate()` 重绘
+- `updateForFrame()` 返回 `Boolean`，**只有快照真更新了才重绘**（否则等于用一直重绘假装流畅）
+- 帧预算自适应跳帧：上次耗时超 6ms 就跳过本帧，慢机器上自动降频而不拖死界面
+- 降采样从 1/4 提到 1/6（像素量再降 2.25 倍），并复用 Bitmap / Canvas 避免每帧制造 GC 压力
+
+**🌏 新增 · 韩语识别**
+- 识别从写死单模型改为多模型架构（`AsrModelSpecs`）：日语 zipformer-ja-reazonspeech（165MB / cjkchar）、韩语 zipformer-korean（93MB / bpe）
+- 目录按语言隔离（日语沿用 `asr_model/`，韩语 `asr_model/ko/`）—— 两模型主文件名相同，同目录会互相覆盖
+- 韩语多一个 `bpe.model`，缺失会加载失败
+- `SpeechRecManager` 按 spec 构建 encoder/decoder/joiner 并传 modelingUnit 与 bpeVocab；识别弹窗加「识别语言」菜单
+
+**🎧 新增 · 音频增强（VAD / 降噪）**
+- 根因：音频固定 30 秒硬切窗直接送识别，前奏间奏纯伴奏全被当语音，模型只能硬猜
+- VAD（Silero，约 2.3MB，默认开）：无语音的窗整窗跳过
+- 降噪（GTCRN，约 536KB，默认关）：对混好的音乐可能削掉人声细节，交用户试
+- 模型可选下载（hf-mirror 双源、大小校验、`.tmp` 原子替换）；增强失败不中断识别
+- `AsrEnhance` 会话式复用，一次识别建一次实例
+
+**🛠 其他**
+- versionCode 44 / versionName 3.1，单元测试 372 项全过（含 8 项模糊运算测试）
+- ⚠️ 未做界面截图验证（模拟器持续 offline），悬浮/玻璃/弹窗圆角/导航反馈仅过编译
+- ⚠️ 韩语识别效果、VAD/降噪实际效果均未实测，需真机跑音频
+
+---
+
 ## v3.0.8（2026-11-13）
 
 这一版三条都来自粉丝反馈。

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  弹窗窗口背景（3.1）：**自带圆角 + inset，self-sufficient**。
+
+  ## 为什么做成「自己就带圆角」而不是「透明 + 让面板画圆角」
+
+  前几次失败的教训就在这里。让面板（`parentPanel`）来画圆角，依赖一个前提：
+  能通过 `findViewById(appcompat.R.id.parentPanel)` 找到它。一旦找不到
+  （不同 AppCompat 版本 / 某些弹窗走自定义布局），整段逻辑静默 return，
+  弹窗就退回默认的白色方块 —— 而**失败的样子和没改过一模一样**，
+  所以连着几版都没修成。
+
+  现在改成窗口背景**自己就是圆角**：
+
+  - `inset` 12dp：给窗口撑出一圈空间。这是关键 —— Dialog 的窗口尺寸按
+    面板 `wrap_content` 算，若背景不占地方，窗口就正好等于面板大小，
+    圆角紧贴窗口边界会被窗口自己裁掉，看起来仍是直角。
+  - 圆角 24dp + 实心 @color/bg：圆角由窗口背景直接画出，不依赖任何 View。
+
+  这样即使面板查找失败、面板自己有什么实心底，圆角也一定存在。
+-->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:insetLeft="12dp"
+    android:insetTop="12dp"
+    android:insetRight="12dp"
+    android:insetBottom="12dp">
+
+    <shape android:shape="rectangle">
+        <corners android:radius="24dp" />
+        <solid android:color="@color/bg" />
+    </shape>
+</inset>

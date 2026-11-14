@@ -13,7 +13,28 @@
 
     <style name="ShiYinAlertDialog" parent="Theme.AppCompat.DayNight.Dialog.Alert">
         <item name="colorAccent">@color/accent</item>
-        <item name="android:windowBackground">@drawable/bg_dialog</item>
+        <!--
+          3.1 修：弹窗圆角。两个条件必须同时满足，缺一个就还是直角。
+
+          1. 窗口背景必须是**带 inset 的透明 shape**（bg_dialog_window）。
+             Dialog 的窗口尺寸按面板 wrap_content 算；若窗口背景不占空间，
+             窗口就正好等于面板大小，面板圆角紧贴窗口边界、被窗口自身裁掉 ——
+             这就是前两次改了却仍是直角的真正原因：不是圆角没设，而是
+             **圆角没有可绘制的空间**。inset 12dp 让窗口比面板大一圈。
+             面板自己的圆角与裁切在 applyDialogCorners() 里设置。
+          2. 面板自身不能再涂一层实心底，否则会盖住圆角（见下面 colorBackgroundFloating）。
+        -->
+        <item name="android:windowBackground">@drawable/bg_dialog_window</item>
+        <!--
+          AppCompat 的 abc_alert_dialog_material 会给面板上一块
+          ?attr/colorBackgroundFloating 的实心色，它铺满整个窗口，
+          把 windowBackground 上的圆角盖成直角。设为透明后圆角才露得出来。
+          ⚠️ 注意用的是**无前缀**的库属性名：android: 前缀那个是系统属性，
+          和 AppCompat 布局实际读取的不是同一个，改它没用。
+        -->
+        <item name="colorBackgroundFloating">@android:color/transparent</item>
+        <!-- 圆角半径也统一，供仍走 AppCompat 默认背景的弹窗使用 -->
+        <item name="dialogCornerRadius">24dp</item>
     </style>
 
     <style name="BtnStyle" parent="Widget.AppCompat.Button">

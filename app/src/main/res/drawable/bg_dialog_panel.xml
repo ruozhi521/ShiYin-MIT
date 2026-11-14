@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  弹窗**面板**自身的圆角背景（3.1）。
+
+  为什么不复用 bg_dialog：那个是给 windowBackground 用的，必须带 inset，
+  否则圆角会被窗口边界裁掉。而这里是直接贴在面板（parentPanel）上的，
+  面板的边界就是它的绘制范围，所以**不能**有 inset —— 有了反而会缩进一圈，
+  露出后面的窗口底色，边缘显得脏。
+
+  配合 DockGlassDrawable 同款思路：背景提供 outline，面板再 clipToOutline，
+  子 View（标题、内容 ScrollView）就不会越过圆角。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="24dp" />
+    <solid android:color="@color/bg" />
+</shape>

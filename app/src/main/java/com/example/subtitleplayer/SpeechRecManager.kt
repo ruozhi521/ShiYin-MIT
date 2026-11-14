@@ -37,34 +37,54 @@ import kotlin.math.floor
  */
 object SpeechRecManager {
 
-    private const val MODEL_DIR = "asr_model"
+    /**
+     * 模型根目录名。
+     *
+     * 3.1 起目录结构变成「每个模型一个子目录」，但**日语沿用历史目录**
+     * （根目录本身），见 [dirFor]。这样老用户已下载的 165 MB 不需要迁移、
+     * 也不会因为改名而「模型凭空消失」—— 迁移是这类改动最容易踩的坑。
+     */
+    private const val MODEL_ROOT = "asr_model"
     private const val HOTWORDS_FILE = "asr_hotwords.txt"
+
+    /** 当前选中的模型 id（prefs 里存 ascii id，见 [AsrModelSpecs]）。 */
+    const val KEY_ASR_MODEL_ID = "asr_model_id"
+
+    /** 识别前用 VAD 跳过「没人声」的窗口（3.1，默认开）。 */
+    const val KEY_ASR_VAD = "asr_vad"
+
+    /** 识别前降噪（3.1，默认关 —— 对已混好的音乐可能削掉人声细节）。 */
+    const val KEY_ASR_DENOISE = "asr_denoise"
+
+    private fun prefs(context: Context) =
+        context.getSharedPreferences("player", Context.MODE_PRIVATE)
 
     /** 热词条数上限：太多会拖慢 modified_beam_search 且收益递减。 */
     private const val MAX_HOTWORDS = 120
 
-    /** 模型文件按「角色」定义，每个角色可有多个候选文件名（镜像仓库命名不一）。 */
-    private data class ModelFile(val role: String, val candidates: List<String>)
+    /** 当前选中的模型规格（未设置过 → 日语，与 3.1 之前的行为完全一致）。 */
+    fun currentSpec(context: Context): AsrModelSpecs.Spec =
+        AsrModelSpecs.byId(
+            context.getSharedPreferences("player", Context.MODE_PRIVATE)
+                .getString(KEY_ASR_MODEL_ID, AsrModelSpecs.DEFAULT_ID)
+        )
 
-    private val modelFiles = listOf(
-        ModelFile("encoder", listOf("encoder-epoch-99-avg-1.int8.onnx")),
-        ModelFile("decoder", listOf("decoder-epoch-99-avg-1.onnx")),
-        // 镜像仓库 joiner 只有 fp32 版：两个候选都试，任一下载成功即可
-        ModelFile("joiner", listOf("joiner-epoch-99-avg-1.int8.onnx", "joiner-epoch-99-avg-1.onnx")),
-        ModelFile("tokens", listOf("tokens.txt"))
-    )
+    /**
+     * 某模型的文件目录。
+     *
+     * ⚠️ 日语的目录就是**根目录本身**，不是 `asr_model/ja`。
+     * 这是刻意的：3.1 之前所有用户都把日语模型下在根目录，
+     * 换结构会让他们的模型「失效」（判定找不到 → 要求重下 165 MB）。
+     * 新语言从各自子目录起步，两边文件名虽然相同（都叫
+     * `encoder-epoch-99-avg-1.int8.onnx`）但物理隔离，不会互相覆盖。
+     */
+    fun dirFor(context: Context, spec: AsrModelSpecs.Spec): File {
+        val root = File(context.filesDir, MODEL_ROOT)
+        return if (spec.id == AsrModelSpecs.DEFAULT_ID) root else File(root, spec.id)
+    }
 
-    /** 模型镜像源（按序尝试）。hf-mirror 国内可直连，放最前；HF 原站回退。 */
-    private val modelSources = listOf(
-        "https://hf-mirror.com/DeL-TaiseiOzaki/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01/resolve/main/",
-        "https://huggingface.co/DeL-TaiseiOzaki/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01/resolve/main/",
-        "https://hf-mirror.com/k2-fsa/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01/resolve/main/",
-        "https://huggingface.co/k2-fsa/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01/resolve/main/",
-        "https://hf-mirror.com/csukuangfj/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01/resolve/main/",
-        "https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01/resolve/main/"
-    )
-
-    fun modelDir(context: Context): File = File(context.filesDir, MODEL_DIR)
+    /** 旧调用点兼容：当前模型的目录。 */
+    fun modelDir(context: Context): File = dirFor(context, currentSpec(context))
 
     private const val TOKENS_FILE = "tokens.txt"
 
@@ -75,11 +95,16 @@ object SpeechRecManager {
      * 粉丝反馈「点『生成歌词』的确定之后就闪退」—— 下载中途断流留下的半截 onnx
      * 被当成「已就绪」喂给 sherpa，正是这类闪退的来源之一。
      */
-    private fun resolvedFile(context: Context, role: String): File? {
-        val mf = modelFiles.firstOrNull { it.role == role } ?: return null
-        val sizes = loadSizes(context)
+    private fun resolvedFile(
+        context: Context,
+        spec: AsrModelSpecs.Spec,
+        role: String
+    ): File? {
+        val mf = spec.files.firstOrNull { it.role == role } ?: return null
+        val sizes = loadSizes(context, spec)
+        val dir = dirFor(context, spec)
         for (name in mf.candidates) {
-            val f = File(modelDir(context), name)
+            val f = File(dir, name)
             if (!f.exists()) continue
             val len = f.length()
             if (!AsrModelRules.isUsable(name, len, sizes[name])) {
@@ -97,8 +122,8 @@ object SpeechRecManager {
     }
 
     /** 读「完整大小」账本；不存在或损坏时返回空表（退化成下限判定，不比原来差）。 */
-    private fun loadSizes(context: Context): Map<String, Long> = try {
-        val f = File(modelDir(context), AsrModelRules.SIZES_FILE)
+    private fun loadSizes(context: Context, spec: AsrModelSpecs.Spec): Map<String, Long> = try {
+        val f = File(dirFor(context, spec), AsrModelRules.SIZES_FILE)
         if (f.exists()) AsrModelRules.parseSizes(f.readText()) else emptyMap()
     } catch (e: Exception) {
         emptyMap()
@@ -109,12 +134,17 @@ object SpeechRecManager {
      * 记一个来路不明的值比不记更糟（会把坏文件自证成好的）。
      * 写入与前几轮的 store 同套纪律：先写 `.tmp` 再 rename。
      */
-    private fun recordSize(context: Context, name: String, total: Long) {
+    private fun recordSize(
+        context: Context,
+        spec: AsrModelSpecs.Spec,
+        name: String,
+        total: Long
+    ) {
         if (total <= 0) return
         try {
-            val all = loadSizes(context).toMutableMap()
+            val all = loadSizes(context, spec).toMutableMap()
             all[name] = total
-            val dir = modelDir(context).apply { mkdirs() }
+            val dir = dirFor(context, spec).apply { mkdirs() }
             val tmp = File(dir, AsrModelRules.SIZES_FILE + ".tmp")
             tmp.writeText(AsrModelRules.serializeSizes(all))
             val target = File(dir, AsrModelRules.SIZES_FILE)
@@ -127,8 +157,13 @@ object SpeechRecManager {
         }
     }
 
-    fun isModelReady(context: Context): Boolean =
-        modelFiles.all { resolvedFile(context, it.role) != null }
+    /** 当前选中的模型是否就绪。 */
+    fun isModelReady(context: Context): Boolean = isModelReady(context, currentSpec(context))
+
+    fun isModelReady(context: Context, spec: AsrModelSpecs.Spec): Boolean {
+        // bpe 模型缺 bpe.model 时加载会失败，所以要求清单里每一项都在
+        return spec.files.all { resolvedFile(context, spec, it.role) != null }
+    }
 
     private fun isSaneContent(bytes: ByteArray, n: Int, name: String): Boolean {
         // onnx 是二进制（protobuf），tokens.txt 是文本：只要不是 '<' 开头的 HTML 即可
@@ -147,10 +182,11 @@ object SpeechRecManager {
         onDone: (ok: Boolean, errMsg: String?) -> Unit,
         isCancelled: () -> Boolean = { cancelFlagForTest }
     ) {
+        val spec = currentSpec(context)
         Thread {
-            val dir = modelDir(context).apply { mkdirs() }
-            for ((idx, mf) in modelFiles.withIndex()) {
-                val existing = resolvedFile(context, mf.role)
+            val dir = dirFor(context, spec).apply { mkdirs() }
+            for ((idx, mf) in spec.files.withIndex()) {
+                val existing = resolvedFile(context, spec, mf.role)
                 if (existing != null) {
                     onProgress(idx, 100)
                     continue
@@ -164,7 +200,7 @@ object SpeechRecManager {
                         PlaybackLog.log("asr model retry #${attempt + 1} for ${mf.role}")
                         Thread.sleep(3000L * attempt)
                     }
-                    for (base in modelSources) {
+                    for (base in spec.sources) {
                         for (name in mf.candidates) {
                             if (isCancelledHook()) break@attempt
                             try {
@@ -222,7 +258,7 @@ object SpeechRecManager {
                                     tmp.delete()
                                 }
                                 // 3.0.1：把服务器声明的长度记进账本，之后按它核对完整性
-                                recordSize(context, name, total)
+                                recordSize(context, spec, name, total)
                                 downloaded = target
                                 onProgress(idx, 100)
                                 PlaybackLog.log("asr model OK ${mf.role} <- $base$name (${acc}B)")
@@ -310,8 +346,9 @@ object SpeechRecManager {
 
     /** 手动导入模型文件（SAF 多选）：文件名匹配任一候选即拷入模型目录。返回成功数。 */
     fun importModelFiles(context: Context, uris: List<Uri>): Int {
-        val dir = modelDir(context).apply { mkdirs() }
-        val known = modelFiles.flatMap { it.candidates }.toSet()
+        val spec = currentSpec(context)
+        val dir = dirFor(context, spec).apply { mkdirs() }
+        val known = spec.files.flatMap { it.candidates }.toSet()
         var imported = 0
         for (u in uris) {
             try {
@@ -326,7 +363,7 @@ object SpeechRecManager {
                 // 3.0.1：手动导入也按账本核对 —— 用户在浏览器里下到一半的文件，
                 // 在这里就被拒掉，而不是等识别时把半个 onnx 喂给 sherpa 再崩。
                 // 账本里没有记录（纯手动导入、从没下载过）时退化为下限判定。
-                if (AsrModelRules.isUsable(name, len, loadSizes(context)[name])) {
+                if (AsrModelRules.isUsable(name, len, loadSizes(context, spec)[name])) {
                     val target = File(dir, name)
                     if (!tmp.renameTo(target)) {
                         tmp.copyTo(target, overwrite = true)
@@ -336,7 +373,7 @@ object SpeechRecManager {
                     PlaybackLog.log("asr import OK $name (${len}B)")
                 } else {
                     PlaybackLog.log(
-                        "asr import REJECT $name (${len}B, expected ${loadSizes(context)[name] ?: "unknown"})"
+                        "asr import REJECT $name (${len}B, expected ${loadSizes(context, spec)[name] ?: "unknown"})"
                     )
                     tmp.delete()
                 }
@@ -366,7 +403,7 @@ object SpeechRecManager {
     private val symbolCache = HashMap<String, Set<String>>()
 
     private fun symbolTable(context: Context): Set<String>? {
-        val f = resolvedFile(context, "tokens") ?: return null
+        val f = resolvedFile(context, currentSpec(context), "tokens") ?: return null
         val key = f.absolutePath + ":" + f.length()
         synchronized(symbolCache) { symbolCache[key]?.let { return it } }
         return try {
@@ -477,29 +514,43 @@ object SpeechRecManager {
                     decodeToQueue(context, audioUri, queue, onProgress, isCancelled)
                 }
                 decoder.start()
-                val lines = recognizeStreaming(
-                    queue, modelDir(context),
-                    scriptText?.let { writeHotwords(context, it) },
-                    { linesSoFar ->
-                        windowCount++
-                        if (windowCount % 5 == 0) {
-                            PlaybackLog.log(
-                                "asr window #$windowCount: ${linesSoFar.size} lines " +
-                                    "@${System.currentTimeMillis() - t0}ms"
-                            )
-                        }
-                        // 实时：每窗完成即写盘 + 上抛（UI 预览 / 逐窗翻译联动）
-                        if (!writeLrc(context, target, buildLrc(linesSoFar))) {
-                            // 写失败（如 SAF 中途失效）：切应用内兜底
-                            PlaybackLog.log("asr writeLrc fail -> fallback internal")
-                            target = internalLrcTarget(context, audioUri)
-                            writeLrc(context, target, buildLrc(linesSoFar))
-                        }
-                        onWindowDone(linesSoFar)
-                    },
-                    isCancelled
-                ) { errMsg ->
-                    onDone(false, errMsg, null, null)
+                // 3.1：音频增强会话（VAD / 降噪），整段音频复用同一个实例。
+                // 必须在识别前建好、识别后释放 —— 每窗重建会慢到不可用。
+                val enhance = AsrEnhance.newSession(
+                    context,
+                    wantVad = prefs(context).getBoolean(KEY_ASR_VAD, true),
+                    wantDenoise = prefs(context).getBoolean(KEY_ASR_DENOISE, false)
+                )
+                val lines = try {
+                    recognizeStreaming(
+                        queue, currentSpec(context), modelDir(context),
+                        scriptText?.let { writeHotwords(context, it) },
+                        enhance,
+                        { linesSoFar ->
+                            windowCount++
+                            if (windowCount % 5 == 0) {
+                                PlaybackLog.log(
+                                    "asr window #$windowCount: ${linesSoFar.size} lines " +
+                                        "@${System.currentTimeMillis() - t0}ms"
+                                )
+                            }
+                            // 实时：每窗完成即写盘 + 上抛（UI 预览 / 逐窗翻译联动）
+                            if (!writeLrc(context, target, buildLrc(linesSoFar))) {
+                                // 写失败（如 SAF 中途失效）：切应用内兜底
+                                PlaybackLog.log("asr writeLrc fail -> fallback internal")
+                                target = internalLrcTarget(context, audioUri)
+                                writeLrc(context, target, buildLrc(linesSoFar))
+                            }
+                            onWindowDone(linesSoFar)
+                        },
+                        isCancelled
+                    ) { errMsg ->
+                        onDone(false, errMsg, null, null)
+                    }
+                } finally {
+                    // 增强会话持有 native 资源，必须释放（整段音频只建这一次）。
+                    // 放在 finally 里，取消 / 异常退出也不会漏。
+                    enhance.close()
                 }
                 if (lines == null) {
                     PlaybackLog.log("asr aborted after ${System.currentTimeMillis() - t0}ms")
@@ -755,29 +806,54 @@ object SpeechRecManager {
 
     private fun recognizeStreaming(
         queue: java.util.concurrent.ArrayBlockingQueue<Any>,
+        spec: AsrModelSpecs.Spec,
         modelDir: File,
         hotwordsFile: File?,
+        enhance: AsrEnhance.Session?,
         onWindowDone: (linesSoFar: List<LrcLine>) -> Unit,
         isCancelled: () -> Boolean,
         err: (String) -> Unit
     ): List<LrcLine>? {
         val tokens = mutableListOf<Pair<Double, String>>()
+        // 3.1：被 VAD 判定为「没人声」而跳过的窗口数。声明在 try 之外，
+        // 因为收尾日志（try 之后）要读它 —— 放进去会作用域不足、编译失败。
+        var skippedWindows = 0
         try {
+            // 3.1：文件名与 modelingUnit 都跟着模型规格走，不再写死日语那套。
+            // 韩语模型的主文件名与日语**完全相同**（都叫 encoder-epoch-99-avg-1.int8.onnx），
+            // 靠目录隔离区分；modelingUnit 一个是 cjkchar（按字）、一个是 bpe（按子词），
+            // 写死会导致韩语识别出乱码。
+            fun firstExisting(role: String, fallback: String): File {
+                val mf = spec.files.firstOrNull { it.role == role }
+                val hit = mf?.candidates?.map { File(modelDir, it) }?.firstOrNull { it.exists() }
+                return hit ?: File(modelDir, fallback)
+            }
+            val encoderF = firstExisting("encoder", "encoder-epoch-99-avg-1.int8.onnx")
+            val decoderF = firstExisting("decoder", "decoder-epoch-99-avg-1.onnx")
+            val joinerF = firstExisting("joiner", "joiner-epoch-99-avg-1.onnx")
+            PlaybackLog.log(
+                "asr load model=${spec.id} unit=${spec.modelingUnit} " +
+                    "enc=${encoderF.name} dec=${decoderF.name} join=${joinerF.name}"
+            )
             val recognizer = OfflineRecognizer(
                 config = OfflineRecognizerConfig(
                     featConfig = FeatureConfig(sampleRate = 16000, featureDim = 80),
                     modelConfig = OfflineModelConfig(
                         transducer = OfflineTransducerModelConfig(
-                            encoder = File(modelDir, "encoder-epoch-99-avg-1.int8.onnx").absolutePath,
-                            decoder = File(modelDir, "decoder-epoch-99-avg-1.onnx").absolutePath,
-                            joiner = (File(modelDir, "joiner-epoch-99-avg-1.int8.onnx")
-                                .takeIf { it.exists() }
-                                ?: File(modelDir, "joiner-epoch-99-avg-1.onnx")).absolutePath
+                            encoder = encoderF.absolutePath,
+                            decoder = decoderF.absolutePath,
+                            joiner = joinerF.absolutePath
                         ),
                         tokens = File(modelDir, TOKENS_FILE).absolutePath,
+                        // 韩语（bpe 切分）必须指到 bpe.model，否则加载直接失败
+                        bpeVocab = if (spec.needsBpeModel) {
+                            File(modelDir, "bpe.model").absolutePath
+                        } else {
+                            ""
+                        },
                         numThreads = 2,
                         modelType = "transducer",
-                        modelingUnit = "cjkchar"
+                        modelingUnit = spec.modelingUnit
                     ),
                     decodingMethod = if (hotwordsFile != null) "modified_beam_search" else "greedy_search",
                     hotwordsFile = hotwordsFile?.absolutePath ?: "",
@@ -842,8 +918,28 @@ object SpeechRecManager {
                         continue
                     }
                     // 识别一个窗
-                    val window = FloatArray(minOf(windowSamples, pendingSamples))
+                    var window = FloatArray(minOf(windowSamples, pendingSamples))
                     takeWindow(window)
+                    // 3.1：先问 VAD「这段到底有没有人声」。没有就整窗跳过 ——
+                    // 纯音乐 / 间奏 / 前奏本来是识别不出内容的，送进去只会让模型硬猜，
+                    // 粉丝反馈的「冒出莫名其妙的一行」多半就是这么来的。
+                    // hasSpeech 返回 null（没开 VAD / 没模型 / 出错）时一律按「有语音」继续，
+                    // 增强是可选优化，绝不能因为它让整段识别失败。
+                    val speech = enhance?.hasSpeech(window)
+                    if (speech == false) {
+                        skippedWindows++
+                        windowStart += windowSec
+                        val rewindSkip = (16000 * overlapSec).toInt()
+                        if (window.size > rewindSkip) {
+                            pending.addFirst(
+                                window.copyOfRange(window.size - rewindSkip, window.size)
+                            )
+                            pendingSamples += rewindSkip
+                        }
+                        continue
+                    }
+                    // 降噪（可关；对已混好的音乐可能削掉人声细节，所以默认关）
+                    enhance?.denoise(window)?.let { window = it }
                     val stream = recognizer.createStream()
                     stream.acceptWaveform(window, sampleRate = 16000)
                     recognizer.decode(stream)
@@ -880,7 +976,9 @@ object SpeechRecManager {
             err("没有识别到任何语音内容（纯音乐或模型不匹配？）")
             return null
         }
-        PlaybackLog.log("asr recognize done: ${tokens.size} tokens")
+        PlaybackLog.log(
+            "asr recognize done: ${tokens.size} tokens, $skippedWindows windows skipped by VAD"
+        )
         return tokensToLines(tokens)
     }
 
