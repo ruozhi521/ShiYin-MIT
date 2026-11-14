@@ -1,7 +1,5 @@
 package com.example.subtitleplayer
 
-import java.text.Collator
-import java.util.Locale
 
 /**
  * 歌曲列表排序（3.0.6）。
@@ -37,7 +35,23 @@ object SongSorter {
         added: Map<String, Long>
     ): List<Song> {
         if (mode == NONE || songs.size <= 1) return songs
-        val collator = Collator.getInstance(Locale.CHINA)
+
+        // 预计算排序键：拼音转换比字符串比较贵得多，而 sortedWith 内部会做
+        // O(n log n) 次比较 —— 每次比较都重新转拼音会把几万首歌的排序拖到几秒。
+        // 这里每个 title 只转一次，比较时查表。
+        val keys = HashMap<String, String>(songs.size * 2)
+        for (s in songs) {
+            if (!keys.containsKey(s.title)) keys[s.title] = NameOrder.keyOf(s.title)
+        }
+
+        /** 按标题比较（自然排序：数字按整体数值，汉字按拼音）。 */
+        fun cmpTitle(a: Song, b: Song): Int {
+            val ka = keys[a.title] ?: NameOrder.keyOf(a.title)
+            val kb = keys[b.title] ?: NameOrder.keyOf(b.title)
+            val c = NameOrder.naturalCompare(ka, kb)
+            // 键相同（如仅大小写/前导零不同）时用原串兜底，保证严格全序
+            return if (c != 0) c else a.title.compareTo(b.title)
+        }
 
         // ⚠️ 倒序**不能**用 `sorted().reversed()` 实现：那会把「时间缺失排最后」
         // 这条规则一起反转，变成缺失值全跑到最前面（原本就是这么写错的，
@@ -45,10 +59,7 @@ object SongSorter {
         // 所以 desc 必须在比较器**内部**处理，缺失值的判定不参与反转。
         val cmp: Comparator<Song> = when (mode) {
             NAME -> Comparator { a, b ->
-                val c = collator.compare(a.title, b.title)
-                // Collator 不保证自反性，必须原串兜底，否则 sortWith 可能抛
-                // "Comparison method violates its general contract!"
-                val base = if (c != 0) c else a.title.compareTo(b.title)
+                val base = cmpTitle(a, b)
                 if (desc) -base else base
             }
 
@@ -57,7 +68,7 @@ object SongSorter {
                 val tb = b.lastModified
                 when {
                     // 时间缺失（0）统一排到最后，**不论正序倒序** —— 放在中间会显得"排序坏了"
-                    ta == 0L && tb == 0L -> a.title.compareTo(b.title)
+                    ta == 0L && tb == 0L -> cmpTitle(a, b)
                     ta == 0L -> 1
                     tb == 0L -> -1
                     desc -> tb.compareTo(ta)
@@ -69,7 +80,7 @@ object SongSorter {
                 val ta = added[a.uri.toString()] ?: 0L
                 val tb = added[b.uri.toString()] ?: 0L
                 when {
-                    ta == 0L && tb == 0L -> a.title.compareTo(b.title)
+                    ta == 0L && tb == 0L -> cmpTitle(a, b)
                     ta == 0L -> 1
                     tb == 0L -> -1
                     desc -> tb.compareTo(ta)

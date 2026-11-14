@@ -109,15 +109,25 @@ object LibraryTree {
         recent: Map<String, Long> = emptyMap(),
         seed: Long = 0L
     ) {
-        // Collator 不保证自反性（compare==0 不代表相等），必须用原串比较兜底，
-        // 否则 sortWith 可能抛 "Comparison method violates its general contract!"
-        val collator = java.text.Collator.getInstance(java.util.Locale.CHINA)
-        val byName = Comparator<TreeNode> { a, b ->
-            val c = collator.compare(a.name, b.name)
-            if (c != 0) c else a.name.compareTo(b.name)
-        }
-
+        // 3.1：改走 [NameOrder]，与首字母索引条共用同一个排序键。
+        //
+        // 旧实现用 `Collator(Locale.CHINA)`，实测汉字全排在拉丁字母之后，
+        // 而索引条按 ICU 拼音把汉字分到 A/Z 等字母区 —— 两边规则相反，
+        // 滑动索引时必然定位错乱（爱发电用户反馈）。
+        //
+        // 这里每层排序前先把本层名字的键算好，避免 O(n log n) 次重复转拼音。
         fun sortLevel(list: MutableList<TreeNode>, levelKey: String) {
+            // 本层节点的排序键（同一层里同名节点极少，用 HashMap 足够）
+            val keyCache = HashMap<String, String>(list.size * 2)
+            fun keyOf(n: TreeNode): String =
+                keyCache.getOrPut(n.name) { NameOrder.keyOf(n.name) }
+
+            val byName = Comparator<TreeNode> { a, b ->
+                val c = NameOrder.naturalCompare(keyOf(a), keyOf(b))
+                // 键相同用原串兜底，保证严格全序（否则可能抛 contract 异常）
+                if (c != 0) c else a.name.compareTo(b.name)
+            }
+
             when (sortMode) {
                 SORT_RECENT -> {
                     // 时间戳大的在前；同一时间戳（含从未播放）保持原顺序（稳定排序）。

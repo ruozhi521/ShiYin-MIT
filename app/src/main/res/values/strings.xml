@@ -316,7 +316,7 @@
     <!-- 3.1：音频增强（VAD / 降噪）。粉丝「复杂场景识别不准」的正解在这里，不是换更大的模型 -->
     <string name="asr_enhance_title">音频增强</string>
     <string name="asr_vad_title">跳过纯音乐段（VAD）</string>
-    <string name="asr_vad_hint">识别前先判断这段有没有人声。前奏、间奏、纯伴奏会被直接跳过 —— 以前这些段会被硬塞给模型，容易冒出莫名其妙的一行</string>
+    <string name="asr_vad_hint">识别前先判断这段有没有人声，纯伴奏段直接跳过。默认关：判错了会把一整段人声当成纯音乐丢掉，所以先用默认值试，确实有多余杂行再打开</string>
     <string name="asr_denoise_title">降噪</string>
     <string name="asr_denoise_hint">把人声从背景噪音里提出来。对录音差、环境吵的音源有用；对已经混好的音乐可能顺带削掉人声细节，所以默认关</string>
     <string name="asr_enhance_need_model">需要先下载增强模型（共约 3MB）</string>

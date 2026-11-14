@@ -50,7 +50,19 @@ object SpeechRecManager {
     /** 当前选中的模型 id（prefs 里存 ascii id，见 [AsrModelSpecs]）。 */
     const val KEY_ASR_MODEL_ID = "asr_model_id"
 
-    /** 识别前用 VAD 跳过「没人声」的窗口（3.1，默认开）。 */
+    /**
+     * 识别前用 VAD 跳过「没人声」的窗口（3.1）。
+     *
+     * ⚠️ 3.1 定稿时把默认值从「开」改成「关」，原因是风险不对称：
+     * VAD 一旦误判（把有人声的窗判成纯音乐），损失是**整窗内容全丢** ——
+     * 现在一窗 18 秒，丢起来非常刺眼，正好对应粉丝说的「甚至漏个小 30 秒去」。
+     * 反过来，关掉 VAD 的代价只是「纯音乐段会被送进去识别」，最多多出几行无意义的词，
+     * 用户看得见、也能重识别一次。
+     *
+     * 而且这个阈值（Silero 常见默认 0.5）没针对**歌声**调过 —— 唱歌的音高、
+     * 气息、混音处理都和说话差很多，误杀轻声句完全可能。所以在拿到真机音频
+     * 验证之前，不该让它默认生效。
+     */
     const val KEY_ASR_VAD = "asr_vad"
 
     /** 识别前降噪（3.1，默认关 —— 对已混好的音乐可能削掉人声细节）。 */
@@ -508,7 +520,10 @@ object SpeechRecManager {
                     writeLrc(context, target, "")
                 }
                 // 流水线：解码线程边解码边把 16k 采样块推入队列，
-                // 识别线程凑满 30s 窗即识别并实时上抛（首行歌词约 6-10 秒内出现）
+                // 识别线程凑满一窗即识别并实时上抛（首行歌词约 4-6 秒内出现）
+                //
+                // 3.1：窗长从 30s 缩到 18s（重叠 1.5s → 3s）。窗越短，
+                // 切点落进词中间的概率越低 —— 这是「漏几个词」的主因，见下方注释。
                 val queue = java.util.concurrent.ArrayBlockingQueue<Any>(128)
                 val decoder = Thread {
                     decodeToQueue(context, audioUri, queue, onProgress, isCancelled)
@@ -518,7 +533,7 @@ object SpeechRecManager {
                 // 必须在识别前建好、识别后释放 —— 每窗重建会慢到不可用。
                 val enhance = AsrEnhance.newSession(
                     context,
-                    wantVad = prefs(context).getBoolean(KEY_ASR_VAD, true),
+                    wantVad = prefs(context).getBoolean(KEY_ASR_VAD, false),
                     wantDenoise = prefs(context).getBoolean(KEY_ASR_DENOISE, false)
                 )
                 val lines = try {
@@ -861,8 +876,20 @@ object SpeechRecManager {
                 )
             )
             try {
-                val windowSec = 30.0
-                val overlapSec = 1.5
+                // 3.1：窗长与重叠（B站粉丝反馈「识别歌词时会漏几个词，甚至会漏个小 30 秒去」）
+                //
+                // 旧参数 windowSec=30 / overlapSec=1.5 的问题是：
+                // **切点固定每 30 秒一刀，不管切在句中哪一处**。1.5 秒的重叠
+                // 只够接住「刚好跨切点的半个词」，对语速慢或长音（音声/ASRMR）
+                // 根本不够 —— 一个词被切断后，前半在上一窗被 emittedUntil 收走，
+                // 后半在下一窗却因时间戳早于边界而被丢掉，就是「漏几个词」。
+                //
+                // 改成 18 秒 + 3 秒重叠：
+                // - 窗越短，切点落进词中间的概率越低；
+                // - 3 秒足以覆盖一个完整的日语音节群/长音尾巴；
+                // - 总处理量只增加约 11%（21/18 vs 31.5/30），换来拼词明显更稳。
+                val windowSec = 18.0
+                val overlapSec = 3.0
                 val windowSamples = (16000 * (windowSec + overlapSec)).toInt()
                 val pending = ArrayDeque<FloatArray>()
                 var pendingSamples = 0
@@ -957,7 +984,7 @@ object SpeechRecManager {
                     if (r.tokens.isNotEmpty()) {
                         onWindowDone(tokensToLines(tokens))
                     }
-                    // 回退 1.5s 重叠区，下一窗从这里开始（重叠 token 由 emittedUntil 去重）
+                    // 回退重叠区，下一窗从这里开始（重叠 token 由 emittedUntil 去重）
                     val rewind = (16000 * overlapSec).toInt()
                     if (window.size > rewind) {
                         pending.addFirst(window.copyOfRange(window.size - rewind, window.size))

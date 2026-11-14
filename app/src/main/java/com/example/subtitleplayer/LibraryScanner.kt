@@ -77,12 +77,12 @@ class LibraryScanner(
         scanDir(treeUri, rootId, null, folderSongs, lyrics, all, useFileNameTitle())
 
         val playlists = folderSongs.map { (name, songs) ->
-            Playlist(name, songs.sortedBy { it.title })
-        }.sortedBy { it.name }
+            Playlist(name, NameOrder.sortedByNames(songs) { it.title })
+        }.let { NameOrder.sortedByNames(it) { p -> p.name } }
 
         return MusicLibrary(
             playlists = playlists,
-            allSongs = all.sortedBy { it.title },
+            allSongs = NameOrder.sortedByNames(all) { it.title },
             lyrics = lyrics,
             // 3.0.6：文件夹里的图片当封面（不限制文件名/格式）
             folderCovers = pickFolderCovers(folderSongs.keys)
@@ -519,11 +519,11 @@ class LibraryScanner(
                 }
             }
             val playlists = folderSongs.map { (name, s) ->
-                Playlist(name, s.sortedBy { it.title })
-            }.sortedBy { it.name }
+                Playlist(name, NameOrder.sortedByNames(s) { it.title })
+            }.let { NameOrder.sortedByNames(it) { p -> p.name } }
             return MusicLibrary(
                 playlists = playlists,
-                allSongs = all.sortedBy { it.title },
+                allSongs = NameOrder.sortedByNames(all) { it.title },
                 lyrics = lyrics,
                 folderCovers = folderCovers
             )
@@ -556,11 +556,11 @@ class LibraryScanner(
             val folderCovers = HashMap<String, Uri>(old.folderCovers)
             folderCovers.putAll(fresh.folderCovers)
             val playlists = all.groupBy { it.folder }
-                .map { (name, list) -> Playlist(name, list.sortedBy { it.title }) }
-                .sortedBy { it.name }
+                .map { (name, list) -> Playlist(name, NameOrder.sortedByNames(list) { it.title }) }
+                .let { NameOrder.sortedByNames(it) { p -> p.name } }
             return MusicLibrary(
                 playlists = playlists,
-                allSongs = all.sortedBy { it.title },
+                allSongs = NameOrder.sortedByNames(all) { it.title },
                 lyrics = lyrics,
                 folderCovers = folderCovers
             )

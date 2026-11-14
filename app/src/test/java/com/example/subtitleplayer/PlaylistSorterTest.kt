@@ -15,6 +15,19 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class PlaylistSorterTest {
 
+    /**
+     * 3.1：装上拼音源。`NameOrder` 依赖汉字→拼音（生产用 ICU），
+     * 而纯 JVM 单测没有 ICU —— 不装的话汉字会退回按 Unicode 码位排，
+     * 「周」跑到「安」前面，下面那些拼音序断言就会假失败。
+     */
+    @org.junit.Before
+    fun setUpPinyin() = TestPinyin.install()
+
+    /** 测试间共用同一个 JVM 与 NameOrder 单例，必须卸掉，否则污染其他用例。 */
+    @org.junit.After
+    fun tearDownPinyin() = TestPinyin.restore()
+
+
     private fun pl(vararg names: String): List<Playlist> =
         names.map { Playlist(it, emptyList<Song>()) }
 

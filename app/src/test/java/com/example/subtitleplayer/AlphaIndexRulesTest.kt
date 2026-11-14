@@ -12,6 +12,14 @@ import org.junit.Test
  */
 class AlphaIndexRulesTest {
 
+    /** 3.1：装上拼音源。索引条现在与排序共用 NameOrder 的拼音排序键。 */
+    @org.junit.Before
+    fun setUpPinyin() = TestPinyin.install()
+
+    @org.junit.After
+    fun tearDownPinyin() = TestPinyin.restore()
+
+
     @Test
     fun `拉丁字母取大写`() {
         assertEquals('A', AlphaIndexRules.fallbackLetterOf("abc"))
@@ -105,4 +113,44 @@ class AlphaIndexRulesTest {
     fun `条目高度为零时退回第一个且不除零崩溃`() {
         assertEquals(0, AlphaIndexRules.indexAt(50f, 0f, 3))
     }
+
+    // ---------- 与排序同源的一致性（3.1，修「定位不到」）----------
+
+    /**
+     * 端到端：乱序输入 → 先用 NameOrder 排序 → 再用同一个 letterOf 建索引，
+     * 每个索引项的下标必须**正好指向该字母的第一项**。
+     *
+     * 这是爱发电用户那条反馈的验收标准：
+     * 「滑动字母导航只会在首字符汉字的 a-z 之间滑动，排在最下面的字母首字符则定位不到」。
+     * 只要这条恒成立，索引条就不可能出现「点 Z 跳到别处」。
+     *
+     * 3.0.8 会失败：排序用 Collator（汉字全排在字母后）、索引用 AlphabeticIndex
+     * （汉字按拼音分桶），两边对同一项的位置判断相反，索引下标指向错误位置。
+     */
+    @Test
+    fun `索引下标必须指向该字母的第一项_与排序同源`() {
+        val raw = listOf(
+            "周杰伦", "Apple", "安室奈美惠", "Ben", "Zero", "爱情",
+            "Bob", "本兮", "Zebra", "爱"
+        )
+        val ordered = NameOrder.sortedByNames(raw) { it }
+        val letterOf: (String) -> Char = { NameOrder.letterOf(it) }
+        val index = AlphaIndexRules.buildIndex(ordered, letterOf)
+
+        assertTrue("拼音源应产生多个桶，实际 $index", index.size >= 3)
+        for ((letter, pos) in index) {
+            assertEquals(
+                "索引项 $letter→$pos 指向的项 `\${ordered[pos]}` 首字母不是 $letter",
+                letter,
+                letterOf(ordered[pos])
+            )
+            if (pos > 0) {
+                assertTrue(
+                    "{$letter} 的下标 $pos 不是该字母首次出现（前一项 `\${ordered[pos - 1]}` 同属该字母）",
+                    letterOf(ordered[pos - 1]) != letter
+                )
+            }
+        }
+    }
+
 }

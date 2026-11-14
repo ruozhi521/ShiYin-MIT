@@ -1,7 +1,5 @@
 package com.example.subtitleplayer
 
-import java.text.Collator
-import java.util.Locale
 
 /**
  * 歌单排序纯逻辑（2.13）。
@@ -11,21 +9,20 @@ import java.util.Locale
 object PlaylistSorter {
 
     /**
-     * 按名称排序（中文按拼音）。
-     * 用 Collator(Locale.CHINA) 而非默认比较：Kotlin 默认按 Unicode 码位，
-     * 中文会排得完全不符合直觉（「周」U+5468 会排在「安」U+5B89 前面）。
+     * 按名称排序（3.1：改走 [NameOrder]，汉字与字母按拼音**混排**，数字按整体数值）。
      *
-     * 注意：Collator 官方明确**不保证自反性**（compare(a,b)==0 不代表 a==b，
-     * 例如它可能忽略某些标点差异）。直接用它会破坏 Comparator 的全序契约，
-     * 触发 `Comparison method violates its general contract!` 崩溃。
-     * 因此 compare 返回 0 时用原始字符串比较兜底，保证严格全序。
+     * ## 3.0.8 的两个实测缺陷（爱发电用户反馈）
+     *
+     * 旧实现用 `Collator(Locale.CHINA)`，实测行为（见 [NameOrder] 类注释）：
+     * - `[Apple, Bob, Zebra, 爱, 爱情, 周杰伦]` —— 汉字**全部排在拉丁字母之后**，
+     *   而首字母条按 ICU 拼音把「爱」分到 A 区 → 滑动索引必然定位错乱；
+     * - 数字逐位比较，`RJ600000` 排在 `RJ999` 前面。
+     *
+     * 现在排序与索引条共用 [NameOrder] 的同一个排序键，物理上不可能再不一致。
      */
     fun byName(lists: List<Playlist>): List<Playlist> {
-        val collator = Collator.getInstance(Locale.CHINA)
-        return lists.sortedWith { a, b ->
-            val c = collator.compare(a.name, b.name)
-            if (c != 0) c else a.name.compareTo(b.name)
-        }
+        // 预计算键：每个歌单只做一次拼音转换（n log n 次比较里不再重复转）
+        return NameOrder.sortedByNames(lists) { it.name }
     }
 
     /**

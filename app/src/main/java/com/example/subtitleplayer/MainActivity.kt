@@ -832,6 +832,8 @@ class MainActivity : AppCompatActivity() {
         // 3.0.1：运行日志实时落盘 —— 闪退后重开时内存缓冲已清空，只有落盘才留得住崩溃前的最后几条
         // （粉丝反馈：崩过一次后重开，导出的日志里完全没有崩溃前的内容，查不到崩在哪一步）
         PlaybackLog.attach(applicationContext)
+        // 3.1：安装汉字→拼音转换器。排序与首字母索引都依赖它，必须在使用前装好。
+        NameOrder.installIcuPinyin()
         val pendingCrash = CrashCatcher.takeCrashLog(this)
         // 在 Activity 创建前应用保存的深色模式（进程级设置，不调用会回系统默认导致深色失效）
         applyDarkMode(prefs.getBoolean(KEY_DARK, false))
@@ -3803,32 +3805,23 @@ class MainActivity : AppCompatActivity() {
     private val alphaIndexMinItems = 8
 
     /**
-     * 取字母规则：优先用系统 ICU 按**拼音**分桶（中文歌单名才能落到 Z / L 这种字母上）。
+     * 取首字母规则（3.1：与排序**同源**）。
      *
-     * `android.icu.text.AlphabeticIndex` 是 Android 4.4+ 提供的 ICU 实现（本项目 minSdk 26），
-     * 纯 JVM 单测里没有它，所以 [AlphaIndexRules] 把「取字母」做成可注入参数：
-     * 这里注入 ICU 版，单测注入固定规则。
+     * ## 为什么不再用 AlphabeticIndex
+     *
+     * 3.0.8 用的是 `android.icu.text.AlphabeticIndex` 分桶，而排序走 `Collator` ——
+     * 两套规则对「汉字该排在哪」的判断相反（实测：Collator 把汉字全排在拉丁字母之后，
+     * 而 AlphabeticIndex 把「爱」分到 A 区）。于是滑动索引条只能在汉字那一小段里跳，
+     * 「排在最下面的字母首字符定位不到」（爱发电用户反馈）。
+     *
+     * 现在两者都从 [NameOrder] 的拼音排序键派生：先转拼音 → 取首字母。
+     * 排序按这个键比较，索引条按这个键取字母，**物理上不可能再不一致**。
+     *
+     * 单测里 [NameOrder.pinyinProvider] 为 null 时退化为原串，中文全归 `#`，
+     * 此时 [AlphaIndexRules.hasUsefulIndex] 会判否、不显示索引条（可接受）。
      */
-    private fun icuLetterOf(): ((String) -> Char)? {
-        return try {
-            val index = android.icu.text.AlphabeticIndex<Int>(
-                android.icu.util.ULocale.SIMPLIFIED_CHINESE
-            )
-            val imm = index.buildImmutableIndex()
-            val labels = (0 until imm.bucketCount).map { imm.getBucket(it).label }
-            // 显式声明函数类型：直接写 `{ name -> ... }` 会被 Kotlin 当成上一行的 trailing lambda
-            val letterOf: (String) -> Char = { name ->
-                val bi = imm.getBucketIndex(name)
-                val label = labels.getOrNull(bi)
-                // underflow / inflow / overflow 桶的 label 不是字母（如 "…"），一律归 Other
-                val ch = label?.firstOrNull()?.uppercaseChar()
-                if (ch != null && ch in 'A'..'Z') ch else AlphaIndexRules.OTHER
-            }
-            letterOf
-        } catch (e: Throwable) {
-            PlaybackLog.log("alpha index ICU unavailable: ${e.javaClass.simpleName}")
-            null
-        }
+    private fun sortedLetterOf(): (String) -> Char {
+        return { name -> NameOrder.letterOf(name) }
     }
 
     /**
@@ -3882,7 +3875,7 @@ class MainActivity : AppCompatActivity() {
             applyAlphaPadding(rv, false)
             return
         }
-        val letterOf = icuLetterOf() ?: AlphaIndexRules::fallbackLetterOf
+        val letterOf = sortedLetterOf()
         val index = AlphaIndexRules.buildIndex(pool, letterOf)
         if (!AlphaIndexRules.hasUsefulIndex(index)) {
             bar.visibility = View.GONE
@@ -7266,13 +7259,15 @@ class MainActivity : AppCompatActivity() {
      * 这是「复杂场景识别不准」的正解 —— 换更大模型收益有限（还可能在大模型
      * 上更爱幻听），而**输入端污染**才是主因：以前纯伴奏段也被硬塞给模型。
      *
-     * 两项的默认值刻意不同：
-     * - VAD 默认**开**：跳过的本来就是识别不出东西的窗，净收益无风险。
-     * - 降噪默认**关**：对已混好的音乐，降噪可能连带削掉人声细节，交给用户试。
+     * 两项默认都**关**，理由不同：
+     * - VAD：误判的代价是整窗内容全丢（一窗 18 秒），而阈值没针对歌声调过。
+     *   关掉最多多出几行无意义的词，用户看得见、能重识别；丢词则悄无声息。
+     *   风险不对称，所以在真机验证前不该默认生效。
+     * - 降噪：对已混好的音乐可能连带削掉人声细节，交给用户试。
      */
     private fun showEnhanceMenu() {
         val hasModel = AsrEnhance.hasVad(this)
-        val vadOn = prefs.getBoolean(SpeechRecManager.KEY_ASR_VAD, true)
+        val vadOn = prefs.getBoolean(SpeechRecManager.KEY_ASR_VAD, false)
         val denoiseOn = prefs.getBoolean(SpeechRecManager.KEY_ASR_DENOISE, false)
 
         val labels = mutableListOf<String>()
@@ -7930,15 +7925,15 @@ class MainActivity : AppCompatActivity() {
             false
         }
         val kept = lib.allSongs.filterNot { inFolder(it) }
-        val all = (kept + newSongs).sortedBy { it.title }
+        val all = NameOrder.sortedByNames(kept + newSongs) { it.title }
         // 歌词 key 按「完整文件夹路径」精确清除（不能前缀匹配，防误删子文件夹歌词）
         val lyrics = lib.lyrics
             .filterKeys { k -> k.substringBeforeLast('/') != folderName }
             .toMutableMap()
         newLyrics.forEach { (k, v) -> lyrics[k] = v }
         val playlists = all.groupBy { it.folder }
-            .map { Playlist(it.key, it.value.sortedBy { s -> s.title }) }
-            .sortedBy { it.name }
+            .map { Playlist(it.key, NameOrder.sortedByNames(it.value) { s -> s.title }) }
+            .let { NameOrder.sortedByNames(it) { p -> p.name } }
         // 3.0.6：文件夹封面表原样保留（这里只换这个文件夹的歌，封面不该跟着丢）
         val newFull = MusicLibrary(playlists, all, lyrics, lib.folderCovers)
         // 缓存写完整库；显示用过滤后的库

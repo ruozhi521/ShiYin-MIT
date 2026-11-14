@@ -113,8 +113,8 @@ object LibraryCache {
 
             val byFolder = songs.groupBy { it.folder }
             val playlists = byFolder.map { (name, list) ->
-                Playlist(name, list.sortedBy { it.title })
-            }.sortedBy { it.name }
+                Playlist(name, NameOrder.sortedByNames(list) { it.title })
+            }.let { NameOrder.sortedByNames(it) { p -> p.name } }
 
             // 3.0.6：文件夹封面（可选字段，旧缓存没有 → 空表）
             val covers = mutableMapOf<String, android.net.Uri>()
@@ -129,7 +129,7 @@ object LibraryCache {
 
             MusicLibrary(
                 playlists = playlists,
-                allSongs = songs.sortedBy { it.title },
+                allSongs = NameOrder.sortedByNames(songs) { it.title },
                 lyrics = lyrics,
                 folderCovers = covers
             )

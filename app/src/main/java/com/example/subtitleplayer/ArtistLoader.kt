@@ -115,8 +115,8 @@ object ArtistLoader {
             }
             groups.getOrPut(artist) { mutableListOf() }.add(song)
         }
-        return groups.map { (name, list) -> name to list.sortedBy { it.title } }
-            .sortedBy { it.first }
+        return groups.map { (name, list) -> name to NameOrder.sortedByNames(list) { it.title } }
+            .let { NameOrder.sortedByNames(it) { p -> p.first } }
     }
 
     private fun saveDisk(context: Context) {
