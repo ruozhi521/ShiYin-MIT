@@ -12,9 +12,26 @@ import java.util.Locale
  * （切歌 / 预加载 / 出声 / 失败码 / 熔断决策），供设置里「导出运行日志」
  * 一键复制发给作者定位问题（尤其无法复现的机型，如 OriginOS 6）。
  *
- * 设计：只存内存（最多 [MAX_LINES] 条，防止无限增长）；导出时拼上设备信息头，
- * 顺带落盘一份到应用私有目录（playback_log.txt）备用。
  * 与 CrashCatcher 互补：CrashCatcher 管闪退，这里管「不闪退但行为不对」。
+ *
+ * ## 两层缓冲（3.1 重做落盘）
+ *
+ * - **内存**：[MAX_LINES] 条环形缓冲，随进程消失；
+ * - **磁盘**：追加写，超过 [FILE_MAX_BYTES] 时**保留尾部**重写。
+ *
+ * 为什么磁盘要保留尾部而不是清空：粉丝反馈过「崩溃后导出的日志里没有崩溃前的内容」——
+ * 有价值的恰恰是最新的那几条。所以轮转砍掉的是头部旧记录。
+ *
+ * ## 3.1 修掉的三个缺陷（用户实测「日志从 10/15 一直堆到现在，非常多」）
+ *
+ * 1. **`persist()` 自我膨胀（最严重）**：它调用 `dump()` 读整个文件，再写回**同一个文件**。
+ *    于是每打开一次「运行日志」弹窗，文件就多叠加一份自己的内容 —— 指数级膨胀。
+ *    该函数已删除：弹窗本来就已拿到 `dump()` 的字符串，落盘纯属多余。
+ * 2. **`delete()` 返回值没检查**：原轮转写的是 `if (f.length() > MAX) f.delete()`，
+ *    文件被占用或删除失败时静默继续追加，于是永远轮转不动。现在改成「读尾部 → 原子重写」，
+ *    不依赖删除是否成功。
+ * 3. **阈值过大 + 导出无上限**：512KB ≈ 4000 行，一个月都触发不到；且 `dump()`
+ *    全量返回，弹窗一次渲染上万行。现在落盘上限 256KB、导出只给最后 [DUMP_MAX_LINES] 行。
  */
 object PlaybackLog {
 
@@ -22,20 +39,20 @@ object PlaybackLog {
     private val lines = ArrayDeque<String>()
     private val tsFormat = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.CHINA)
 
-    /** 落盘文件名与上限（超限就整体重开，避免无限增长；512 KB ≈ 4000 行）。 */
     private const val FILE_NAME = "playback_log.txt"
-    private const val FILE_MAX_BYTES = 512 * 1024
 
-    /** 绑定后的应用上下文；未绑定时只走内存（与旧行为一致）。 */
+    /** 落盘文件上限。超过就保留尾部重写（256 KB ≈ 2000 行，够定位最近几次问题）。 */
+    private const val FILE_MAX_BYTES = 256 * 1024
+
+    /** 轮转时保留多少行（砍头部、留最近的）。 */
+    private const val TRIM_KEEP_LINES = 400
+
+    /** 导出时最多返回多少行。上万行塞进 TextView 会卡，也没有阅读价值。 */
+    private const val DUMP_MAX_LINES = 400
+
+    /** 绑定后的应用上下文；未绑定时只走内存。 */
     private var appContext: android.content.Context? = null
 
-    /**
-     * 绑定应用上下文（在 MainActivity 最早期调用一次，与 [CrashCatcher.install] 并列）。
-     *
-     * 绑定后每条日志**同时追加落盘**。为什么非做不可：内存环形缓冲（[MAX_LINES]）随进程一起消失，
-     * 而闪退 = 进程直接死 —— 粉丝反馈「崩溃过一次之后重开，导出的日志里完全没有崩溃前的内容」，
-     * 正是因为导出的其实是**重开后**的新日志。落盘才留得住最后那几条（能看出崩在哪一步）。
-     */
     fun attach(context: android.content.Context) {
         appContext = context.applicationContext
     }
@@ -53,7 +70,8 @@ object PlaybackLog {
         val ctx = appContext ?: return
         try {
             val f = java.io.File(ctx.filesDir, FILE_NAME)
-            if (f.length() > FILE_MAX_BYTES) f.delete() // 简单轮转：超限就从零开始
+            // 超限先缩（保留尾部），再追加。不依赖 File.delete() 是否成功。
+            if (f.length() > FILE_MAX_BYTES) trimFile(f)
             java.io.FileOutputStream(f, true).use { out ->
                 out.write((line + "\n").toByteArray(Charsets.UTF_8))
             }
@@ -63,10 +81,54 @@ object PlaybackLog {
     }
 
     /**
-     * 导出完整日志文本（含设备/系统/版本信息头）。
+     * 把文件缩到 [TRIM_KEEP_LINES] 行（保留**最新**的）。
      *
-     * 3.0.1：**优先用落盘文件** —— 它含崩溃前的内容（内存缓冲在崩溃后重开就清了）；
-     * 文件不存在或为空时回退到内存缓冲，保证老行为不变。
+     * ## 为什么从尾部读而不是 readLines
+     *
+     * 用户的文件可能已经膨胀到几 MB（旧版的自我膨胀 bug 造成的）。
+     * `readLines()` 会把整个文件读进内存再取尾巴 —— 而这段逻辑跑在 `log()` 里，
+     * 即**启动路径上**，等于把旧 bug 的代价转成启动卡顿。
+     *
+     * 所以用 `RandomAccessFile` 从尾部读固定字节，无论文件多大成本都恒定。
+     *
+     * ## 为什么用 rename 而不是 delete
+     *
+     * 老代码 `f.delete()` 失败时静默继续追加，是日志堆一个月的直接原因。
+     * rename 是原子操作，也不会出现「删了但没写成功」留下空文件的情况。
+     */
+    private fun trimFile(f: java.io.File) {
+        try {
+            // 只从尾部读 256KB —— 足够装下 TRIM_KEEP_LINES 行，且与文件总大小无关
+            val readBytes = minOf(f.length(), 256L * 1024).toInt()
+            if (readBytes <= 0) return
+            val buf = ByteArray(readBytes)
+            java.io.RandomAccessFile(f, "r").use { raf ->
+                raf.seek(f.length() - readBytes)
+                raf.readFully(buf)
+            }
+            val tail = String(buf, Charsets.UTF_8)
+            val allLines = tail.split('\n').filter { it.isNotBlank() }
+            if (allLines.size <= TRIM_KEEP_LINES) return
+            // 可能第一行是被截断的半行（从中间切开），丢掉它
+            val kept = allLines.subList(allLines.size - TRIM_KEEP_LINES, allLines.size)
+            val tmp = java.io.File(f.parentFile, "$FILE_NAME.tmp")
+            tmp.writeText(kept.joinToString("\n") + "\n", Charsets.UTF_8)
+            if (!tmp.renameTo(f)) {
+                // rename 失败（极少数文件系统）→ 退回直接覆盖写
+                f.writeText(kept.joinToString("\n") + "\n", Charsets.UTF_8)
+                tmp.delete()
+            }
+        } catch (_: Exception) {
+            // 缩容失败就让它继续长，下次 log 再试，不影响功能
+        }
+    }
+
+    /**
+     * 导出日志文本（含设备/系统/版本信息头）。
+     *
+     * 优先用落盘文件（含崩溃前内容）；文件为空时回退内存缓冲。
+     * 只返回最后 [DUMP_MAX_LINES] 行 —— 用户要的是「最近出了什么问题」，
+     * 不是一整月的流水账。
      */
     fun dump(context: Context): String {
         val sb = StringBuilder()
@@ -85,27 +147,28 @@ object PlaybackLog {
         } catch (_: Exception) {
         }
         sb.append("---\n")
+
         val fromFile = try {
             val f = java.io.File(context.filesDir, FILE_NAME)
-            if (f.exists()) f.readText(Charsets.UTF_8) else ""
+            if (f.exists()) f.readLines(Charsets.UTF_8) else emptyList()
         } catch (e: Exception) {
-            ""
+            emptyList()
         }
-        if (fromFile.isNotBlank()) {
-            sb.append(fromFile)
+        val source = if (fromFile.isNotEmpty()) {
+            fromFile
         } else {
-            synchronized(lines) {
-                for (l in lines) sb.append(l).append('\n')
-            }
+            synchronized(lines) { lines.toList() }
         }
-        return sb.toString()
-    }
+        if (source.isEmpty()) return sb.toString()
 
-    /** 落盘一份到应用私有目录（备用，正常走复制分享）。 */
-    fun persist(context: Context) {
-        try {
-            java.io.File(context.filesDir, "playback_log.txt").writeText(dump(context))
-        } catch (_: Exception) {
+        // 只给尾部，并在头部标一行说明 —— 免得用户以为日志只有这么点、怀疑我们截断了重要内容
+        val shown = if (source.size > DUMP_MAX_LINES) {
+            sb.append("（共 ${source.size} 行，以下为最近 $DUMP_MAX_LINES 行）\n")
+            source.subList(source.size - DUMP_MAX_LINES, source.size)
+        } else {
+            source
         }
+        for (l in shown) sb.append(l).append('\n')
+        return sb.toString()
     }
 }

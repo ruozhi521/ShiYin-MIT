@@ -89,6 +89,47 @@ object NameOrder {
         }
     }
 
+    /**
+     * 后台预热 ICU 转写器（**只在非主线程才真的初始化**）。
+     *
+     * ## 为什么必须这么绕
+     *
+     * 上一轮把 ICU 改成懒初始化，解决了「每次启动都在主线程付这笔钱」，
+     * 但把成本推到了**第一次切到音乐库**——那里会走
+     * `showSegment → refreshAlphaIndex → letterOf → ensurePinyin()`，
+     * 于是切页时主线程初始化转写器，实测卡 0.3 秒。交互中卡顿比启动慢更难接受。
+     *
+     * 现在改成两条规则：
+     * 1. **后台线程**调用才真初始化（调用方在子线程预热，见 MainActivity）；
+     * 2. **主线程**遇到未就绪时**直接返回 null 不阻塞** —— 排序退化为按码位，
+     *    宁可这一次顺序不理想，也绝不让 UI 卡住。
+     *
+     * 预热通常在启动后几百毫秒内完成，而用户点开音乐库一般要几秒，
+     * 实际几乎不会落到「主线程拿不到拼音」这条路上。
+     */
+    fun warmUpAsync() {
+        Thread {
+            try {
+                ensurePinyin()
+            } catch (e: Throwable) {
+                // 预热失败不影响功能，后续调用会再试
+            }
+        }.apply { isDaemon = true; priority = Thread.MIN_PRIORITY }.start()
+    }
+
+    private fun isMainThread(): Boolean =
+        android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
+
+    /**
+     * 取拼音源但不阻塞主线程：主线程未就绪 → null（退化为原串），后台线程 → 等初始化。
+     */
+    private fun providerNonBlocking(): ((String) -> String)? {
+        if (pinyinReady) return provider
+        if (isMainThread()) return null
+        ensurePinyin()
+        return provider
+    }
+
     private fun createIcuPinyin(): ((String) -> String)? = try {
         val t = android.icu.text.Transliterator.getInstance("Han-Latin")
         // ⚠️ 必须显式声明类型并**单独赋值再返回**：直接写
@@ -124,6 +165,9 @@ object NameOrder {
     /**
      * 带缓存的排序键。UI 线程（索引条）与后台线程（扫描/读缓存）都会调用，
      * 所以加锁 —— 排序本身是纯函数，锁粒度放在缓存读写上即可。
+     *
+     * ⚠️ 走 [providerNonBlocking]：主线程遇到 ICU 未就绪时**不阻塞**，
+     * 退化为按码位排序。详见该函数注释 —— 这是「切到音乐库卡 0.3 秒」的修法。
      */
     fun keyOf(name: String?): String {
         val src = name?.trim().orEmpty()
@@ -131,10 +175,16 @@ object NameOrder {
         synchronized(keyCache) {
             keyCache[src]?.let { return it }
         }
-        val v = sortKey(src, pinyinProvider)
-        synchronized(keyCache) {
-            if (keyCache.size > KEY_CACHE_MAX) keyCache.clear()
-            keyCache[src] = v
+        val provider = providerNonBlocking()
+        val v = sortKey(src, provider)
+        // ⚠️ 主线程 + 拼音未就绪时算出的键是**退化键**（按码位），
+        // 绝不能写进缓存 —— 否则预热完成后仍会命中这批错键，
+        // 中文排序会永久错乱（表现：改了排序设置但顺序不变）。
+        if (provider != null || pinyinReady) {
+            synchronized(keyCache) {
+                if (keyCache.size > KEY_CACHE_MAX) keyCache.clear()
+                keyCache[src] = v
+            }
         }
         return v
     }

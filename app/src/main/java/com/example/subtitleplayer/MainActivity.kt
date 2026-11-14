@@ -344,6 +344,17 @@ class MainActivity : AppCompatActivity() {
     private var scanning = false
 
     /**
+     * 缓存是否正在后台加载（3.1）。
+     *
+     * 1000 首歌的 JSON 解析已经搬到子线程，所以启动后有一小段时间
+     * [library] 还是 null。这时任何「空库判断」如果不看这个标志，
+     * 就会错误地显示「没有添加歌曲」「一首歌都没有」这种引导 ——
+     * 而实际只是还没读完。用户看到的就是「明明有歌却说没歌」。
+     */
+    @Volatile
+    private var cacheLoading = false
+
+    /**
      * 扫描进行中时，用户又点了「重新扫描」（3.0.6）。
      *
      * 弱志反馈：「刚重启时点击设置中的重新扫描，无反应，需等待一会儿后点击才生效」。
@@ -827,19 +838,30 @@ class MainActivity : AppCompatActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 3.1 启动耗时打点（只记毫秒数，不记歌名 —— 便于用户反馈「慢在哪一步」）
+        val tStart = System.currentTimeMillis()
+        var tPrev = tStart
+        fun stage(name: String) {
+            val now = System.currentTimeMillis()
+            PlaybackLog.log("boot $name: +${now - tPrev}ms (total ${now - tStart}ms)")
+            tPrev = now
+        }
         // 最先安装全局崩溃捕获（越早越好），并检测上次未读崩溃日志 → 稍后弹窗
         CrashCatcher.install(applicationContext)
         // 3.0.1：运行日志实时落盘 —— 闪退后重开时内存缓冲已清空，只有落盘才留得住崩溃前的最后几条
         // （粉丝反馈：崩过一次后重开，导出的日志里完全没有崩溃前的内容，查不到崩在哪一步）
         PlaybackLog.attach(applicationContext)
-        // 3.1：拼音转换器改为**懒初始化**（见 NameOrder.pinyinProvider）。
-        // 这里不再主动安装 —— 上一版在 onCreate 主线程初始化 ICU 转写规则，
-        // 是「启动变慢」的直接原因之一，而大部分启动场景根本用不到拼音。
+        // 3.1：后台预热 ICU 拼音转写器。
+        // 不在这里同步初始化（那会阻塞首帧），也不完全等到用时才初始化
+        // （那样第一次切到音乐库会卡 0.3 秒）。后台线程预热是两头都不得罪的做法。
+        NameOrder.warmUpAsync()
         val pendingCrash = CrashCatcher.takeCrashLog(this)
         // 在 Activity 创建前应用保存的深色模式（进程级设置，不调用会回系统默认导致深色失效）
         applyDarkMode(prefs.getBoolean(KEY_DARK, false))
         super.onCreate(savedInstanceState)
+        stage("pre-super")
         setContentView(R.layout.activity_main)
+        stage("inflate")
 
         if (pendingCrash != null) {
             AccentDialogBuilder(this)
@@ -1377,23 +1399,26 @@ class MainActivity : AppCompatActivity() {
         selectModule(defaultModule())
         applyAppearance()
         applyBottomDock()
+        stage("buildUi")
 
         // 恢复上次选择的文件夹（多文件夹 KEY_TREES；savedTreeUris 兼容旧单文件夹 KEY_TREE。
         // 注意不能直接读 KEY_TREE——addTreeUri 写入 KEY_TREES 后会清掉它，读旧 key 会漏掉全部恢复）
         val roots = savedTreeUris()
+        stage("readRoots")
         if (roots.isNotEmpty()) {
             if (roots.all { hasPersistRead(it) }) {
                 if (prefs.getBoolean(KEY_AUTO_SCAN, false)) {
                     scanLibrary()
                 } else {
-                    loadCachedLibrary()
-                    // 缓存秒开后后台静默重扫：已导入文件夹新加的文件自动出现（1.31）
-                    scanLibrary(silent = true)
+                    // 3.1：缓存加载已转后台线程。静默重扫必须等它填完 library 再起，
+                    // 否则会读到 null（旧代码同步执行时天然有序，改异步后要显式保证）。
+                    loadCachedLibrary { scanLibrary(silent = true) }
                 }
             } else {
                 toast(getString(R.string.choose_folder_again))
             }
         }
+        stage("onCreate-end")
     }
 
     override fun onStart() {
@@ -2762,24 +2787,66 @@ class MainActivity : AppCompatActivity() {
 
     private fun segArtistsShown(): Boolean = recyclerArtists.visibility == View.VISIBLE
 
-    private fun loadCachedLibrary() {
-        val cached = LibraryCache.load(this)
-        if (cached == null || cached.allSongs.isEmpty()) {
-            toast(getString(R.string.no_cache))
-            return
-        }
-        // 2.14：缓存存的是完整库，显示前先按隐藏名单过滤
-        fullLibrary = cached
-        val shown = applyHidden(cached)
-        library = shown
-        toast(
-            getString(
-                R.string.loaded_summary,
-                shown.allSongs.size,
-                shown.playlists.size
+    /**
+     * 从缓存恢复音乐库（3.1：**移到后台线程**）。
+     *
+     * ## 为什么必须搬走
+     *
+     * 1000 首歌的缓存是约几百 KB 的 JSON：解析要建 1000 个 Song 对象，
+     * 过滤隐藏项又要遍历两遍。这些全在主线程做 = 首帧迟迟出不来，
+     * 用户看到的就是「点了图标很久没反应」。
+     *
+     * 现在：JSON 解析 + 隐藏过滤都在子线程，**只有最后赋值和刷 UI 回主线程**。
+     * 界面能立刻显示，列表稍后填上 —— 这比白屏 8 秒好得多。
+     *
+     * ⚠️ 顺序上不能提前 return：`library` 在子线程读完前是 null，
+     * 期间任何读 `library` 的路径（如切页）都走它们原本的空库分支，不会崩。
+     */
+    private fun loadCachedLibrary(onDone: (() -> Unit)? = null) {
+        val t0 = System.currentTimeMillis()
+        cacheLoading = true
+        Thread {
+            val cached = try {
+                LibraryCache.load(this)
+            } catch (e: Throwable) {
+                PlaybackLog.log("cache load failed: ${e.message}")
+                null
+            }
+            val tLoad = System.currentTimeMillis() - t0
+            // 隐藏名单过滤也放后台：它要遍历全库两遍
+            val shown = cached?.let {
+                try {
+                    applyHidden(it)
+                } catch (e: Throwable) {
+                    it
+                }
+            }
+            val tTotal = System.currentTimeMillis() - t0
+            PlaybackLog.log(
+                "cache load: parse=${tLoad}ms total=${tTotal}ms songs=${shown?.allSongs?.size ?: 0}"
             )
-        )
-        onLibraryReady()
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                cacheLoading = false
+                if (cached != null && shown != null && shown.allSongs.isNotEmpty()) {
+                    fullLibrary = cached
+                    library = shown
+                    toast(
+                        getString(
+                            R.string.loaded_summary,
+                            shown.allSongs.size,
+                            shown.playlists.size
+                        )
+                    )
+                    onLibraryReady()
+                } else {
+                    toast(getString(R.string.no_cache))
+                }
+                // 回调放在最后、且无论成败都调用：
+                // 静默重扫不该因为「缓存读不到」就不跑 —— 那正好是最需要重扫的情况。
+                onDone?.invoke()
+            }
+        }.apply { isDaemon = true }.start()
     }
 
     private fun playlistList(): List<Playlist> {
@@ -8025,7 +8092,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun showPlaybackLogDialog() {
         val text = PlaybackLog.dump(this)
-        PlaybackLog.persist(this)
         val scroll = android.widget.ScrollView(this)
         val tv = TextView(this)
         tv.text = text
@@ -8524,7 +8590,9 @@ class MainActivity : AppCompatActivity() {
      */
     private fun updateLibraryEmptyGuide() {
         val guide = findViewById<View>(R.id.libraryEmptyGuide) ?: return
-        val empty = library?.allSongs.isNullOrEmpty()
+        // 缓存还在后台读时不要显示「没有歌曲」引导 —— 那只是还没读完（3.1）。
+        // 1000 首的 JSON 解析要几百毫秒，这期间误报空库就是「明明有歌说没歌」。
+        val empty = !cacheLoading && library?.allSongs.isNullOrEmpty()
         guide.visibility = if (empty) View.VISIBLE else View.GONE
     }
 
