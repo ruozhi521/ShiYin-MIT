@@ -42,14 +42,21 @@
         android:textColor="@color/text_hint"
         android:textSize="13sp" />
 
+    <!--
+      3.1.1：文件名改「最多两行、末尾省略」（原来是单行 + ellipsize=middle）。
+      粉丝反馈：「音频文件名称只能看到前几个字跟后几个字，可以自动换行显示吗，
+      有些文件名称会加一大串修饰词，有二三十字那么长」。
+      ellipsize="middle" 单行时把长名字压成「前几个字…后几个字」，中间的曲名信息全丢；
+      换成两行 + 末尾省略后，二十几个字基本能完整显示，实在超长也只截尾部。
+    -->
     <TextView
         android:id="@+id/txtSongTitle"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginStart="8dp"
         android:layout_weight="1"
-        android:ellipsize="middle"
-        android:singleLine="true"
+        android:ellipsize="end"
+        android:maxLines="2"
         android:textColor="@color/text_primary"
         android:textSize="15sp" />
 

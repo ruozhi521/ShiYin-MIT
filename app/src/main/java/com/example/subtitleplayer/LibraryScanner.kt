@@ -391,12 +391,10 @@ class LibraryScanner(
     }
 
     /**
-     * 每个文件夹挑一张封面（3.0.6）。
+     * 每个文件夹挑一张封面（3.0.6，3.1.1 加强）。
      *
-     * 挑选优先级（**不限定文件名**，只是猜得更准）：
-     * 1. 名字里带 cover / folder / front / 封面 / ジャケット / 表紙
-     * 2. 否则取**面积最大**的那张？—— 做不到：扫描时只拿得到文件名，拿不到尺寸。
-     *    退而求其次：按名称排序取第一张，稳定且可预期。
+     * 挑选优先级交给 [CoverPickRules]（分三档：明确封面 / 可能有 / 看不出），
+     * 同档内按名称排序，保证结果稳定可预期。
      *
      * 保留有歌曲的目录及其祖先目录的图片；无关的纯图片目录不参与。
      */
@@ -410,22 +408,19 @@ class LibraryScanner(
                 current = parentFolderOf(current)
             }
         }
-        val hints = arrayOf(
-            "cover", "folder", "front", "album", "jacket",
-            "封面", "ジャケット", "表紙", "収録"
-        )
         val out = HashMap<String, Uri>()
         for ((folder, candidates) in coverCandidates) {
             if (folder !in libraryFolders) continue
             if (candidates.isEmpty()) continue
-            val best = candidates.minWithOrNull(
-                compareBy<Pair<String, Uri>> { (name) ->
-                    // 带封面关键词的优先（0 比 1 靠前）
-                    if (hints.any { name.contains(it) }) 0 else 1
-                }.thenBy { it.first }
-            ) ?: continue
+            // 3.1.1：分档挑选（原来是 9 个关键词的布尔判断）。
+            // 原来的写法覆盖不到音声素材的实际命名 —— `RJ01234567_img_main.jpg`、
+            // `パッケージ.png`、`（封面）（有logo）.png` 一个都不命中，
+            // 于是退化成按名称取第一个，常挑到 `サンプル1.jpg` 这种试听截图。
+            val best = candidates.minWithOrNull { a, b -> CoverPickRules.compare(a.first, b.first) }
+                ?: continue
             out[folder] = best.second
         }
+        applyChildFolderCovers(out, foldersWithSongs)
         // 3.0.6：**向下继承** —— 最常见的情形是「根目录放一张图，各子文件夹都没有」，
         // 那种图通常就是整张碟的封面。不继承的话，只有根目录那层有封面，
         // 用户点进子文件夹又全变回文件夹图标，看起来就像「封面识别没生效」。
@@ -444,6 +439,56 @@ class LibraryScanner(
         }
         PlaybackLog.log("cover: picked=${out.size} sample=${out.keys.take(6)}")
         return out
+    }
+
+    /**
+     * 子目录里的图也算这个文件夹的封面（3.1.1）。
+     *
+     * 粉丝原话：「检测封面时可以读取 **rj 号文件夹下**美的（封面）（有logo）等字样的图片吗」。
+     * DLsite 素材解包后的结构经常是：
+     *
+     * ```
+     * RJ01234567/
+     *   ├── RJ01234567.wav
+     *   └── 画像/            ← 图全在这里，本目录一张都没有
+     *       └── 封面.png
+     * ```
+     *
+     * 原实现只认「歌曲所在目录自己的图」，这种结构一张都读不到 ——
+     * 用户看到的还是默认音符图标。
+     *
+     * 限定条件（避免又去捡壁纸）：
+     * - 只往下找**一层**（RJ 号目录底下的一级子目录），不深挖整棵树；
+     * - 只考虑**没有歌曲、也没有祖先关系**的纯图片子目录；
+     * - 只补空缺，不覆盖目录自己已有的封面。
+     */
+    private fun applyChildFolderCovers(
+        out: MutableMap<String, Uri>,
+        foldersWithSongs: Set<String>
+    ) {
+        if (coverCandidates.isEmpty()) return
+        for (parent in foldersWithSongs) {
+            if (out.containsKey(parent)) continue
+            val prefix = "$parent/"
+            var bestName: String? = null
+            var bestUri: Uri? = null
+            for ((folder, candidates) in coverCandidates) {
+                // 只认直接子目录：`parent/x`，且 x 里不能再有斜杠
+                if (!folder.startsWith(prefix)) continue
+                if (folder.substring(prefix.length).contains('/')) continue
+                // 子目录里自己还有歌 → 那是另一个专辑，别抢它的封面
+                if (folder in foldersWithSongs) continue
+                // 子目录里没有图 → 跳过
+                if (candidates.isEmpty()) continue
+                for ((name, uri) in candidates) {
+                    if (bestName == null || CoverPickRules.compare(name, bestName) < 0) {
+                        bestName = name
+                        bestUri = uri
+                    }
+                }
+            }
+            if (bestUri != null) out[parent] = bestUri
+        }
     }
 
     /**

@@ -238,6 +238,13 @@ class MainActivity : AppCompatActivity() {
     /** 2.16：歌词页无歌词空状态（此前整屏空白）。 */
     private lateinit var lyricsEmpty: View
     private var lastSong: Song? = null
+    /**
+     * 当前歌词来源（3.1.1）：「内嵌歌词」/「识别歌词」/ 外置 .lrc 的文件名 / null。
+     *
+     * 改原文要知道能不能写回去 —— 内嵌 USLT/SYLT 标签没有可写的文件，
+     * 只有外置 .lrc 与应用内 asr_lrc 才写得了。
+     */
+    private var lastLyricName: String? = null
     private var translating = false
     /**
      * 用户在翻译中途点了「取消」（3.0 修复：此前取消按钮只管识别，对翻译完全无效）。
@@ -459,6 +466,7 @@ class MainActivity : AppCompatActivity() {
             updateLyricsEmpty()
             updateNowLyric(-1)
             lastSong = song
+            lastLyricName = lyricName
             transFailedLines = emptyList()
             // 翻译请求在途时不重置 translating / 按钮，防止跨歌并发翻译导致译文串歌（1.30）
             if (!translating) {
@@ -1077,6 +1085,12 @@ class MainActivity : AppCompatActivity() {
             currentSongs.getOrNull(idx)?.let { showSongMenu(it) }
             true
         }
+        // 3.1.1：点封面看大图。粉丝：「还有封面能点击放大吗，太小了看不清」
+        // 沉浸态下先退出沉浸（保持「任何点击都先恢复界面」的既有习惯），
+        // 否则再点一次才放大；非沉浸态直接开大图。
+        imgCd.setOnClickListener {
+            if (playerImmersed) exitImmersion() else showCoverZoom()
+        }
         // 播放页任意点击：沉浸时恢复，平时重置沉浸计时
         viewPlayer.setOnClickListener {
             if (playerImmersed) exitImmersion() else scheduleImmersion()
@@ -1168,7 +1182,7 @@ class MainActivity : AppCompatActivity() {
         playlistTouchHelper.attachToRecyclerView(recyclerSongs)
 
         // ---- 全屏歌词 ----
-        lyricAdapter = LyricAdapter { pos -> onLyricClick(pos) }
+        lyricAdapter = LyricAdapter({ pos -> onLyricClick(pos) }, { pos -> showLyricLineMenu(pos) })
         // 3.0.2：歌词全屏的进入 / 退出按钮
         findViewById<Button>(R.id.btnLyricsFullscreen).setOnClickListener {
             setLyricsFullscreen(true)
@@ -3662,6 +3676,231 @@ class MainActivity : AppCompatActivity() {
         updateNowLyric(pos)
     }
 
+    // ---------- 长按歌词行：手动纠错（3.1.1） ----------
+
+    /**
+     * 长按歌词行弹出的菜单：改原文 / 改译文 / 重翻这一行。
+     *
+     * 为什么要这个：识别难免有错字、断句错，而「整首重新识别」不保证更准，
+     * 常常修好一行坏掉两行。让用户把已经正确的部分固定下来，才是越用越好的做法。
+     */
+    private fun showLyricLineMenu(pos: Int) {
+        val line = lyricLines.getOrNull(pos) ?: return
+        val hasTrans = currentTranslations().containsKey(pos)
+        val labels = mutableListOf<String>()
+        val actions = mutableListOf<() -> Unit>()
+
+        labels.add(getString(R.string.lyric_edit_original))
+        actions.add { showLyricTextEditor(pos, isTranslation = false) }
+
+        labels.add(getString(R.string.lyric_edit_translation))
+        actions.add { showLyricTextEditor(pos, isTranslation = true) }
+
+        // 有译文时叫「重翻」，没译文时叫「翻译」—— 同一个动作，标签要说实话
+        labels.add(
+            getString(
+                if (hasTrans) R.string.lyric_edit_retranslate
+                else R.string.lyric_edit_translate_line
+            )
+        )
+        actions.add { retranslateLine(pos) }
+
+        AccentDialogBuilder(this)
+            .setTitle(R.string.lyric_edit_title)
+            .setItems(labels.toTypedArray()) { _, which ->
+                // 长按后弹菜单会吃掉点击，顺手把这一行滚到中间，用户不会失去参照
+                centerLyricRow(pos)
+                actions.getOrNull(which)?.invoke()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /**
+     * 弹出编辑框，改原文（写回歌词文件）或改译文（写进译文缓存）。
+     *
+     * @param isTranslation true = 改译文；false = 改原文
+     */
+    private fun showLyricTextEditor(pos: Int, isTranslation: Boolean) {
+        val line = lyricLines.getOrNull(pos) ?: return
+        val song = lastSong ?: return
+        val current = if (isTranslation) {
+            currentTranslations()[pos].orEmpty()
+        } else {
+            line.text
+        }
+        // 内嵌标签里的歌词没有可写回的文件 —— 先说清楚，别让用户打完字才失败
+        if (!isTranslation) {
+            val name = lastLyricName
+            when {
+                name == "内嵌歌词" -> {
+                    toast(getString(R.string.lyric_edit_readonly))
+                    return
+                }
+                // vtt/srt 与 lrc 的格式不同，[LyricEditRules] 只懂方括号时间戳
+                name != null && name.endsWith(".vtt", true) -> {
+                    toast(getString(R.string.lyric_edit_not_lrc))
+                    return
+                }
+            }
+        }
+        val et = android.widget.EditText(this).apply {
+            hint = getString(
+                if (isTranslation) R.string.lyric_edit_hint_translation
+                else R.string.lyric_edit_hint_original
+            )
+            setText(current)
+            setSelection(current.length)
+            // 原文一行可能很长，允许两行显示；lrc 不允许真换行，保存时会压成空格
+            maxLines = 3
+        }
+        val box = android.widget.FrameLayout(this).apply {
+            val m = dp(20f)
+            setPadding(m, dp(8f), m, 0)
+            addView(
+                et,
+                android.widget.FrameLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
+        AccentDialogBuilder(this)
+            .setTitle(if (isTranslation) R.string.lyric_edit_translation else R.string.lyric_edit_original)
+            .setView(box)
+            .setPositiveButton(R.string.ok) { _, _ ->
+                val text = et.text.toString().trim()
+                if (isTranslation) saveTranslatedLine(song, pos, text)
+                else saveOriginalLine(song, pos, line, text)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** 改译文：写进译文缓存（provider → uri → 行号），留空等于删掉这一行的译文。 */
+    private fun saveTranslatedLine(song: Song, pos: Int, text: String) {
+        val uriKey = song.uri.toString()
+        val cache = translationCache.getOrPut(uriKey) { HashMap() }
+        // 空内容 = 删除这一行的译文（比「改成一个空格」更符合直觉）
+        if (text.isEmpty()) cache.remove(pos) else cache[pos] = text
+        saveTranslationCaches()
+        // 只有这首歌还是当前歌才刷界面，避免旧歌结果串进新歌（1.30 的教训）
+        if (lastSong?.uri?.toString() == uriKey) {
+            applyTranslations(cache)
+            playbackService?.reloadLyricTranslations()
+        }
+        toast(getString(if (text.isEmpty()) R.string.trans_deleted else R.string.lyric_edit_saved))
+    }
+
+    /**
+     * 改原文：写回歌词文件，然后让播放服务重读。
+     *
+     * 定位靠 [SubtitleParser.lrcEntries] —— 它给出的 `lineIndex` 是**文件里真实的行号**，
+     * 与界面上的列表在同一个解析结果里生成的，所以不存在「行号对不上改错行」的问题。
+     */
+    private fun saveOriginalLine(song: Song, pos: Int, line: SubtitleLine, text: String) {
+        if (text.isEmpty()) {
+            toast(getString(R.string.lyric_edit_empty))
+            return
+        }
+        val songKey = song.uri.toString()
+        Thread {
+            var okWritten = false
+            var errRes: String? = null
+            try {
+                val src = readLyricSourceText(song)
+                if (src == null) {
+                    runOnUiThread { toast(getString(R.string.lyric_edit_readonly)) }
+                    return@Thread
+                }
+                val entries = SubtitleParser.lrcEntries(src)
+                val idx = LyricEditRules.findEntry(entries, line.startMs, line.text)
+                if (idx < 0) {
+                    runOnUiThread { toast(getString(R.string.lyric_edit_failed)) }
+                    return@Thread
+                }
+                when (val r = LyricEditRules.replaceLineAt(src, entries[idx].lineIndex, text)) {
+                    is LyricEditRules.Result.Ok -> okWritten = writeLyricSourceText(song, r.text)
+                    is LyricEditRules.Result.NotALyricLine ->
+                        errRes = getString(R.string.lyric_edit_failed)
+                }
+            } catch (e: Exception) {
+                PlaybackLog.log("lyric edit THREW: ${e.javaClass.simpleName}: ${e.message}")
+                errRes = getString(R.string.lyric_edit_failed)
+            }
+            runOnUiThread {
+                when {
+                    errRes != null -> toast(errRes!!)
+                    !okWritten -> toast(getString(R.string.lyric_edit_failed))
+                    else -> {
+                        // 文件已改：让服务重读并重推歌词，否则进度回调仍用旧列表算高亮
+                        if (playbackService?.currentSongSafe()?.uri?.toString() == songKey) {
+                            playbackService?.reloadCurrentLyric()
+                        }
+                        toast(getString(R.string.lyric_edit_saved))
+                    }
+                }
+            }
+        }.start()
+    }
+
+    /**
+     * 只重翻这一行（3.1.1）。
+     *
+     * 走与整首翻译完全相同的引擎与配置，只是 `lines` 里只有这一行 ——
+     * 译文写回同一个缓存位置（行号 [pos]），所以其它行的译文完全不受影响。
+     */
+    private fun retranslateLine(pos: Int) {
+        val line = lyricLines.getOrNull(pos) ?: return
+        val song = lastSong ?: return
+        if (!hasTranslationConfig()) {
+            toast(getString(R.string.trans_no_key))
+            showTransSettingsDialog()
+            return
+        }
+        if (translating) {
+            toast(getString(R.string.trans_busy))
+            return
+        }
+        if (line.text.isBlank()) return
+        translating = true
+        btnTranslate.isEnabled = false
+        btnTranslate.text = getString(R.string.translating)
+        val uriKey = song.uri.toString()
+        val payload = listOf(pos to line.text)
+        val engine = translationEngine()
+        val cfg = translationConfig()
+        Thread {
+            val result = try {
+                engine.translate(payload, cfg)
+            } catch (e: Exception) {
+                EngineTranslationResult(emptyMap(), e.message ?: "未知错误")
+            }
+            runOnUiThread {
+                translating = false
+                if (::btnTranslate.isInitialized) {
+                    btnTranslate.isEnabled = true
+                    btnTranslate.text = getString(R.string.translate)
+                }
+                val got = result.translations[pos]
+                if (got.isNullOrBlank()) {
+                    toast(getString(R.string.lyric_retranslate_failed, result.error ?: ""))
+                    return@runOnUiThread
+                }
+                val cache = translationCache.getOrPut(uriKey) { HashMap() }
+                cache[pos] = got
+                saveTranslationCaches()
+                if (lastSong?.uri?.toString() == uriKey) {
+                    applyTranslations(cache)
+                    playbackService?.reloadLyricTranslations()
+                }
+                // 该行原先在失败表里的话要移出去，否则下次整首翻译会再翻一遍
+                transFailedLines = transFailedLines.filter { it.first != pos }
+                toast(getString(R.string.lyric_retranslate_ok))
+            }
+        }.start()
+    }
+
     /** 把某一行歌词滚到可视区域正中（点击歌词时用）。 */
     private fun centerLyricRow(pos: Int) {
         val lm = recyclerLyricFull.layoutManager as? LinearLayoutManager ?: return
@@ -5750,6 +5989,51 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    /**
+     * 封面大图（3.1.1）。
+     *
+     * 粉丝：「还有封面能点击放大吗，太小了看不清」。播放页的封面受容器尺寸限制
+     * （最长边不超过 460dp），RJ 音声那种带字封面在手机上基本读不出小字。
+     *
+     * 实现要点：
+     * - 用**已经解码好的 [currentCoverBmp]**，不重新解码。这张图本来就是按
+     *   [coverLoadSize]（屏幕长边，800~1080px）加载的，放大到全屏仍然清晰，
+     *   而且不会因为再解码一次而卡一下。
+     * - 黑底 + `fitCenter`：不裁切任何内容。要看的就是封面上的字，
+     *   `centerCrop` 会把边缘裁掉，与「看清」的目的相反。
+     * - 任意点击 / 返回键都能关掉，不需要额外按钮。
+     * - 没有封面时给一句提示，而不是弹一个纯黑窗口。
+     */
+    private fun showCoverZoom() {
+        val bmp = currentCoverBmp
+        if (bmp == null) {
+            toast(getString(R.string.cover_zoom_none))
+            return
+        }
+        val density = resources.displayMetrics.density
+        val img = ImageView(this).apply {
+            setImageBitmap(bmp)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding((16 * density).toInt(), (16 * density).toInt(), (16 * density).toInt(), (16 * density).toInt())
+        }
+        val root = android.widget.FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            addView(img, android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+        }
+        val dialog = android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        dialog.setContentView(root)
+        // 全屏铺满，不留系统默认边距（否则「放大」看着只大了一点）
+        dialog.window?.setLayout(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        root.setOnClickListener { dialog.dismiss() }
+        dialog.show()
+    }
+
     /** 歌曲长按统一菜单：收藏 + 添加到歌单 + 封面设置。 */
     private fun showSongMenu(song: Song) {
         val fav = FavoritesManager.isFavorite(this, song.uri.toString())
@@ -7360,15 +7644,23 @@ class MainActivity : AppCompatActivity() {
                 showEnhanceMenu()
             }
             labels.add(
-                (if (denoiseOn) "✓  " else "     ") + getString(R.string.asr_denoise_title)
+                (if (denoiseOn) "✓  " else "     ") + getString(R.string.asr_denoise_title) +
+                    // 3.1.1：上次开降噪把进程崩掉的话，这一轮会自动跳过降噪。
+                    // 必须在这里告诉用户，否则他会以为「开了没效果」。
+                    if (denoiseOn && AsrEnhance.denoiseCrashedLastTime(this)) {
+                        "  " + getString(R.string.asr_denoise_crashed_hint)
+                    } else ""
             )
             actions.add {
+                val turningOn = !denoiseOn
                 prefs.edit()
-                    .putBoolean(SpeechRecManager.KEY_ASR_DENOISE, !denoiseOn)
+                    .putBoolean(SpeechRecManager.KEY_ASR_DENOISE, turningOn)
                     .apply()
+                // 用户重新打开 = 再给一次机会：清掉哨兵，下次识别会真的尝试降噪。
+                if (turningOn) AsrEnhance.clearDenoiseCrashFlag(this)
                 toast(
                     getString(
-                        if (!denoiseOn) R.string.asr_enhance_on else R.string.asr_enhance_off,
+                        if (turningOn) R.string.asr_enhance_on else R.string.asr_enhance_off,
                         getString(R.string.asr_denoise_title)
                     )
                 )

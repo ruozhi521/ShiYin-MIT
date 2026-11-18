@@ -12,6 +12,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaMetadata
@@ -155,6 +157,55 @@ class MediaPlaybackService : Service() {
     private var audioFocusRequest: AudioFocusRequest? = null
     private var resumeAfterFocusLoss = false
 
+    /**
+     * 当前输出设备分类（3.1.1）。用来判断「原来的耳机没了」——
+     * 见 [AudioRouteRules.shouldPauseOnRouteChange]。
+     */
+    private var routeKind: AudioRouteRules.Kind? = null
+
+    /**
+     * 输出设备变化监听（3.1.1）。
+     *
+     * 为什么不能只靠 `ACTION_AUDIO_BECOMING_NOISY`：那个广播只在「即将改由扬声器外放」时发出。
+     * 粉丝反馈的场景是「有线耳机拔出 → 系统立刻切到无线耳机」，中间**没有经过扬声器**，
+     * 广播根本不发，于是继续播、用户以为出问题了。
+     * 这里改为跟踪路由本身：只要从私人设备（有线/蓝牙/USB）落到别的设备上就暂停，
+     * 不管是落到扬声器还是另一只耳机。
+     */
+    private val audioDeviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+            handleRouteChanged("added")
+        }
+
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+            handleRouteChanged("removed")
+        }
+
+        /**
+         * 重新取一次当前输出设备，与上次比较后决定是否暂停。
+         *
+         * ⚠️ 必须在**主线程的下一轮**再读设备列表：回调里立刻调 `getDevices` 有时仍返回
+         * 变化前的快照（系统尚未完成路由切换），会得出「没变化」的错误结论。
+         */
+        private fun handleRouteChanged(reason: String) {
+            handler.post {
+                val am = audioManager ?: return@post
+                val after = AudioRouteRules.activeOutput(
+                    am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).map { it.type }
+                )
+                val before = routeKind
+                routeKind = after
+                if (before == null) return@post
+                if (!AudioRouteRules.shouldPauseOnRouteChange(before, after)) return@post
+                PlaybackLog.log("audio route $before -> $after ($reason)")
+                if (engineIsPlaying()) {
+                    PlaybackLog.log("audio route lost private device -> pause")
+                    pause()
+                }
+            }
+        }
+    }
+
     private var mediaSession: MediaSession? = null
     private var foregroundShown = false
 
@@ -231,6 +282,20 @@ class MediaPlaybackService : Service() {
         androidx.core.content.ContextCompat.registerReceiver(
             this, becomingNoisyReceiver, noisyFilter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
         )
+        // 3.1.1：路由跟踪。补上「拔出有线耳机后直接切到蓝牙」这条
+        // `ACTION_AUDIO_BECOMING_NOISY` 覆盖不到的路径（没有外放，广播不发）。
+        try {
+            audioManager?.let { am ->
+                routeKind = AudioRouteRules.activeOutput(
+                    am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).map { it.type }
+                )
+                am.registerAudioDeviceCallback(audioDeviceCallback, handler)
+                PlaybackLog.log("audio route watch on, initial=$routeKind")
+            }
+        } catch (e: Exception) {
+            // 监听不上不影响播放，退化成只有 BECOMING_NOISY 那条老路径
+            PlaybackLog.log("audio route watch FAIL: ${e.message}")
+        }
     }
 
     /**
@@ -330,6 +395,12 @@ class MediaPlaybackService : Service() {
         abandonFocus()
         try {
             unregisterReceiver(becomingNoisyReceiver)
+        } catch (_: Exception) {
+        }
+        // 3.1.1：注销路由监听（不注销的话，服务反复重建会累积多个回调，
+        // 每次插拔都触发 N 次暂停判断）
+        try {
+            audioManager?.unregisterAudioDeviceCallback(audioDeviceCallback)
         } catch (_: Exception) {
         }
         releasePlayer()
@@ -1361,6 +1432,23 @@ class MediaPlaybackService : Service() {
     fun applyLyricOffset(offsetMs: Int) {
         val song = currentSong() ?: return
         try { LyricOffset.save(this, song.uri.toString(), offsetMs) } catch (e: Exception) { }
+        loadLyric(song)
+        listener?.onSongChanged(song, lyricLines, lyricName)
+        lyriconBridge.syncSong(song, lyricLines, lyricTrans, durationMs)
+        desktopLyrics?.updateText(lyricTextAt(reportedPosition()))
+    }
+
+    /**
+     * 重新载入当前歌的歌词文件（3.1.1）。
+     *
+     * 用户在歌词页长按「改原文」把新正文写进 .lrc 之后，播放器手上还是旧的那份 ——
+     * 不重读的话，界面上刚改的字过一会儿又被旧内容顶回去（进度回调会用旧列表算高亮）。
+     *
+     * 不走 [applyLyricOffset]：那个会把「应用内追加偏移」也重写一遍，
+     * 而这里只是文件内容变了，偏移语义完全没动。
+     */
+    fun reloadCurrentLyric() {
+        val song = currentSong() ?: return
         loadLyric(song)
         listener?.onSongChanged(song, lyricLines, lyricName)
         lyriconBridge.syncSong(song, lyricLines, lyricTrans, durationMs)

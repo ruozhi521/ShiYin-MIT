@@ -43,6 +43,41 @@ object AsrEnhance {
     private const val VAD_MIN_BYTES = 1_000_000L
     private const val DENOISE_MIN_BYTES = 200_000L
 
+    // ---------- 原生崩溃哨兵（3.1.1） ----------
+
+    private const val PREFS = "asr_enhance"
+    private const val KEY_DENOISE_PENDING = "denoise_pending"
+
+    private fun prefs(context: Context) =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /**
+     * 上一次开启降噪后，进程是否**在成功跑出一次结果之前**就没了（3.1.1）。
+     *
+     * 为什么需要这个：降噪失败发生在 sherpa 的**原生代码**里，崩法包括
+     * `CHECK` 失败、`abort`、段错误 —— 进程当场消失，Java 层的 try/catch
+     * 和 [CrashCatcher]（装的是 Thread.UncaughtExceptionHandler）**一个都拦不到**。
+     * 用户看到的就是「开启降噪 → 点歌词识别 → 直接闪退」，连崩溃日志都没有。
+     *
+     * 所以用一个「先写标记、成功才清」的哨兵：只要下次启动时标记还在，
+     * 就说明上次是死在这一步 —— 这次直接跳过降噪，保证不再因为同一个原因崩第二次。
+     */
+    fun denoiseCrashedLastTime(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DENOISE_PENDING, false)
+
+    /** 清除哨兵（重新下载模型 / 用户在设置里重新开启时调用）。 */
+    fun clearDenoiseCrashFlag(context: Context) {
+        prefs(context).edit().remove(KEY_DENOISE_PENDING).apply()
+    }
+
+    private fun markDenoiseStarted(context: Context) {
+        prefs(context).edit().putBoolean(KEY_DENOISE_PENDING, true).commit()
+    }
+
+    private fun markDenoiseOk(context: Context) {
+        prefs(context).edit().remove(KEY_DENOISE_PENDING).apply()
+    }
+
     /** 增强模型放在模型根目录下的独立子目录，不跟 ASR 模型混。 */
     fun enhanceDir(context: Context): File =
         File(context.filesDir, "asr_enhance").apply { mkdirs() }
@@ -145,8 +180,13 @@ object AsrEnhance {
     class Session(
         private val vad: com.k2fsa.sherpa.onnx.Vad?,
         private val denoiser: com.k2fsa.sherpa.onnx.OfflineSpeechDenoiser?,
-        private val sampleRate: Int
+        private val sampleRate: Int,
+        /** 降噪首次成功跑出结果时回调一次（用于清崩溃哨兵）。 */
+        private val onDenoiseOk: () -> Unit = {}
     ) : AutoCloseable {
+
+        /** 降噪是否已经成功跑过一次（成功后才清哨兵，避免「建好了但跑就崩」也清掉）。 */
+        private var denoiseProved = false
 
         /** 这段音频里有没有人声。`null` = 判断不了（没模型 / 出错），调用方应按「有」处理。 */
         fun hasSpeech(samples: FloatArray): Boolean? {
@@ -167,7 +207,30 @@ object AsrEnhance {
         fun denoise(samples: FloatArray): FloatArray? {
             val d = denoiser ?: return null
             return try {
-                d.run(samples, sampleRate)?.samples
+                // Kotlin 侧把 run() 声明成非空返回，但它在 JNI 边界上仍可能拿到空指针，
+                // 所以显式按可空处理（(X?) 转型只为消掉「elvis 恒取左值」的编译警告，
+                // 不改变运行时行为）。
+                val out = d.run(samples, sampleRate) as com.k2fsa.sherpa.onnx.DenoisedAudio?
+                    ?: return null
+                // 3.1.1：第一次真的跑出结果，才认定「这台机器上降噪可用」并清掉哨兵。
+                // 时机刻意放在 run() 成功返回之后而不是构造之后 ——
+                // sherpa 有「模型建得起来、一 run 才 CHECK 失败」的情形。
+                if (!denoiseProved) {
+                    denoiseProved = true
+                    try {
+                        onDenoiseOk()
+                    } catch (_: Throwable) {
+                    }
+                }
+                // 降噪模型有自己的输出采样率。与识别器不符时**宁可不降噪**——
+                // 把 48k 样本按 16k 喂给识别器，得到的是语速快三倍的乱码，
+                // 比不降噪差得多，而且用户完全看不出原因。
+                val outRate = out.sampleRate
+                if (outRate > 0 && outRate != sampleRate) {
+                    PlaybackLog.log("asr denoise rate mismatch out=$outRate want=$sampleRate -> skip")
+                    return null
+                }
+                out.samples
             } catch (e: Throwable) {
                 PlaybackLog.log("asr denoise THREW: ${e.message}")
                 null
@@ -199,10 +262,23 @@ object AsrEnhance {
         sampleRate: Int = 16000
     ): Session {
         val vad = if (wantVad) buildVad(context, sampleRate) else null
-        val denoiser = if (wantDenoise) buildDenoiser(context) else null
+        // 3.1.1：上次就是在这一步把进程搞死的 → 这次别再试，直接按「不降噪」跑。
+        // 用户的开关保持原样（不改他的设置），只是这一轮不用它。
+        val denoiseAllowed = wantDenoise && !denoiseCrashedLastTime(context)
+        if (wantDenoise && !denoiseAllowed) {
+            PlaybackLog.log("asr enhance: denoise skipped (crashed last session)")
+        }
+        val denoiser = if (denoiseAllowed) buildDenoiser(context) else null
         if (vad != null) PlaybackLog.log("asr enhance: VAD on")
-        if (denoiser != null) PlaybackLog.log("asr enhance: denoise on")
-        return Session(vad, denoiser, sampleRate)
+        // 3.1.1：**先写哨兵、成功再清**。这一行必须在 native 调用之前落盘 ——
+        // 降噪崩在原生代码里时进程当场消失，没有机会再执行任何 Java 代码，
+        // 只有提前写好的标记能留到下次启动。
+        if (denoiser != null) {
+            markDenoiseStarted(context)
+            PlaybackLog.log("asr enhance: denoise on")
+        }
+        val app = context.applicationContext
+        return Session(vad, denoiser, sampleRate) { markDenoiseOk(app) }
     }
 
     private fun buildVad(context: Context, sampleRate: Int): com.k2fsa.sherpa.onnx.Vad? {
@@ -226,7 +302,19 @@ object AsrEnhance {
                 "cpu", // provider
                 false // debug
             )
-            com.k2fsa.sherpa.onnx.Vad(context.assets, cfg)
+            // ⚠️ 3.1.1 关键修正：第一个参数必须传 **null**。
+            //
+            // 构造函数的字节码是：`assetManager == null ? newFromFile(config)
+            // : newFromAsset(assetManager, config)`。也就是说，**只要传了 AssetManager，
+            // 配置里的字符串就会被当成 assets/ 目录下的文件名**，而不是文件系统路径。
+            // 我们给的是 `/data/user/0/.../silero_vad.onnx` 这种绝对路径，
+            // 按 asset 名去查必然找不到，native 侧 `CHECK` 失败 → 直接杀掉进程。
+            //
+            // 这种死法最坑的地方是**没有任何 Java 崩溃栈**：进程没了，CrashCatcher
+            // 装的是 Java 层 handler，根本收不到信号，用户看到的就是「点一下就闪退」。
+            // sherpa 原生库里就写着这句提示：
+            //   "Please set assetManager to null when you load model files from the SD card"
+            com.k2fsa.sherpa.onnx.Vad(null, cfg)
         } catch (e: Throwable) {
             PlaybackLog.log("asr vad build THREW: ${e.message}")
             null
@@ -247,7 +335,10 @@ object AsrEnhance {
                 "cpu" // provider
             )
             val cfg = com.k2fsa.sherpa.onnx.OfflineSpeechDenoiserConfig(modelCfg)
-            com.k2fsa.sherpa.onnx.OfflineSpeechDenoiser(context.assets, cfg)
+            // ⚠️ 第一个参数必须是 null，理由同 [buildVad]：传了 AssetManager 就会走
+            // newFromAsset，把绝对路径当 asset 名查，native 直接杀进程 ——
+            // 这正是粉丝「开启降噪后点歌词识别直接闪退」的根因。
+            com.k2fsa.sherpa.onnx.OfflineSpeechDenoiser(null, cfg)
         } catch (e: Throwable) {
             PlaybackLog.log("asr denoiser build THREW: ${e.message}")
             null

@@ -230,7 +230,9 @@ class SongAdapter(
 
 /** 播放页歌词适配器，支持当前行高亮。 */
 class LyricAdapter(
-    private val onClick: (Int) -> Unit
+    private val onClick: (Int) -> Unit,
+    /** 长按歌词行（3.1.1）：改原文 / 改译文 / 重翻这一行。 */
+    private val onLongClick: ((Int) -> Unit)? = null
 ) : RecyclerView.Adapter<LyricAdapter.Holder>() {
 
     private var items: List<SubtitleLine> = emptyList()
@@ -334,6 +336,11 @@ class LyricAdapter(
             holder.itemView.animate().alpha(1f).setDuration(220).start()
         }
         holder.itemView.setOnClickListener { onClick(position) }
+        holder.itemView.setOnLongClickListener {
+            val handler = onLongClick ?: return@setOnLongClickListener false
+            handler(position)
+            true
+        }
     }
 
     override fun getItemCount(): Int = items.size

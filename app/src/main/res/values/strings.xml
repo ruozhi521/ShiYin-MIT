@@ -61,6 +61,8 @@
     <string name="cover_clear">清除封面</string>
     <string name="cover_saved">封面已更新</string>
     <string name="cover_cleared">已清除封面</string>
+    <!-- 3.1.1：点封面看大图 -->
+    <string name="cover_zoom_none">这首歌没有封面可以放大</string>
     <string name="batch_cover">批量设置封面</string>
     <string name="batch_cover_title">批量设置封面：%1$s</string>
     <string name="select_all">全选</string>
@@ -319,6 +321,8 @@
     <string name="asr_vad_hint">识别前先判断这段有没有人声，纯伴奏段直接跳过。默认关：判错了会把一整段人声当成纯音乐丢掉，所以先用默认值试，确实有多余杂行再打开</string>
     <string name="asr_denoise_title">降噪</string>
     <string name="asr_denoise_hint">把人声从背景噪音里提出来。对录音差、环境吵的音源有用；对已经混好的音乐可能顺带削掉人声细节，所以默认关</string>
+    <!-- 3.1.1：降噪上次崩过（原生侧杀进程，Java 拦不到）→ 这一轮自动跳过，需要告知用户 -->
+    <string name="asr_denoise_crashed_hint">（上次开启后闪退，本次已自动跳过；点一下重新开启会再试一次）</string>
     <string name="asr_enhance_need_model">需要先下载增强模型（共约 3MB）</string>
     <string name="asr_enhance_download">下载增强模型（约 3MB）</string>
     <string name="asr_enhance_downloading">正在下载音频增强模型…</string>
@@ -435,6 +439,22 @@
     <string name="cd_hole">唱片孔</string>
     <string name="no_lyric_now">♪ 暂无歌词，点击查看</string>
     <string name="lyric_no_time">此歌词没有时间信息，无法跳转</string>
+    <!-- 3.1.1：长按歌词行手动纠错（改原文 / 改译文 / 重翻这一行） -->
+    <string name="lyric_edit_title">编辑这一行</string>
+    <string name="lyric_edit_original">改原文</string>
+    <string name="lyric_edit_translation">改译文</string>
+    <string name="lyric_edit_retranslate">重翻这一行</string>
+    <string name="lyric_edit_translate_line">翻译这一行</string>
+    <string name="lyric_edit_not_lrc">这首歌的歌词不是 lrc 格式，暂不支持改原文</string>
+    <string name="lyric_edit_hint_original">这一行的原文</string>
+    <string name="lyric_edit_hint_translation">这一行的译文（留空＝删除译文）</string>
+    <string name="lyric_edit_saved">已保存</string>
+    <string name="lyric_edit_saved_in_app">已保存（这首歌的歌词在应用内，未能写回音频目录）</string>
+    <string name="lyric_edit_readonly">这首歌的歌词来自内嵌标签，无法改原文</string>
+    <string name="lyric_edit_failed">保存失败：没能在歌词文件里找到这一行</string>
+    <string name="lyric_edit_empty">内容不能为空</string>
+    <string name="lyric_retranslate_ok">这一行已重新翻译</string>
+    <string name="lyric_retranslate_failed">这一行没能翻译成功：%1$s</string>
     <string name="embedded_lyric">内嵌歌词</string>
     <string name="settings">设置</string>
     <string name="dark_mode">深色模式</string>
