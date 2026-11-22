@@ -77,11 +77,25 @@ class MediaPlaybackService : Service() {
         const val KEY_MIX_AUDIO = "mix_audio"
         const val KEY_PLAY_MODE = "play_mode"
         const val KEY_LYRICON = "lyricon_enabled"
-        const val MODE_SEQUENCE = 0
-        const val MODE_SHUFFLE = 1
-        const val MODE_REPEAT_ONE = 2
+        // 3.1.2：模式常量统一由 [PlayModeRules] 定义，这里只做转发。
+        // 此前这里自己定义一份、界面再写一份 `% 4`，加第五种模式时漏改
+        // 就会「新模式永远切不到」且不报错 —— 两份定义是这类漏改的温床。
+        const val MODE_SEQUENCE = PlayModeRules.MODE_SEQUENCE
+        const val MODE_SHUFFLE = PlayModeRules.MODE_SHUFFLE
+        const val MODE_REPEAT_ONE = PlayModeRules.MODE_REPEAT_ONE
         /** 顺序播放，播完当前队列最后一首后暂停。 */
-        const val MODE_SEQUENCE_STOP = 3
+        const val MODE_SEQUENCE_STOP = PlayModeRules.MODE_SEQUENCE_STOP
+        /**
+         * 单曲播放：只播当前这一首，播完就停，不自动下一首（3.1.2）。
+         *
+         * B站粉丝：「有能设置播完一首 asmr 就暂停不放下一首 asmr 的选项吗」。
+         * 与 [MODE_SEQUENCE_STOP] 的区别：那个要播到**队列末尾**才停，
+         * 这个每首都停 —— 音声一首几十分钟，听完就该停下缓一缓。
+         */
+        const val MODE_SINGLE_STOP = PlayModeRules.MODE_SINGLE_STOP
+
+        /** 播放模式的总数（[PlayModeRules.nextPlayMode] 取模用）。 */
+        const val MODE_COUNT = PlayModeRules.MODE_COUNT
     }
 
     private val binder = PlaybackBinder()
@@ -538,13 +552,21 @@ class MediaPlaybackService : Service() {
         return r
     }
 
-    /** 播放模式：0 顺序 / 1 随机 / 2 单曲循环。 */
+    /**
+     * 播放模式：0 顺序 / 1 随机 / 2 单曲循环 / 3 顺序播放播完停止 / 4 单曲播放播完停止。
+     */
     fun getPlayMode(): Int =
         getSharedPreferences("player", Context.MODE_PRIVATE).getInt(KEY_PLAY_MODE, MODE_SEQUENCE)
 
-    /** 点击循环切换模式，返回新模式。 */
+    /**
+     * 点击循环切换模式，返回新模式。
+     *
+     * ⚠️ 取模必须走 [PlayModeRules.nextPlayMode]（它依赖 `MODE_COUNT`），**不能写死数字**：
+     * 3.1.2 加第五种模式时如果还在用 `% 4`，新模式永远切不到 ——
+     * 表现成「新功能没做」，而且不报错、极难发现。抽成纯函数是为了单测能钉死它。
+     */
     fun cyclePlayMode(): Int {
-        val next = (getPlayMode() + 1) % 4
+        val next = PlayModeRules.nextPlayMode(getPlayMode())
         getSharedPreferences("player", Context.MODE_PRIVATE)
             .edit().putInt(KEY_PLAY_MODE, next).apply()
         return next
@@ -965,42 +987,21 @@ class MediaPlaybackService : Service() {
                 }
             }
             mp.setOnCompletionListener {
-                // 听完了：清除该歌的独立进度记录（下次从头播）
-                if (perSongEnabled()) {
-                    loadPerSongPositions()
-                    currentSong()?.let { perSongPositions.remove(it.uri.toString()) }
-                    persistPerSongPositions()
-                }
-                // 播放完成：按播放模式决定下一首（单曲循环重播当前）
-                when (getPlayMode()) {
-                    MODE_REPEAT_ONE -> {
-                        seekTo(0)
-                        // 单曲循环不重建播放器，强制重设 surface 触发画面刷新（部分设备 seek 后无新帧）
-                        attachedVideoSurface?.let { surf ->
-                            try {
-                                mp.setSurface(null)
-                                mp.setSurface(surf)
-                            } catch (e: Exception) {
-                            }
-                        }
-                        play()
-                    }
-                    MODE_SHUFFLE -> {
-                        if (songs.size > 1) {
-                            index = randomIndex()
-                            playCurrent()
+                // 3.1.2：播完的统一处理抽到 onTrackCompleted —— 此前 MediaPlayer 与 ExoPlayer
+                // 各写了一份 when(getPlayMode())，Exo 那份漏了 MODE_SEQUENCE_STOP，
+                // 于是「顺序播放（播完停止）」在 Exo 引擎下根本不生效（.else -> playNext()）。
+                // 两份实现必然再次走样，所以只留一份。
+                onTrackCompleted {
+                    // 单曲循环不重建播放器，强制重设 surface 触发画面刷新（部分设备 seek 后无新帧）
+                    seekTo(0)
+                    attachedVideoSurface?.let { surf ->
+                        try {
+                            mp.setSurface(null)
+                            mp.setSurface(surf)
+                        } catch (e: Exception) {
                         }
                     }
-                    MODE_SEQUENCE_STOP -> {
-                        if (index < songs.lastIndex) {
-                            index++
-                            playCurrent()
-                        } else {
-                            pause()
-                            PlaybackLog.log("sequence stop: reached playlist end")
-                        }
-                    }
-                    else -> playNext()
+                    play()
                 }
             }
             mp.setOnErrorListener { p, what, extra ->
@@ -1138,24 +1139,12 @@ class MediaPlaybackService : Service() {
                     }
                     androidx.media3.common.Player.STATE_ENDED -> {
                         PlaybackLog.log("exo ENDED song=${currentSong()?.uri?.lastPathSegment}")
-                        // 听完了：清除该歌的独立进度记录（下次从头播）
-                        if (perSongEnabled()) {
-                            loadPerSongPositions()
-                            currentSong()?.let { perSongPositions.remove(it.uri.toString()) }
-                            persistPerSongPositions()
-                        }
-                        when (getPlayMode()) {
-                            MODE_REPEAT_ONE -> {
-                                seekTo(0)
-                                play()
-                            }
-                            MODE_SHUFFLE -> {
-                                if (songs.size > 1) {
-                                    index = randomIndex()
-                                    playCurrent()
-                                }
-                            }
-                            else -> playNext()
+                        // 3.1.2：改走共享的 onTrackCompleted，与 MediaPlayer 用同一份逻辑。
+                        // 原来这里自己写了一个 when，**缺 MODE_SEQUENCE_STOP 分支**，
+                        // 落到 else -> playNext()，所以那条模式在 Exo 引擎下形同虚设。
+                        onTrackCompleted {
+                            seekTo(0)
+                            play()
                         }
                     }
                     else -> {}
@@ -1265,6 +1254,57 @@ class MediaPlaybackService : Service() {
         PlaybackLog.log("play: started OK (${if (engineShouldUseExo()) "exo" else "media"})")
         lyriconBridge.syncPlaybackState(true)
         updateAll(true)
+    }
+
+    /**
+     * 一曲播完后的统一处理（3.1.2）。
+     *
+     * ## 为什么必须只有一份
+     *
+     * 此前 MediaPlayer 的 `onCompletion` 和 ExoPlayer 的 `STATE_ENDED` 各写了一个
+     * `when (getPlayMode())`。Exo 那份**漏了 MODE_SEQUENCE_STOP 分支**，
+     * 直接落到 `else -> playNext()` —— 于是「顺序播放（播完停止）」在 Exo 引擎下
+     * 完全失效（Exo 在 -19 兜底或开了声道反转时启用）。两份实现必然会再次走样，
+     * 所以收敛成这一个函数，两个引擎都调它。
+     *
+     * @param repeatOne 单曲循环时如何重播当前曲。两个引擎的重播方式不同：
+     *   MediaPlayer 需要重设 surface 才能刷出画面（部分设备 seek 后无新帧）。
+     */
+    private fun onTrackCompleted(repeatOne: () -> Unit) {
+        // 听完了：清除该歌的独立进度记录（下次从头播）
+        if (perSongEnabled()) {
+            loadPerSongPositions()
+            currentSong()?.let { perSongPositions.remove(it.uri.toString()) }
+            persistPerSongPositions()
+        }
+        when (getPlayMode()) {
+            MODE_REPEAT_ONE -> repeatOne()
+
+            MODE_SHUFFLE -> {
+                if (songs.size > 1) {
+                    index = randomIndex()
+                    playCurrent()
+                }
+            }
+
+            MODE_SINGLE_STOP -> {
+                // 3.1.2：只播这一首，播完就停（音声类需求）
+                pause()
+                PlaybackLog.log("single stop: paused after current song")
+            }
+
+            MODE_SEQUENCE_STOP -> {
+                if (index < songs.lastIndex) {
+                    index++
+                    playCurrent()
+                } else {
+                    pause()
+                    PlaybackLog.log("sequence stop: reached playlist end")
+                }
+            }
+
+            else -> playNext()
+        }
     }
 
     private fun pause() {

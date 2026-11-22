@@ -76,7 +76,22 @@ jobs:
         run: gradle assembleDebug
 
       - name: Run unit tests (JVM, cloud)
-        run: gradle testDebugUnitTest
+        run: gradle testDebugUnitTest --console=plain
+
+      # 单靠上面那步不够：测试被静默过滤（跑了 0 个用例）或报告目录残留旧文件时，
+      # gradle 照样 BUILD SUCCESSFUL。这里读 XML 报告自己断言「跑了多少、失败几个」。
+      - name: Verify unit test results
+        if: always()
+        run: python3 .github/scripts/check-test-results.py app/build/test-results/testDebugUnitTest 400
+
+      # 失败时把报告带上去：日志里只能看到一行结论，具体哪个用例挂了要看文件
+      - name: Upload unit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: ignore
 
       - name: Print signing fingerprints (diagnose signature consistency)
         run: |

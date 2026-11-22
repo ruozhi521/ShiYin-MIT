@@ -106,13 +106,24 @@ object NameOrder {
      *
      * 预热通常在启动后几百毫秒内完成，而用户点开音乐库一般要几秒，
      * 实际几乎不会落到「主线程拿不到拼音」这条路上。
+     *
+     * @param onReady 拼音就绪后**在主线程**回调一次（3.1.2）。没有这个回调时，
+     *   若首帧渲染恰好早于预热完成，列表会按「退化序」（汉字按码位）排一次，
+     *   而界面**再没有任何机制去纠正它** —— 用户看到的就是「歌单顺序不对、
+     *   字母导航只剩几个字母」，直到某次刷新（切页/改设置）才自愈。
+     *   粉丝反馈「歌单和点开的不一样，后面自行恢复了」正是这个时序。
      */
-    fun warmUpAsync() {
+    fun warmUpAsync(onReady: (() -> Unit)? = null) {
         Thread {
+            val alreadyReady = pinyinReady
             try {
                 ensurePinyin()
             } catch (e: Throwable) {
                 // 预热失败不影响功能，后续调用会再试
+            }
+            // 就绪前就已 ready → 说明调用方拿到的本来就是好数据，不必打扰 UI
+            if (!alreadyReady && onReady != null && pinyinReady) {
+                android.os.Handler(android.os.Looper.getMainLooper()).post { onReady() }
             }
         }.apply { isDaemon = true; priority = Thread.MIN_PRIORITY }.start()
     }

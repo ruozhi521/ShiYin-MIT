@@ -862,7 +862,18 @@ class MainActivity : AppCompatActivity() {
         // 3.1：后台预热 ICU 拼音转写器。
         // 不在这里同步初始化（那会阻塞首帧），也不完全等到用时才初始化
         // （那样第一次切到音乐库会卡 0.3 秒）。后台线程预热是两头都不得罪的做法。
-        NameOrder.warmUpAsync()
+        //
+        // 3.1.2：补上**完成回调**。没有它时，若首帧渲染早于预热完成，
+        // 歌单会按「退化序」（汉字按码位）排一次且再没人纠正 ——
+        // 表现为「歌单顺序不对、字母导航只剩几个字母」，直到切页才自愈
+        // （粉丝反馈「歌单和点开的不一样，后面自行恢复了」）。
+        NameOrder.warmUpAsync {
+            // 回调在主线程；触发时界面可能已销毁、曲库可能还没读完，都要让路
+            if (isFinishing || isDestroyed) return@warmUpAsync
+            if (library == null || !::gridAdapter.isInitialized) return@warmUpAsync
+            // 重排一次：keyOf 不会缓存「退化键」，所以这次拿到的是真正的拼音序
+            applyLibLayout()
+        }
         val pendingCrash = CrashCatcher.takeCrashLog(this)
         // 在 Activity 创建前应用保存的深色模式（进程级设置，不调用会回系统默认导致深色失效）
         applyDarkMode(prefs.getBoolean(KEY_DARK, false))
@@ -1129,8 +1140,11 @@ class MainActivity : AppCompatActivity() {
             showPlaylistSortDialog()
         }
         gridAdapter = PlaylistGridAdapter(
-            { pos -> playlistList().getOrNull(pos)?.let { openPlaylist(it) } },
-            { pos -> playlistList().getOrNull(pos)?.let { showPlaylistCoverMenu(it.name) } }
+            // 3.1.2：点击取**适配器里显示的那一项**，不再重算一遍 playlistList()。
+            // 重算会让「显示时的排序」与「点击时的排序」成为两次独立计算 ——
+            // 拼音转写器后台预热刚完成时两次结果不同，于是点 A 打开 B（刷新即恢复）。
+            { pos -> gridAdapter.itemAt(pos)?.let { openPlaylist(it) } },
+            { pos -> gridAdapter.itemAt(pos)?.let { showPlaylistCoverMenu(it.name) } }
         )
         // 3.0：按住卡片左上角的≡把手才开始拖拽（长按留给「设置封面」菜单，两个手势不抢）
         gridAdapter.onStartDrag = { holder -> playlistGridTouchHelper.startDrag(holder) }
@@ -1290,6 +1304,7 @@ class MainActivity : AppCompatActivity() {
                     MediaPlaybackService.MODE_SHUFFLE -> getString(R.string.play_mode_shuffle)
                     MediaPlaybackService.MODE_REPEAT_ONE -> getString(R.string.play_mode_repeat_one)
                     MediaPlaybackService.MODE_SEQUENCE_STOP -> getString(R.string.play_mode_sequence_stop)
+                    MediaPlaybackService.MODE_SINGLE_STOP -> getString(R.string.play_mode_single_stop)
                     else -> getString(R.string.play_mode_sequence)
                 }
             )
@@ -2291,6 +2306,10 @@ class MainActivity : AppCompatActivity() {
             MediaPlaybackService.MODE_SHUFFLE -> R.drawable.ic_shuffle to R.string.play_mode_shuffle
             MediaPlaybackService.MODE_REPEAT_ONE -> R.drawable.ic_repeat_one to R.string.play_mode_repeat_one
             MediaPlaybackService.MODE_SEQUENCE_STOP -> R.drawable.ic_repeat to R.string.play_mode_sequence_stop
+            // 3.1.2：第五种模式。图标要能和「顺序播放（播完停止）」分开 ——
+            // 那两个旧模式本来共用 ic_repeat，只能靠 toast 分辨。
+            MediaPlaybackService.MODE_SINGLE_STOP ->
+                R.drawable.ic_play_once_stop to R.string.play_mode_single_stop
             else -> R.drawable.ic_repeat to R.string.play_mode_sequence
         }
         btn.setImageResource(icon)

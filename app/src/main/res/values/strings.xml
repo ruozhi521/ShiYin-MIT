@@ -246,6 +246,8 @@
     <string name="play_mode_shuffle">随机播放</string>
     <string name="play_mode_repeat_one">单曲循环</string>
     <string name="play_mode_sequence_stop">顺序播放（播完停止）</string>
+    <!-- 3.1.2：B站粉丝「播完一首 asmr 就暂停不放下一首」 -->
+    <string name="play_mode_single_stop">单曲播放（播完停止）</string>
     <string name="translate">翻译</string>
     <string name="retry_translate">重试翻译</string>
     <string name="translating">翻译中…</string>

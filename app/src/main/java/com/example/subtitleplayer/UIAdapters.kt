@@ -184,6 +184,19 @@ class PlaylistGridAdapter(
      */
     fun currentItems(): List<Playlist> = items
 
+    /**
+     * 第 [position] 项**界面上显示的那个**歌单（3.1.2）。
+     *
+     * 为什么要有它：点击回调原先写的是 `playlistList().getOrNull(pos)` ——
+     * 那是**又算了一遍**排序再按下标取。而排序依赖拼音转写器，它是在后台预热的；
+     * 若在「显示那次计算」与「点击这次计算」之间预热刚好完成，
+     * 两边的顺序就会不一致，于是「看着点的是 A，打开的却是 B」。
+     * 页面刷新一次即恢复正常（所以表现为「自行恢复」）。
+     *
+     * 直接读适配器持有的 items，与屏幕上看到的是同一份数据，物理上不可能错位。
+     */
+    fun itemAt(position: Int): Playlist? = items.getOrNull(position)
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
         val view = LayoutInflater.from(parent.context)
             .inflate(R.layout.item_playlist_grid, parent, false)
