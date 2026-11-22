@@ -105,7 +105,17 @@ jobs:
 
   # 模拟器 UI 冒烟测试（每次 push 自动跑；时间较长但覆盖 UI 流程）
   ui-test:
-    runs-on: ubuntu-latest
+    # ⚠️ 必须钉版本，不能用 ubuntu-latest（3.1.2 踩过）：
+    # ubuntu-latest 从 22.04 漂到 26.04 后，镜像里的 Android emulator 不再允许
+    # 纯软件模拟，日志直接报「Software CPU emulation (-accel off) is not supported.
+    # A hardware CPU accelerator is required」——而 GitHub 的 Linux runner 没有 KVM，
+    # 于是模拟器起不来、emulator-5554 始终 not found、最后 boot 超时。
+    # 那次改动只碰了 build job，ui-test 一字未改却红了，就是镜像漂移的证据。
+    runs-on: ubuntu-24.04
+    env:
+      # 强制 TCG（纯软件）模拟：无 KVM 环境下唯一能启动的路径，
+      # 也是上面那条报错信息里给出的官方开关。
+      ANDROID_I_WANT_MY_TCG: 'yes'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
