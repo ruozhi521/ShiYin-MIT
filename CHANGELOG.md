@@ -1,5 +1,17 @@
 # 拾音播放器更新日志
 
+## v3.1.3（2026-11-24）
+
+**🔧 修复 · 部分机型提示「安装失败，没有签名文件」（B站粉丝反馈）**
+- 反馈机型：一加 Ace 3 Pro（PJX110）/ ColorOS 14.1 / Android 14；原话「下载过很多非商店软件，还是第一次遇到这种情况」
+- 核查结论：**我们的包签名是有效的** —— `apksigner verify` 通过、zip 结构完整（`Verification successful`）、EOCD 无截断、证书与固定 debug keystore 一致、线上文件与本地同为 131,952,163 B
+- 但发现一个真实缺口：**只有 v2 签名，没有 v1（JAR signing）**。AGP 8.x 在 `minSdk ≥ 24` 时默认只打 v2，规范上完全合法，系统安装器不受影响；但部分第三方安装器 / 魔改 ROM 仍只认 v1，读不到 v2 签名块就报「没有证书」
+- 修法：`signingConfigs` 显式 `enableV1Signing = true` + `enableV2Signing = true`，两个都打。代价几千字节，v1 兜底兼容、v2 保持高效校验
+- 不开 v3/v4：v4 需要配套 `.idsig` 旁挂文件，只发单个 APK 反而会缺；v3 在本场景（不做密钥轮换）无额外收益
+- **验证方式**（容易误判，记一下）：`apksigner verify --verbose` 直接跑会显示 `v1 scheme: false` —— 那是它的规约，包内声明 `minSdk≥24` 时不计入 v1。加 `--min-sdk-version 21` 才看到真实状态：旧包 3.1.2 校验直接失败（确实没有 v1），新包 3.1.3 为 `v1: true` + `v2: true`
+
+---
+
 ## v3.1.2（2026-11-22）
 
 **🔀 修复 · 点歌单打开的是另一个歌单（弱志反馈）**
